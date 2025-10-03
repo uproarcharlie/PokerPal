@@ -172,6 +172,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.patch("/api/tournaments/:id", async (req, res) => {
+    try {
+      const validatedData = insertTournamentSchema.partial().parse(req.body);
+      const tournament = await storage.updateTournament(req.params.id, validatedData);
+      if (!tournament) {
+        return res.status(404).json({ error: "Tournament not found" });
+      }
+      res.json(tournament);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: "Invalid tournament data", details: error.errors });
+      }
+      res.status(500).json({ error: "Failed to update tournament" });
+    }
+  });
+
   app.put("/api/tournaments/:id", async (req, res) => {
     try {
       const validatedData = insertTournamentSchema.partial().parse(req.body);
@@ -224,6 +240,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Invalid registration data", details: error.errors });
       }
       res.status(500).json({ error: "Failed to create registration" });
+    }
+  });
+
+  app.patch("/api/tournaments/:tournamentId/registrations/:id", async (req, res) => {
+    try {
+      const validatedData = insertTournamentRegistrationSchema.partial().parse(req.body);
+      const registration = await storage.updateTournamentRegistration(req.params.id, validatedData);
+      if (!registration) {
+        return res.status(404).json({ error: "Registration not found" });
+      }
+      res.json(registration);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: "Invalid registration data", details: error.errors });
+      }
+      res.status(500).json({ error: "Failed to update registration" });
     }
   });
 

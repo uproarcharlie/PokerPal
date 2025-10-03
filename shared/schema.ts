@@ -101,7 +101,10 @@ export const insertClubSchema = createInsertSchema(clubs).omit({
   createdAt: true,
 });
 
-export const insertSeasonSchema = createInsertSchema(seasons).omit({
+export const insertSeasonSchema = createInsertSchema(seasons, {
+  startDate: z.coerce.date(),
+  endDate: z.coerce.date().optional(),
+}).omit({
   id: true,
   createdAt: true,
 });
@@ -111,12 +114,16 @@ export const insertPlayerSchema = createInsertSchema(players).omit({
   createdAt: true,
 });
 
-export const insertTournamentSchema = createInsertSchema(tournaments).omit({
+export const insertTournamentSchema = createInsertSchema(tournaments, {
+  startDateTime: z.coerce.date(),
+}).omit({
   id: true,
   createdAt: true,
 });
 
-export const insertTournamentRegistrationSchema = createInsertSchema(tournamentRegistrations).omit({
+export const insertTournamentRegistrationSchema = createInsertSchema(tournamentRegistrations, {
+  eliminationTime: z.coerce.date().optional(),
+}).omit({
   id: true,
   registrationTime: true,
 });
