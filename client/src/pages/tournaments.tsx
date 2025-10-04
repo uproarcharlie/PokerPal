@@ -4,8 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CreateTournamentModal } from "@/components/modals/create-tournament-modal";
-import { Plus, Trophy, Eye, Edit, ArrowLeft, Filter, Download } from "lucide-react";
+import { Plus, Trophy, Eye, Edit, ArrowLeft, Filter, Download, Link as LinkIcon, QrCode } from "lucide-react";
 import { Link } from "wouter";
+import { useToast } from "@/hooks/use-toast";
 
 interface Tournament {
   id: string;
@@ -29,6 +30,7 @@ interface Club {
 
 export default function Tournaments() {
   const [showCreateTournament, setShowCreateTournament] = useState(false);
+  const { toast } = useToast();
 
   const { data: tournaments = [], isLoading } = useQuery<Tournament[]>({
     queryKey: ["/api/tournaments"],
@@ -98,6 +100,40 @@ export default function Tournaments() {
   const getClubInitials = (clubId: string) => {
     const clubName = getClubName(clubId);
     return clubName.substring(0, 2).toUpperCase();
+  };
+
+  const copyRegistrationLink = async (tournamentId: string) => {
+    const url = `${window.location.origin}/register/${tournamentId}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast({
+        title: "Link Copied",
+        description: "Registration link copied to clipboard",
+      });
+    } catch (err) {
+      toast({
+        title: "Failed to Copy",
+        description: "Could not copy link to clipboard",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const copyQRLink = async (tournamentId: string) => {
+    const url = `${window.location.origin}/admin/qr/${tournamentId}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast({
+        title: "Link Copied",
+        description: "QR page link copied to clipboard",
+      });
+    } catch (err) {
+      toast({
+        title: "Failed to Copy",
+        description: "Could not copy link to clipboard",
+        variant: "destructive",
+      });
+    }
   };
 
   return (
@@ -208,6 +244,24 @@ export default function Tournaments() {
                           </td>
                           <td className="py-4 px-6">
                             <div className="flex items-center justify-end gap-2">
+                              <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                onClick={() => copyRegistrationLink(tournament.id)}
+                                data-testid={`copy-registration-link-${tournament.id}`}
+                              >
+                                <LinkIcon className="w-4 h-4 mr-1" />
+                                Copy Link
+                              </Button>
+                              <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                onClick={() => copyQRLink(tournament.id)}
+                                data-testid={`copy-qr-link-${tournament.id}`}
+                              >
+                                <QrCode className="w-4 h-4 mr-1" />
+                                Copy QR
+                              </Button>
                               <Link href={`/tournaments/${tournament.id}`}>
                                 <Button variant="ghost" size="sm" data-testid={`view-tournament-${tournament.id}`}>
                                   <Eye className="w-4 h-4 mr-1" />
