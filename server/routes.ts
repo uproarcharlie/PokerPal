@@ -395,6 +395,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Public registration endpoints
+  app.get("/api/tournaments/:tournamentId/pending-registrations", async (req, res) => {
+    try {
+      const registrations = await storage.getTournamentRegistrations(req.params.tournamentId);
+      const pendingRegistrations = registrations.filter(reg => !reg.paymentConfirmed);
+      
+      // Get player details for each registration
+      const registrationsWithPlayers = await Promise.all(
+        pendingRegistrations.map(async (reg) => {
+          const player = await storage.getPlayer(reg.playerId);
+          const tournament = await storage.getTournament(req.params.tournamentId);
+          
+          // Calculate amount owed
+          const buyInAmount = parseFloat(tournament?.buyInAmount || "0");
+          const highHandAmount = reg.enteringHighHands && tournament?.enableHighHand 
+            ? parseFloat(tournament?.highHandAmount || "0") 
+            : 0;
+          const totalAmount = buyInAmount + highHandAmount;
+          
+          return {
+            ...reg,
+            player: player || null,
+            amountOwed: totalAmount
+          };
+        })
+      );
+      
+      res.json(registrationsWithPlayers);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch pending registrations" });
+    }
+  });
+
+  app.patch("/api/registrations/:id/confirm-payment", async (req, res) => {
+    try {
+      const registration = await storage.updateTournamentRegistration(req.params.id, {
+        paymentConfirmed: true
+      });
+      if (!registration) {
+        return res.status(404).json({ error: "Registration not found" });
+      }
+      res.json(registration);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to confirm payment" });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }
