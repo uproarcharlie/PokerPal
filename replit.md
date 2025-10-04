@@ -4,6 +4,20 @@
 
 PokerPro is a comprehensive poker tournament management system built with a modern full-stack architecture. The application enables poker clubs to manage tournaments, track player registrations, calculate prize pools, maintain seasonal leaderboards, and award points based on tournament performance. It provides real-time tournament administration features including player elimination tracking, rake calculations, and customizable payout structures.
 
+## Recent Changes
+
+**Database Migration (October 4, 2025)**
+- Migrated from in-memory storage to PostgreSQL database for data persistence
+- Implemented DatabaseStorage class using Drizzle ORM
+- All data now persists across server restarts
+- Database auto-generates UUIDs and timestamps for all entities
+- Successfully tested CRUD operations with database
+
+**Navigation Improvements**
+- Added club details page (/clubs/:id) with tournament and season overview
+- Fixed navigation buttons on clubs page to properly route to details
+- Improved routing structure for better user experience
+
 ## User Preferences
 
 Preferred communication style: Simple, everyday language.

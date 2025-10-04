@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CreateClubModal } from "@/components/modals/create-club-modal";
 import { Plus, Users, Eye, Settings as SettingsIcon, ArrowLeft } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 
 interface Club {
   id: string;
@@ -15,6 +15,7 @@ interface Club {
 
 export default function Clubs() {
   const [showCreateClub, setShowCreateClub] = useState(false);
+  const [, setLocation] = useLocation();
 
   const { data: clubs = [], isLoading } = useQuery<Club[]>({
     queryKey: ["/api/clubs"],
@@ -130,6 +131,7 @@ export default function Clubs() {
                         variant="outline" 
                         size="sm" 
                         className="flex-1"
+                        onClick={() => setLocation(`/clubs/${club.id}`)}
                         data-testid={`view-club-${club.id}`}
                       >
                         <Eye className="w-4 h-4 mr-1" />
@@ -139,6 +141,7 @@ export default function Clubs() {
                         variant="outline" 
                         size="sm" 
                         className="flex-1"
+                        onClick={() => setLocation(`/clubs/${club.id}/settings`)}
                         data-testid={`settings-club-${club.id}`}
                       >
                         <SettingsIcon className="w-4 h-4 mr-1" />

@@ -15,7 +15,7 @@ export const clubs = pgTable("clubs", {
 export const seasons = pgTable("seasons", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
-  clubId: varchar("club_id").references(() => clubs.id).notNull(),
+  clubId: varchar("club_id").references(() => clubs.id, { onDelete: "cascade" }).notNull(),
   startDate: timestamp("start_date").notNull(),
   endDate: timestamp("end_date"),
   isActive: boolean("is_active").default(true),
@@ -36,8 +36,8 @@ export const tournaments = pgTable("tournaments", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
   description: text("description"),
-  clubId: varchar("club_id").references(() => clubs.id).notNull(),
-  seasonId: varchar("season_id").references(() => seasons.id),
+  clubId: varchar("club_id").references(() => clubs.id, { onDelete: "cascade" }).notNull(),
+  seasonId: varchar("season_id").references(() => seasons.id, { onDelete: "set null" }),
   startDateTime: timestamp("start_date_time").notNull(),
   status: text("status").notNull().default("scheduled"), // scheduled, registration, in_progress, completed, cancelled
   buyInAmount: decimal("buy_in_amount", { precision: 10, scale: 2 }).notNull(),
@@ -61,8 +61,8 @@ export const tournaments = pgTable("tournaments", {
 // Tournament registrations
 export const tournamentRegistrations = pgTable("tournament_registrations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tournamentId: varchar("tournament_id").references(() => tournaments.id).notNull(),
-  playerId: varchar("player_id").references(() => players.id).notNull(),
+  tournamentId: varchar("tournament_id").references(() => tournaments.id, { onDelete: "cascade" }).notNull(),
+  playerId: varchar("player_id").references(() => players.id, { onDelete: "cascade" }).notNull(),
   registrationTime: timestamp("registration_time").defaultNow(),
   buyIns: integer("buy_ins").default(1),
   rebuys: integer("rebuys").default(0),
@@ -77,7 +77,7 @@ export const tournamentRegistrations = pgTable("tournament_registrations", {
 // Points systems
 export const pointsSystems = pgTable("points_systems", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  seasonId: varchar("season_id").references(() => seasons.id).notNull(),
+  seasonId: varchar("season_id").references(() => seasons.id, { onDelete: "cascade" }).notNull(),
   name: text("name").notNull(),
   description: text("description"),
   participationPoints: integer("participation_points").default(0),
@@ -88,7 +88,7 @@ export const pointsSystems = pgTable("points_systems", {
 // Points allocations
 export const pointsAllocations = pgTable("points_allocations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  pointsSystemId: varchar("points_system_id").references(() => pointsSystems.id).notNull(),
+  pointsSystemId: varchar("points_system_id").references(() => pointsSystems.id, { onDelete: "cascade" }).notNull(),
   position: integer("position").notNull(), // Can be range like 4 for positions 4-10
   positionEnd: integer("position_end"), // For position ranges
   points: integer("points").notNull(),

@@ -1,12 +1,15 @@
-import { randomUUID } from "crypto";
-import type {
-  Club, InsertClub,
-  Season, InsertSeason,
-  Player, InsertPlayer,
-  Tournament, InsertTournament,
-  TournamentRegistration, InsertTournamentRegistration,
-  PointsSystem, InsertPointsSystem,
-  PointsAllocation, InsertPointsAllocation
+import { eq } from "drizzle-orm";
+import { db } from "./db";
+import {
+  clubs, seasons, players, tournaments, tournamentRegistrations,
+  pointsSystems, pointsAllocations,
+  type Club, type InsertClub,
+  type Season, type InsertSeason,
+  type Player, type InsertPlayer,
+  type Tournament, type InsertTournament,
+  type TournamentRegistration, type InsertTournamentRegistration,
+  type PointsSystem, type InsertPointsSystem,
+  type PointsAllocation, type InsertPointsAllocation
 } from "@shared/schema";
 
 export interface IStorage {
@@ -65,301 +68,202 @@ export interface IStorage {
   deletePointsAllocation(id: string): Promise<boolean>;
 }
 
-export class MemStorage implements IStorage {
-  private clubs: Map<string, Club> = new Map();
-  private seasons: Map<string, Season> = new Map();
-  private players: Map<string, Player> = new Map();
-  private tournaments: Map<string, Tournament> = new Map();
-  private tournamentRegistrations: Map<string, TournamentRegistration> = new Map();
-  private pointsSystems: Map<string, PointsSystem> = new Map();
-  private pointsAllocations: Map<string, PointsAllocation> = new Map();
-
+export class DatabaseStorage implements IStorage {
   // Clubs
   async getClub(id: string): Promise<Club | undefined> {
-    return this.clubs.get(id);
+    const [club] = await db.select().from(clubs).where(eq(clubs.id, id));
+    return club || undefined;
   }
 
   async getClubs(): Promise<Club[]> {
-    return Array.from(this.clubs.values());
+    return await db.select().from(clubs);
   }
 
   async createClub(insertClub: InsertClub): Promise<Club> {
-    const id = randomUUID();
-    const club: Club = {
-      ...insertClub,
-      description: insertClub.description ?? null,
-      id,
-      createdAt: new Date(),
-    };
-    this.clubs.set(id, club);
+    const [club] = await db.insert(clubs).values(insertClub).returning();
     return club;
   }
 
   async updateClub(id: string, clubData: Partial<InsertClub>): Promise<Club | undefined> {
-    const club = this.clubs.get(id);
-    if (!club) return undefined;
-
-    const updatedClub = { ...club, ...clubData };
-    this.clubs.set(id, updatedClub);
-    return updatedClub;
+    const [club] = await db.update(clubs).set(clubData).where(eq(clubs.id, id)).returning();
+    return club || undefined;
   }
 
   async deleteClub(id: string): Promise<boolean> {
-    return this.clubs.delete(id);
+    const result = await db.delete(clubs).where(eq(clubs.id, id));
+    return result.rowCount !== null && result.rowCount > 0;
   }
 
   // Seasons
   async getSeason(id: string): Promise<Season | undefined> {
-    return this.seasons.get(id);
+    const [season] = await db.select().from(seasons).where(eq(seasons.id, id));
+    return season || undefined;
   }
 
   async getSeasons(): Promise<Season[]> {
-    return Array.from(this.seasons.values());
+    return await db.select().from(seasons);
   }
 
   async getSeasonsByClub(clubId: string): Promise<Season[]> {
-    return Array.from(this.seasons.values()).filter(season => season.clubId === clubId);
+    return await db.select().from(seasons).where(eq(seasons.clubId, clubId));
   }
 
   async createSeason(insertSeason: InsertSeason): Promise<Season> {
-    const id = randomUUID();
-    const season: Season = {
-      ...insertSeason,
-      endDate: insertSeason.endDate ?? null,
-      isActive: insertSeason.isActive ?? null,
-      id,
-      createdAt: new Date(),
-    };
-    this.seasons.set(id, season);
+    const [season] = await db.insert(seasons).values(insertSeason).returning();
     return season;
   }
 
   async updateSeason(id: string, seasonData: Partial<InsertSeason>): Promise<Season | undefined> {
-    const season = this.seasons.get(id);
-    if (!season) return undefined;
-
-    const updatedSeason = { ...season, ...seasonData };
-    this.seasons.set(id, updatedSeason);
-    return updatedSeason;
+    const [season] = await db.update(seasons).set(seasonData).where(eq(seasons.id, id)).returning();
+    return season || undefined;
   }
 
   async deleteSeason(id: string): Promise<boolean> {
-    return this.seasons.delete(id);
+    const result = await db.delete(seasons).where(eq(seasons.id, id));
+    return result.rowCount !== null && result.rowCount > 0;
   }
 
   // Players
   async getPlayer(id: string): Promise<Player | undefined> {
-    return this.players.get(id);
+    const [player] = await db.select().from(players).where(eq(players.id, id));
+    return player || undefined;
   }
 
   async getPlayers(): Promise<Player[]> {
-    return Array.from(this.players.values());
+    return await db.select().from(players);
   }
 
   async getPlayerByEmail(email: string): Promise<Player | undefined> {
-    return Array.from(this.players.values()).find(player => player.email === email);
+    const [player] = await db.select().from(players).where(eq(players.email, email));
+    return player || undefined;
   }
 
   async createPlayer(insertPlayer: InsertPlayer): Promise<Player> {
-    const id = randomUUID();
-    const player: Player = {
-      ...insertPlayer,
-      email: insertPlayer.email ?? null,
-      phone: insertPlayer.phone ?? null,
-      id,
-      createdAt: new Date(),
-    };
-    this.players.set(id, player);
+    const [player] = await db.insert(players).values(insertPlayer).returning();
     return player;
   }
 
   async updatePlayer(id: string, playerData: Partial<InsertPlayer>): Promise<Player | undefined> {
-    const player = this.players.get(id);
-    if (!player) return undefined;
-
-    const updatedPlayer = { ...player, ...playerData };
-    this.players.set(id, updatedPlayer);
-    return updatedPlayer;
+    const [player] = await db.update(players).set(playerData).where(eq(players.id, id)).returning();
+    return player || undefined;
   }
 
   async deletePlayer(id: string): Promise<boolean> {
-    return this.players.delete(id);
+    const result = await db.delete(players).where(eq(players.id, id));
+    return result.rowCount !== null && result.rowCount > 0;
   }
 
   // Tournaments
   async getTournament(id: string): Promise<Tournament | undefined> {
-    return this.tournaments.get(id);
+    const [tournament] = await db.select().from(tournaments).where(eq(tournaments.id, id));
+    return tournament || undefined;
   }
 
   async getTournaments(): Promise<Tournament[]> {
-    return Array.from(this.tournaments.values());
+    return await db.select().from(tournaments);
   }
 
   async getTournamentsByClub(clubId: string): Promise<Tournament[]> {
-    return Array.from(this.tournaments.values()).filter(tournament => tournament.clubId === clubId);
+    return await db.select().from(tournaments).where(eq(tournaments.clubId, clubId));
   }
 
   async getTournamentsBySeason(seasonId: string): Promise<Tournament[]> {
-    return Array.from(this.tournaments.values()).filter(tournament => tournament.seasonId === seasonId);
+    return await db.select().from(tournaments).where(eq(tournaments.seasonId, seasonId));
   }
 
   async createTournament(insertTournament: InsertTournament): Promise<Tournament> {
-    const id = randomUUID();
-    const tournament: Tournament = {
-      ...insertTournament,
-      seasonId: insertTournament.seasonId ?? null,
-      description: insertTournament.description ?? null,
-      rebuyAmount: insertTournament.rebuyAmount ?? null,
-      addonAmount: insertTournament.addonAmount ?? null,
-      maxRebuys: insertTournament.maxRebuys ?? null,
-      rebuyPeriodMinutes: insertTournament.rebuyPeriodMinutes ?? null,
-      customPayouts: insertTournament.customPayouts ?? null,
-      highHandAmount: insertTournament.highHandAmount ?? null,
-      status: insertTournament.status ?? 'scheduled',
-      rakeType: insertTournament.rakeType ?? 'none',
-      rakeAmount: insertTournament.rakeAmount ?? '0',
-      payoutStructure: insertTournament.payoutStructure ?? 'standard',
-      enableHighHand: insertTournament.enableHighHand ?? false,
-      enableLateRegistration: insertTournament.enableLateRegistration ?? false,
-      trackPoints: insertTournament.trackPoints ?? true,
-      minPlayers: insertTournament.minPlayers ?? 8,
-      id,
-      createdAt: new Date(),
-    };
-    this.tournaments.set(id, tournament);
+    const [tournament] = await db.insert(tournaments).values(insertTournament).returning();
     return tournament;
   }
 
   async updateTournament(id: string, tournamentData: Partial<InsertTournament>): Promise<Tournament | undefined> {
-    const tournament = this.tournaments.get(id);
-    if (!tournament) return undefined;
-
-    const updatedTournament = { ...tournament, ...tournamentData };
-    this.tournaments.set(id, updatedTournament);
-    return updatedTournament;
+    const [tournament] = await db.update(tournaments).set(tournamentData).where(eq(tournaments.id, id)).returning();
+    return tournament || undefined;
   }
 
   async deleteTournament(id: string): Promise<boolean> {
-    return this.tournaments.delete(id);
+    const result = await db.delete(tournaments).where(eq(tournaments.id, id));
+    return result.rowCount !== null && result.rowCount > 0;
   }
 
   // Tournament Registrations
   async getTournamentRegistration(id: string): Promise<TournamentRegistration | undefined> {
-    return this.tournamentRegistrations.get(id);
+    const [registration] = await db.select().from(tournamentRegistrations).where(eq(tournamentRegistrations.id, id));
+    return registration || undefined;
   }
 
   async getTournamentRegistrations(tournamentId: string): Promise<TournamentRegistration[]> {
-    return Array.from(this.tournamentRegistrations.values())
-      .filter(reg => reg.tournamentId === tournamentId);
+    return await db.select().from(tournamentRegistrations).where(eq(tournamentRegistrations.tournamentId, tournamentId));
   }
 
   async getPlayerRegistrations(playerId: string): Promise<TournamentRegistration[]> {
-    return Array.from(this.tournamentRegistrations.values())
-      .filter(reg => reg.playerId === playerId);
+    return await db.select().from(tournamentRegistrations).where(eq(tournamentRegistrations.playerId, playerId));
   }
 
   async createTournamentRegistration(insertReg: InsertTournamentRegistration): Promise<TournamentRegistration> {
-    const id = randomUUID();
-    const registration: TournamentRegistration = {
-      ...insertReg,
-      buyIns: insertReg.buyIns ?? null,
-      rebuys: insertReg.rebuys ?? null,
-      addons: insertReg.addons ?? null,
-      finalPosition: insertReg.finalPosition ?? null,
-      prizeAmount: insertReg.prizeAmount ?? null,
-      pointsAwarded: insertReg.pointsAwarded ?? null,
-      isEliminated: insertReg.isEliminated ?? null,
-      eliminationTime: insertReg.eliminationTime ?? null,
-      id,
-      registrationTime: new Date(),
-    };
-    this.tournamentRegistrations.set(id, registration);
+    const [registration] = await db.insert(tournamentRegistrations).values(insertReg).returning();
     return registration;
   }
 
   async updateTournamentRegistration(id: string, regData: Partial<InsertTournamentRegistration>): Promise<TournamentRegistration | undefined> {
-    const registration = this.tournamentRegistrations.get(id);
-    if (!registration) return undefined;
-
-    const updatedRegistration = { ...registration, ...regData };
-    this.tournamentRegistrations.set(id, updatedRegistration);
-    return updatedRegistration;
+    const [registration] = await db.update(tournamentRegistrations).set(regData).where(eq(tournamentRegistrations.id, id)).returning();
+    return registration || undefined;
   }
 
   async deleteTournamentRegistration(id: string): Promise<boolean> {
-    return this.tournamentRegistrations.delete(id);
+    const result = await db.delete(tournamentRegistrations).where(eq(tournamentRegistrations.id, id));
+    return result.rowCount !== null && result.rowCount > 0;
   }
 
   // Points Systems
   async getPointsSystem(id: string): Promise<PointsSystem | undefined> {
-    return this.pointsSystems.get(id);
+    const [pointsSystem] = await db.select().from(pointsSystems).where(eq(pointsSystems.id, id));
+    return pointsSystem || undefined;
   }
 
   async getPointsSystemsBySeason(seasonId: string): Promise<PointsSystem[]> {
-    return Array.from(this.pointsSystems.values()).filter(ps => ps.seasonId === seasonId);
+    return await db.select().from(pointsSystems).where(eq(pointsSystems.seasonId, seasonId));
   }
 
   async createPointsSystem(insertPS: InsertPointsSystem): Promise<PointsSystem> {
-    const id = randomUUID();
-    const pointsSystem: PointsSystem = {
-      ...insertPS,
-      description: insertPS.description ?? null,
-      participationPoints: insertPS.participationPoints ?? null,
-      knockoutPoints: insertPS.knockoutPoints ?? null,
-      id,
-      createdAt: new Date(),
-    };
-    this.pointsSystems.set(id, pointsSystem);
+    const [pointsSystem] = await db.insert(pointsSystems).values(insertPS).returning();
     return pointsSystem;
   }
 
   async updatePointsSystem(id: string, psData: Partial<InsertPointsSystem>): Promise<PointsSystem | undefined> {
-    const pointsSystem = this.pointsSystems.get(id);
-    if (!pointsSystem) return undefined;
-
-    const updatedPS = { ...pointsSystem, ...psData };
-    this.pointsSystems.set(id, updatedPS);
-    return updatedPS;
+    const [pointsSystem] = await db.update(pointsSystems).set(psData).where(eq(pointsSystems.id, id)).returning();
+    return pointsSystem || undefined;
   }
 
   async deletePointsSystem(id: string): Promise<boolean> {
-    return this.pointsSystems.delete(id);
+    const result = await db.delete(pointsSystems).where(eq(pointsSystems.id, id));
+    return result.rowCount !== null && result.rowCount > 0;
   }
 
   // Points Allocations
   async getPointsAllocation(id: string): Promise<PointsAllocation | undefined> {
-    return this.pointsAllocations.get(id);
+    const [allocation] = await db.select().from(pointsAllocations).where(eq(pointsAllocations.id, id));
+    return allocation || undefined;
   }
 
   async getPointsAllocationsBySystem(pointsSystemId: string): Promise<PointsAllocation[]> {
-    return Array.from(this.pointsAllocations.values())
-      .filter(pa => pa.pointsSystemId === pointsSystemId);
+    return await db.select().from(pointsAllocations).where(eq(pointsAllocations.pointsSystemId, pointsSystemId));
   }
 
   async createPointsAllocation(insertPA: InsertPointsAllocation): Promise<PointsAllocation> {
-    const id = randomUUID();
-    const allocation: PointsAllocation = {
-      ...insertPA,
-      description: insertPA.description ?? null,
-      positionEnd: insertPA.positionEnd ?? null,
-      id,
-    };
-    this.pointsAllocations.set(id, allocation);
+    const [allocation] = await db.insert(pointsAllocations).values(insertPA).returning();
     return allocation;
   }
 
   async updatePointsAllocation(id: string, paData: Partial<InsertPointsAllocation>): Promise<PointsAllocation | undefined> {
-    const allocation = this.pointsAllocations.get(id);
-    if (!allocation) return undefined;
-
-    const updatedPA = { ...allocation, ...paData };
-    this.pointsAllocations.set(id, updatedPA);
-    return updatedPA;
+    const [allocation] = await db.update(pointsAllocations).set(paData).where(eq(pointsAllocations.id, id)).returning();
+    return allocation || undefined;
   }
 
   async deletePointsAllocation(id: string): Promise<boolean> {
-    return this.pointsAllocations.delete(id);
+    const result = await db.delete(pointsAllocations).where(eq(pointsAllocations.id, id));
+    return result.rowCount !== null && result.rowCount > 0;
   }
 }
 
-export const storage = new MemStorage();
+export const storage = new DatabaseStorage();
