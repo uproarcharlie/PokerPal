@@ -3,14 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
+import { FormSlideout } from "@/components/ui/form-slideout";
 import {
   Form,
   FormControl,
@@ -170,17 +163,45 @@ export function CreateTournamentModal({ open, onOpenChange }: CreateTournamentMo
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
-        <DialogHeader className="shrink-0">
-          <DialogTitle>Create New Tournament</DialogTitle>
-          <DialogDescription>
-            Set up your tournament details and configuration
-          </DialogDescription>
-        </DialogHeader>
-
-        <Form {...form}>
-          <form className="flex-1 overflow-y-auto space-y-6 px-1">
+    <FormSlideout
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Create New Tournament"
+      description="Set up your tournament details and configuration"
+      footer={
+        <>
+          <Button 
+            type="button" 
+            variant="ghost" 
+            onClick={() => onOpenChange(false)}
+            data-testid="cancel-tournament"
+          >
+            Cancel
+          </Button>
+          <Button 
+            type="button" 
+            variant="secondary"
+            onClick={handleSaveAsDraft}
+            disabled={createTournamentMutation.isPending}
+            data-testid="save-draft-tournament"
+          >
+            <Save className="w-4 h-4 mr-2" />
+            Save as Draft
+          </Button>
+          <Button 
+            type="button"
+            onClick={handleCreate}
+            disabled={createTournamentMutation.isPending}
+            data-testid="create-tournament-final"
+          >
+            <Check className="w-4 h-4 mr-2" />
+            {createTournamentMutation.isPending ? "Creating..." : "Create Tournament"}
+          </Button>
+        </>
+      }
+    >
+      <Form {...form}>
+        <form className="space-y-6">
             {/* Basic Information */}
             <div className="space-y-4">
               <h4 className="text-sm font-semibold text-foreground uppercase tracking-wide">
@@ -597,39 +618,8 @@ export function CreateTournamentModal({ open, onOpenChange }: CreateTournamentMo
                 />
               </div>
             </div>
-          </form>
-        </Form>
-
-        <DialogFooter className="shrink-0 border-t border-border pt-6">
-          <Button 
-            type="button" 
-            variant="ghost" 
-            onClick={() => onOpenChange(false)}
-            data-testid="cancel-tournament"
-          >
-            Cancel
-          </Button>
-          <Button 
-            type="button" 
-            variant="secondary"
-            onClick={handleSaveAsDraft}
-            disabled={createTournamentMutation.isPending}
-            data-testid="save-draft-tournament"
-          >
-            <Save className="w-4 h-4 mr-2" />
-            Save as Draft
-          </Button>
-          <Button 
-            type="button"
-            onClick={handleCreate}
-            disabled={createTournamentMutation.isPending}
-            data-testid="create-tournament-final"
-          >
-            <Check className="w-4 h-4 mr-2" />
-            {createTournamentMutation.isPending ? "Creating..." : "Create Tournament"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </form>
+      </Form>
+    </FormSlideout>
   );
 }

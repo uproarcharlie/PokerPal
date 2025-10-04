@@ -3,14 +3,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useMutation } from "@tanstack/react-query";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
+import { FormSlideout } from "@/components/ui/form-slideout";
 import {
   Form,
   FormControl,
@@ -167,16 +160,35 @@ export function PointsSystemModal({ open, onOpenChange, seasonId, seasonName }: 
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
-        <DialogHeader className="shrink-0">
-          <DialogTitle>Points System Configuration</DialogTitle>
-          <DialogDescription>
-            Customize point allocation for tournament placements
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="flex-1 overflow-y-auto space-y-6 px-1">
+    <FormSlideout
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Points System Configuration"
+      description="Customize point allocation for tournament placements"
+      className="sm:max-w-[640px] md:max-w-[740px] lg:max-w-[840px]"
+      footer={
+        <>
+          <Button 
+            type="button" 
+            variant="ghost" 
+            onClick={() => onOpenChange(false)}
+            data-testid="cancel-points-system"
+          >
+            Cancel
+          </Button>
+          <Button 
+            type="button"
+            onClick={form.handleSubmit(onSubmit)}
+            disabled={createPointsSystemMutation.isPending}
+            data-testid="save-points-system"
+          >
+            <Save className="w-4 h-4 mr-2" />
+            {createPointsSystemMutation.isPending ? "Saving..." : "Save Points System"}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-6">
           {/* Season Info */}
           <div className="flex items-center justify-between p-4 bg-muted/30 rounded-lg">
             <div>
@@ -427,28 +439,7 @@ export function PointsSystemModal({ open, onOpenChange, seasonId, seasonName }: 
               </div>
             </form>
           </Form>
-        </div>
-
-        <DialogFooter className="shrink-0 border-t border-border pt-6">
-          <Button 
-            type="button" 
-            variant="ghost" 
-            onClick={() => onOpenChange(false)}
-            data-testid="cancel-points-system"
-          >
-            Cancel
-          </Button>
-          <Button 
-            type="button"
-            onClick={form.handleSubmit(onSubmit)}
-            disabled={createPointsSystemMutation.isPending}
-            data-testid="save-points-system"
-          >
-            <Save className="w-4 h-4 mr-2" />
-            {createPointsSystemMutation.isPending ? "Saving..." : "Save Points System"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </FormSlideout>
   );
 }

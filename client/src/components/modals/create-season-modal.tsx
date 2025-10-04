@@ -2,14 +2,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
+import { FormSlideout } from "@/components/ui/form-slideout";
 import {
   Form,
   FormControl,
@@ -104,25 +97,87 @@ export function CreateSeasonModal({ open, onOpenChange }: CreateSeasonModalProps
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Create New Season</DialogTitle>
-          <DialogDescription>
-            Set up a new tournament season to organize events and track player progress over time.
-          </DialogDescription>
-        </DialogHeader>
+    <FormSlideout
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Create New Season"
+      description="Set up a new tournament season to organize events and track player progress over time."
+      footer={
+        <>
+          <Button 
+            type="button" 
+            variant="ghost" 
+            onClick={() => onOpenChange(false)}
+            data-testid="cancel-season"
+          >
+            Cancel
+          </Button>
+          <Button 
+            type="submit"
+            onClick={form.handleSubmit(onSubmit)}
+            disabled={createSeasonMutation.isPending}
+            data-testid="create-season-final"
+          >
+            <Check className="w-4 h-4 mr-2" />
+            {createSeasonMutation.isPending ? "Creating..." : "Create Season"}
+          </Button>
+        </>
+      }
+    >
+      <Form {...form}>
+        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+          <FormField
+            control={form.control}
+            name="name"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Season Name*</FormLabel>
+                <FormControl>
+                  <Input placeholder="Spring 2024" {...field} data-testid="season-name" />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
 
-        <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+          <FormField
+            control={form.control}
+            name="clubId"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Club*</FormLabel>
+                <Select onValueChange={field.onChange} defaultValue={field.value}>
+                  <FormControl>
+                    <SelectTrigger data-testid="club-select">
+                      <SelectValue placeholder="Select a club" />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    {clubs.length === 0 ? (
+                      <SelectItem value="no-clubs" disabled>No clubs available</SelectItem>
+                    ) : (
+                      clubs.map((club) => (
+                        <SelectItem key={club.id} value={club.id}>
+                          {club.name}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <div className="grid grid-cols-2 gap-4">
             <FormField
               control={form.control}
-              name="name"
+              name="startDate"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Season Name*</FormLabel>
+                  <FormLabel>Start Date*</FormLabel>
                   <FormControl>
-                    <Input placeholder="Spring 2024" {...field} data-testid="season-name" />
+                    <Input type="date" {...field} data-testid="start-date" />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -131,106 +186,42 @@ export function CreateSeasonModal({ open, onOpenChange }: CreateSeasonModalProps
 
             <FormField
               control={form.control}
-              name="clubId"
+              name="endDate"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Club*</FormLabel>
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
-                    <FormControl>
-                      <SelectTrigger data-testid="club-select">
-                        <SelectValue placeholder="Select a club" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {clubs.length === 0 ? (
-                        <SelectItem value="no-clubs" disabled>No clubs available</SelectItem>
-                      ) : (
-                        clubs.map((club) => (
-                          <SelectItem key={club.id} value={club.id}>
-                            {club.name}
-                          </SelectItem>
-                        ))
-                      )}
-                    </SelectContent>
-                  </Select>
+                  <FormLabel>End Date</FormLabel>
+                  <FormControl>
+                    <Input type="date" {...field} data-testid="end-date" />
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )}
             />
+          </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <FormField
-                control={form.control}
-                name="startDate"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Start Date*</FormLabel>
-                    <FormControl>
-                      <Input type="date" {...field} data-testid="start-date" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name="endDate"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>End Date</FormLabel>
-                    <FormControl>
-                      <Input type="date" {...field} data-testid="end-date" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-
-            <FormField
-              control={form.control}
-              name="isActive"
-              render={({ field }) => (
-                <FormItem className="flex flex-row items-start space-x-3 space-y-0">
-                  <FormControl>
-                    <Checkbox
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                      data-testid="is-active"
-                    />
-                  </FormControl>
-                  <div className="space-y-1 leading-none">
-                    <FormLabel>Active Season</FormLabel>
-                    <p className="text-sm text-muted-foreground">
-                      Mark this as the active season for the club
-                    </p>
-                  </div>
-                </FormItem>
-              )}
-            />
-
-            <DialogFooter>
-              <Button 
-                type="button" 
-                variant="ghost" 
-                onClick={() => onOpenChange(false)}
-                data-testid="cancel-season"
-              >
-                Cancel
-              </Button>
-              <Button 
-                type="submit"
-                disabled={createSeasonMutation.isPending}
-                data-testid="create-season-final"
-              >
-                <Check className="w-4 h-4 mr-2" />
-                {createSeasonMutation.isPending ? "Creating..." : "Create Season"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </Form>
-      </DialogContent>
-    </Dialog>
+          <FormField
+            control={form.control}
+            name="isActive"
+            render={({ field }) => (
+              <FormItem className="flex flex-row items-start space-x-3 space-y-0">
+                <FormControl>
+                  <Checkbox
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                    data-testid="is-active"
+                  />
+                </FormControl>
+                <div className="space-y-1 leading-none">
+                  <FormLabel>Active Season</FormLabel>
+                  <p className="text-sm text-muted-foreground">
+                    Mark this as the active season for the club
+                  </p>
+                </div>
+              </FormItem>
+            )}
+          />
+        </form>
+      </Form>
+    </FormSlideout>
   );
 }

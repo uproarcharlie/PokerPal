@@ -2,14 +2,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useMutation } from "@tanstack/react-query";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
+import { FormSlideout } from "@/components/ui/form-slideout";
 import {
   Form,
   FormControl,
@@ -77,17 +70,35 @@ export function CreateClubModal({ open, onOpenChange }: CreateClubModalProps) {
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Create New Club</DialogTitle>
-          <DialogDescription>
-            Set up a new poker club to organize tournaments and manage your poker community.
-          </DialogDescription>
-        </DialogHeader>
-
-        <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+    <FormSlideout
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Create New Club"
+      description="Set up a new poker club to organize tournaments and manage your poker community."
+      footer={
+        <>
+          <Button 
+            type="button" 
+            variant="ghost" 
+            onClick={() => onOpenChange(false)}
+            data-testid="cancel-club"
+          >
+            Cancel
+          </Button>
+          <Button 
+            type="submit"
+            onClick={form.handleSubmit(onSubmit)}
+            disabled={createClubMutation.isPending}
+            data-testid="create-club-final"
+          >
+            <Check className="w-4 h-4 mr-2" />
+            {createClubMutation.isPending ? "Creating..." : "Create Club"}
+          </Button>
+        </>
+      }
+    >
+      <Form {...form}>
+        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <FormField
               control={form.control}
               name="name"
@@ -121,28 +132,8 @@ export function CreateClubModal({ open, onOpenChange }: CreateClubModalProps) {
                 </FormItem>
               )}
             />
-
-            <DialogFooter>
-              <Button 
-                type="button" 
-                variant="ghost" 
-                onClick={() => onOpenChange(false)}
-                data-testid="cancel-club"
-              >
-                Cancel
-              </Button>
-              <Button 
-                type="submit"
-                disabled={createClubMutation.isPending}
-                data-testid="create-club-final"
-              >
-                <Check className="w-4 h-4 mr-2" />
-                {createClubMutation.isPending ? "Creating..." : "Create Club"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </Form>
-      </DialogContent>
-    </Dialog>
+        </form>
+      </Form>
+    </FormSlideout>
   );
 }

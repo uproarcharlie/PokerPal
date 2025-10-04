@@ -2,14 +2,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
+import { FormSlideout } from "@/components/ui/form-slideout";
 import {
   Form,
   FormControl,
@@ -105,123 +98,121 @@ export function RegisterPlayerModal({ open, onOpenChange, tournamentId }: Regist
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Register Player</DialogTitle>
-          <DialogDescription>
-            Add a player to this tournament with their entry details.
-          </DialogDescription>
-        </DialogHeader>
+    <FormSlideout
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Register Player"
+      description="Add a player to this tournament with their entry details."
+      footer={
+        <>
+          <Button 
+            type="button" 
+            variant="ghost" 
+            onClick={() => onOpenChange(false)}
+            data-testid="cancel-registration"
+          >
+            Cancel
+          </Button>
+          <Button 
+            type="submit"
+            onClick={form.handleSubmit(onSubmit)}
+            disabled={registerPlayerMutation.isPending || players.length === 0}
+            data-testid="register-player-final"
+          >
+            <Check className="w-4 h-4 mr-2" />
+            {registerPlayerMutation.isPending ? "Registering..." : "Register Player"}
+          </Button>
+        </>
+      }
+    >
+      <Form {...form}>
+        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+          <FormField
+            control={form.control}
+            name="playerId"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Player*</FormLabel>
+                <Select onValueChange={field.onChange} defaultValue={field.value}>
+                  <FormControl>
+                    <SelectTrigger data-testid="player-select">
+                      <SelectValue placeholder="Select a player" />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    {players.length === 0 ? (
+                      <SelectItem value="no-players" disabled>No players available</SelectItem>
+                    ) : (
+                      players.map((player) => (
+                        <SelectItem key={player.id} value={player.id}>
+                          {player.name} {player.email && `(${player.email})`}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
 
-        <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+          <div className="grid grid-cols-3 gap-4">
             <FormField
               control={form.control}
-              name="playerId"
+              name="buyIns"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Player*</FormLabel>
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
-                    <FormControl>
-                      <SelectTrigger data-testid="player-select">
-                        <SelectValue placeholder="Select a player" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {players.length === 0 ? (
-                        <SelectItem value="no-players" disabled>No players available</SelectItem>
-                      ) : (
-                        players.map((player) => (
-                          <SelectItem key={player.id} value={player.id}>
-                            {player.name} {player.email && `(${player.email})`}
-                          </SelectItem>
-                        ))
-                      )}
-                    </SelectContent>
-                  </Select>
+                  <FormLabel>Buy-ins*</FormLabel>
+                  <FormControl>
+                    <Input placeholder="1" {...field} data-testid="buyins-input" />
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )}
             />
+            
+            <FormField
+              control={form.control}
+              name="rebuys"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Re-buys</FormLabel>
+                  <FormControl>
+                    <Input placeholder="0" {...field} data-testid="rebuys-input" />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            
+            <FormField
+              control={form.control}
+              name="addons"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Add-ons</FormLabel>
+                  <FormControl>
+                    <Input placeholder="0" {...field} data-testid="addons-input" />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
 
-            <div className="grid grid-cols-3 gap-4">
-              <FormField
-                control={form.control}
-                name="buyIns"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Buy-ins*</FormLabel>
-                    <FormControl>
-                      <Input placeholder="1" {...field} data-testid="buyins-input" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              
-              <FormField
-                control={form.control}
-                name="rebuys"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Re-buys</FormLabel>
-                    <FormControl>
-                      <Input placeholder="0" {...field} data-testid="rebuys-input" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              
-              <FormField
-                control={form.control}
-                name="addons"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Add-ons</FormLabel>
-                    <FormControl>
-                      <Input placeholder="0" {...field} data-testid="addons-input" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+          {players.length === 0 && (
+            <div className="bg-muted/50 rounded-lg p-4">
+              <p className="text-sm text-muted-foreground mb-3">
+                No players found. You need to create players before registering them for tournaments.
+              </p>
+              <Button type="button" variant="outline" size="sm">
+                <Plus className="w-4 h-4 mr-2" />
+                Create New Player
+              </Button>
             </div>
-
-            {players.length === 0 && (
-              <div className="bg-muted/50 rounded-lg p-4">
-                <p className="text-sm text-muted-foreground mb-3">
-                  No players found. You need to create players before registering them for tournaments.
-                </p>
-                <Button type="button" variant="outline" size="sm">
-                  <Plus className="w-4 h-4 mr-2" />
-                  Create New Player
-                </Button>
-              </div>
-            )}
-
-            <DialogFooter>
-              <Button 
-                type="button" 
-                variant="ghost" 
-                onClick={() => onOpenChange(false)}
-                data-testid="cancel-registration"
-              >
-                Cancel
-              </Button>
-              <Button 
-                type="submit"
-                disabled={registerPlayerMutation.isPending || players.length === 0}
-                data-testid="register-player-final"
-              >
-                <Check className="w-4 h-4 mr-2" />
-                {registerPlayerMutation.isPending ? "Registering..." : "Register Player"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </Form>
-      </DialogContent>
-    </Dialog>
+          )}
+        </form>
+      </Form>
+    </FormSlideout>
   );
 }
