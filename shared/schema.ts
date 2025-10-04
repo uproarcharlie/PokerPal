@@ -72,6 +72,8 @@ export const tournamentRegistrations = pgTable("tournament_registrations", {
   pointsAwarded: integer("points_awarded"),
   isEliminated: boolean("is_eliminated").default(false),
   eliminationTime: timestamp("elimination_time"),
+  enteringHighHands: boolean("entering_high_hands").default(false),
+  paymentConfirmed: boolean("payment_confirmed").default(false),
 });
 
 // Points systems
