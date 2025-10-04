@@ -119,6 +119,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/players", async (req, res) => {
     try {
       const validatedData = insertPlayerSchema.parse(req.body);
+      
+      // Check for existing player with same phone number
+      if (validatedData.phone) {
+        const existingPlayers = await storage.getPlayers();
+        const existingPlayer = existingPlayers.find(p => p.phone === validatedData.phone);
+        if (existingPlayer) {
+          return res.status(409).json({ 
+            error: "Phone number already registered",
+            message: `This phone number is already registered to ${existingPlayer.name}. Please use the "Existing Player" option instead.`,
+            existingPlayer
+          });
+        }
+      }
+      
       const player = await storage.createPlayer(validatedData);
       res.status(201).json(player);
     } catch (error) {
@@ -228,6 +242,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/tournaments/:tournamentId/registrations", async (req, res) => {
     try {
+      const tournament = await storage.getTournament(req.params.tournamentId);
+      if (!tournament) {
+        return res.status(404).json({ error: "Tournament not found" });
+      }
+
+      // Validate high hands entry against tournament settings
+      if (req.body.enteringHighHands && !tournament.enableHighHand) {
+        return res.status(400).json({ error: "High hands entry is not available for this tournament" });
+      }
+
+      // Check for duplicate registration
+      const existingRegistrations = await storage.getTournamentRegistrations(req.params.tournamentId);
+      const isDuplicate = existingRegistrations.some(reg => reg.playerId === req.body.playerId);
+      if (isDuplicate) {
+        return res.status(400).json({ error: "Player is already registered for this tournament" });
+      }
+
       const registrationData = {
         ...req.body,
         tournamentId: req.params.tournamentId

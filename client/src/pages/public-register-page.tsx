@@ -50,7 +50,17 @@ export function PublicRegisterPage() {
   const createPlayerMutation = useMutation({
     mutationFn: async (data: { name: string; phone: string }) => {
       const response = await apiRequest("POST", "/api/players", data);
-      return response.json();
+      const result = await response.json();
+      
+      if (response.status === 409) {
+        throw new Error(result.message || "Phone number already registered");
+      }
+      
+      if (!response.ok) {
+        throw new Error(result.error || "Failed to create player");
+      }
+      
+      return result;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/players"] });
@@ -63,7 +73,13 @@ export function PublicRegisterPage() {
         playerId: data.playerId,
         enteringHighHands: data.enteringHighHands,
       });
-      return response.json();
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.error || "Failed to register for tournament");
+      }
+      
+      return result;
     },
     onSuccess: () => {
       setRegistrationComplete(true);
@@ -72,10 +88,11 @@ export function PublicRegisterPage() {
         description: "Please proceed to payment confirmation.",
       });
     },
-    onError: () => {
+    onError: (error) => {
+      const errorMessage = error instanceof Error ? error.message : "Please try again or contact support.";
       toast({
         title: "Registration Failed",
-        description: "Please try again or contact support.",
+        description: errorMessage,
         variant: "destructive",
       });
     },
@@ -104,9 +121,10 @@ export function PublicRegisterPage() {
         setSelectedPlayer(newPlayer.id);
         setStep(3);
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Failed to create player. Please try again.";
         toast({
-          title: "Error",
-          description: "Failed to create player. Please try again.",
+          title: "Unable to Create Player",
+          description: errorMessage,
           variant: "destructive",
         });
       }
