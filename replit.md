@@ -6,6 +6,13 @@ PokerPro is a comprehensive poker tournament management system built with a mode
 
 ## Recent Changes
 
+**UI Migration to Slideouts (October 4, 2025)**
+- Converted all modals to slideouts using shadcn Sheet component per user preference
+- Created reusable FormSlideout component wrapper for consistent slideout pattern
+- Updated 6 components: CreateTournament, CreateClub, CreatePlayer, CreateSeason, RegisterPlayer, PointsSystem
+- Slideouts slide in from right side with customizable width and footer actions
+- Improved UX with better mobile responsiveness and less intrusive form overlays
+
 **Database Migration (October 4, 2025)**
 - Migrated from in-memory storage to PostgreSQL database for data persistence
 - Implemented DatabaseStorage class using Drizzle ORM
@@ -29,7 +36,12 @@ PokerPro is a comprehensive poker tournament management system built with a mode
 
 ## User Preferences
 
-Preferred communication style: Simple, everyday language.
+**Communication:**
+- Preferred communication style: Simple, everyday language
+
+**UI/UX:**
+- Use slideouts (Sheet component) instead of modals throughout the application
+- Slideouts provide better mobile experience and less intrusive interactions
 
 ## System Architecture
 
@@ -46,7 +58,8 @@ Preferred communication style: Simple, everyday language.
 **Design Patterns:**
 - Component-based architecture with reusable UI components
 - Custom hooks for shared logic (mobile detection, toast notifications)
-- Modal-based forms for data creation (clubs, tournaments, players, seasons)
+- Slideout-based forms using shadcn Sheet component (clubs, tournaments, players, seasons, registrations, points systems)
+- Reusable FormSlideout wrapper component for consistent slideout patterns
 - Optimistic updates and automatic cache invalidation via React Query
 - Centralized API client with standard error handling
 
