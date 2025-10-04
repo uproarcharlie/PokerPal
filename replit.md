@@ -17,6 +17,10 @@ PokerPro is a comprehensive poker tournament management system built with a mode
   - Deleting a season cascades to points systems and sets tournament.seasonId to null
   - Deleting a tournament or player cascades to tournament registrations
   - Prevents orphaned records and maintains referential integrity
+- Fixed tournament schema validation:
+  - Made fields with database defaults optional in insert schema
+  - Added support for both numbers and strings in decimal fields using union types
+  - Tournament creation now works via both API and UI
 
 **Navigation Improvements**
 - Added club details page (/clubs/:id) with tournament and season overview

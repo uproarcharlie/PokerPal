@@ -116,6 +116,17 @@ export const insertPlayerSchema = createInsertSchema(players).omit({
 
 export const insertTournamentSchema = createInsertSchema(tournaments, {
   startDateTime: z.coerce.date(),
+  buyInAmount: z.union([z.string(), z.number()]).transform(val => String(val)),
+  rebuyAmount: z.union([z.string(), z.number(), z.null()]).transform(val => val === null ? null : String(val)).optional().nullable(),
+  addonAmount: z.union([z.string(), z.number(), z.null()]).transform(val => val === null ? null : String(val)).optional().nullable(),
+  rakeAmount: z.union([z.string(), z.number(), z.null()]).transform(val => val === null ? null : String(val)).optional().nullable(),
+  highHandAmount: z.union([z.string(), z.number(), z.null()]).transform(val => val === null ? null : String(val)).optional().nullable(),
+  rakeType: z.enum(["none", "percentage", "fixed"]).optional(),
+  payoutStructure: z.enum(["standard", "top3", "top5", "custom"]).optional(),
+  status: z.string().optional(),
+  enableHighHand: z.boolean().optional(),
+  enableLateRegistration: z.boolean().optional(),
+  trackPoints: z.boolean().optional(),
 }).omit({
   id: true,
   createdAt: true,
