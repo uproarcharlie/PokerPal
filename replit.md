@@ -12,6 +12,11 @@ PokerPro is a comprehensive poker tournament management system built with a mode
 - All data now persists across server restarts
 - Database auto-generates UUIDs and timestamps for all entities
 - Successfully tested CRUD operations with database
+- Added ON DELETE CASCADE rules for data integrity:
+  - Deleting a club cascades to seasons and tournaments
+  - Deleting a season cascades to points systems and sets tournament.seasonId to null
+  - Deleting a tournament or player cascades to tournament registrations
+  - Prevents orphaned records and maintains referential integrity
 
 **Navigation Improvements**
 - Added club details page (/clubs/:id) with tournament and season overview
