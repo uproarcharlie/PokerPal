@@ -21,6 +21,7 @@ interface Tournament {
   addonAmount?: string;
   maxPlayers: number;
   createdAt: string;
+  confirmedPlayerCount?: number;
 }
 
 interface Club {
@@ -235,7 +236,7 @@ export default function Tournaments() {
                             <span className="text-sm font-semibold text-foreground">${tournament.buyInAmount}</span>
                           </td>
                           <td className="py-4 px-6">
-                            <span className="text-sm font-medium text-foreground">0/{tournament.maxPlayers}</span>
+                            <span className="text-sm font-medium text-foreground">{tournament.confirmedPlayerCount || 0}/{tournament.maxPlayers}</span>
                           </td>
                           <td className="py-4 px-6">
                             <span className="text-sm text-muted-foreground">

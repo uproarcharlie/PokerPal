@@ -155,7 +155,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         tournaments = await storage.getTournaments();
       }
-      res.json(tournaments);
+      
+      // Enrich tournaments with confirmed player count
+      const tournamentsWithCounts = await Promise.all(
+        tournaments.map(async (tournament) => {
+          const registrations = await storage.getTournamentRegistrations(tournament.id);
+          const confirmedCount = registrations.filter(reg => reg.paymentConfirmed).length;
+          return {
+            ...tournament,
+            confirmedPlayerCount: confirmedCount
+          };
+        })
+      );
+      
+      res.json(tournamentsWithCounts);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch tournaments" });
     }
