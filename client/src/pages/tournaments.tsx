@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CreateTournamentModal } from "@/components/modals/create-tournament-modal";
-import { Plus, Trophy, Eye, Edit, ArrowLeft, Filter, Download, Link as LinkIcon, QrCode } from "lucide-react";
+import { Plus, Trophy, Eye, Edit, ArrowLeft, Filter, Download, Link as LinkIcon, QrCode, Users } from "lucide-react";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 
@@ -245,6 +245,16 @@ export default function Tournaments() {
                           <td className="py-4 px-6">
                             <div className="flex items-center justify-end gap-2">
                               <Button 
+                                asChild
+                                variant="ghost" 
+                                size="sm"
+                              >
+                                <Link href={`/admin/registrations/${tournament.id}`} data-testid={`registrations-${tournament.id}`}>
+                                  <Users className="w-4 h-4 mr-1" />
+                                  Registrations
+                                </Link>
+                              </Button>
+                              <Button 
                                 variant="ghost" 
                                 size="sm" 
                                 onClick={() => copyRegistrationLink(tournament.id)}
@@ -262,12 +272,16 @@ export default function Tournaments() {
                                 <QrCode className="w-4 h-4 mr-1" />
                                 Copy QR
                               </Button>
-                              <Link href={`/tournaments/${tournament.id}`}>
-                                <Button variant="ghost" size="sm" data-testid={`view-tournament-${tournament.id}`}>
+                              <Button 
+                                asChild
+                                variant="ghost" 
+                                size="sm"
+                              >
+                                <Link href={`/tournaments/${tournament.id}`} data-testid={`view-tournament-${tournament.id}`}>
                                   <Eye className="w-4 h-4 mr-1" />
                                   View
-                                </Button>
-                              </Link>
+                                </Link>
+                              </Button>
                               <Button variant="ghost" size="sm" data-testid={`edit-tournament-${tournament.id}`}>
                                 <Edit className="w-4 h-4 mr-1" />
                                 Edit
