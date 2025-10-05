@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { CheckCircle2, Clock, Trophy, QrCode } from "lucide-react";
+import { CheckCircle2, Clock, Trophy, QrCode, Check } from "lucide-react";
 import type { Tournament } from "@shared/schema";
 
 interface PendingRegistration {
@@ -25,6 +25,21 @@ interface PendingRegistration {
   amountOwed: number;
 }
 
+interface ConfirmedRegistration {
+  id: string;
+  tournamentId: string;
+  playerId: string;
+  registrationTime: string;
+  enteringHighHands: boolean;
+  paymentConfirmed: boolean;
+  player: {
+    id: string;
+    name: string;
+    phone?: string;
+  } | null;
+  amountPaid: number;
+}
+
 export function AdminRegistrationsPage() {
   const { tournamentId } = useParams<{ tournamentId: string }>();
   const { toast } = useToast();
@@ -38,6 +53,11 @@ export function AdminRegistrationsPage() {
     refetchInterval: 3000,
   });
 
+  const { data: confirmedRegistrations = [], refetch: refetchConfirmed } = useQuery<ConfirmedRegistration[]>({
+    queryKey: [`/api/tournaments/${tournamentId}/confirmed-registrations`],
+    refetchInterval: 3000,
+  });
+
   const confirmPaymentMutation = useMutation({
     mutationFn: async (registrationId: string) => {
       const response = await apiRequest("PATCH", `/api/registrations/${registrationId}/confirm-payment`);
@@ -45,6 +65,7 @@ export function AdminRegistrationsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/tournaments/${tournamentId}/pending-registrations`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/tournaments/${tournamentId}/confirmed-registrations`] });
       toast({
         title: "Payment Confirmed",
         description: "Registration payment has been confirmed.",
@@ -62,10 +83,11 @@ export function AdminRegistrationsPage() {
   useEffect(() => {
     const interval = setInterval(() => {
       refetch();
+      refetchConfirmed();
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [refetch]);
+  }, [refetch, refetchConfirmed]);
 
   if (tournamentLoading) {
     return (
@@ -210,6 +232,88 @@ export function AdminRegistrationsPage() {
                 <div className="text-right">
                   <p className="text-sm text-muted-foreground">{pendingRegistrations.length} player(s)</p>
                   <p className="text-xs text-muted-foreground">awaiting confirmation</p>
+                </div>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Confirmed Players</CardTitle>
+          <CardDescription>Players who have paid and are registered</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="rounded-md border">
+            {confirmedRegistrations.length === 0 ? (
+              <div className="p-8 text-center text-muted-foreground">
+                <CheckCircle2 className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                <p className="font-medium">No confirmed players yet</p>
+                <p className="text-sm">Confirmed players will appear here</p>
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Player</TableHead>
+                    <TableHead>Phone</TableHead>
+                    <TableHead>High Hands</TableHead>
+                    <TableHead>Amount Paid</TableHead>
+                    <TableHead>Registered At</TableHead>
+                    <TableHead className="text-right">Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {confirmedRegistrations.map((registration) => (
+                    <TableRow key={registration.id} data-testid={`confirmed-registration-${registration.id}`}>
+                      <TableCell className="font-medium">
+                        {registration.player?.name || "Unknown Player"}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {registration.player?.phone || "N/A"}
+                      </TableCell>
+                      <TableCell>
+                        {registration.enteringHighHands ? (
+                          <Badge variant="secondary">
+                            <Trophy className="w-3 h-3 mr-1" />
+                            Yes
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline">No</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="font-semibold text-lg">
+                        ${registration.amountPaid.toFixed(2)}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground text-sm">
+                        {new Date(registration.registrationTime).toLocaleTimeString()}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Badge className="bg-green-100 text-green-800">
+                          <Check className="w-3 h-3 mr-1" />
+                          Confirmed
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+
+          {confirmedRegistrations.length > 0 && (
+            <div className="mt-4 p-4 bg-green-50 rounded-lg">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-green-900">Total Collected</p>
+                  <p className="text-2xl font-bold text-green-900">
+                    ${confirmedRegistrations.reduce((sum, reg) => sum + reg.amountPaid, 0).toFixed(2)}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm text-green-700">{confirmedRegistrations.length} player(s)</p>
+                  <p className="text-xs text-green-600">confirmed and paid</p>
                 </div>
               </div>
             </div>

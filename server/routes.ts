@@ -459,6 +459,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/tournaments/:tournamentId/confirmed-registrations", async (req, res) => {
+    try {
+      const registrations = await storage.getTournamentRegistrations(req.params.tournamentId);
+      const confirmedRegistrations = registrations.filter(reg => reg.paymentConfirmed);
+      
+      const registrationsWithPlayers = await Promise.all(
+        confirmedRegistrations.map(async (reg) => {
+          const player = await storage.getPlayer(reg.playerId);
+          const tournament = await storage.getTournament(req.params.tournamentId);
+          
+          const buyInAmount = parseFloat(tournament?.buyInAmount || "0");
+          const highHandAmount = reg.enteringHighHands && tournament?.enableHighHand 
+            ? parseFloat(tournament?.highHandAmount || "0") 
+            : 0;
+          const totalAmount = buyInAmount + highHandAmount;
+          
+          return {
+            ...reg,
+            player: player || null,
+            amountPaid: totalAmount
+          };
+        })
+      );
+      
+      res.json(registrationsWithPlayers);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch confirmed registrations" });
+    }
+  });
+
   app.patch("/api/registrations/:id/confirm-payment", async (req, res) => {
     try {
       const registration = await storage.updateTournamentRegistration(req.params.id, {
