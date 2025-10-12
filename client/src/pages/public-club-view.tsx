@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 interface Club {
   id: string;
   name: string;
+  slug: string;
   description?: string;
   imageUrl?: string;
   createdAt: string;
@@ -135,11 +136,11 @@ function SeasonLeaderboard({ season }: { season: Season }) {
 }
 
 export default function PublicClubView() {
-  const { id } = useParams();
+  const { slug } = useParams();
   const [activeTab, setActiveTab] = useState("details");
 
   const { data: club, isLoading: clubLoading } = useQuery<Club>({
-    queryKey: ["/api/clubs", id],
+    queryKey: [`/api/clubs/slug/${slug}`],
   });
 
   const { data: tournaments = [] } = useQuery<Tournament[]>({
@@ -150,8 +151,8 @@ export default function PublicClubView() {
     queryKey: ["/api/seasons"],
   });
 
-  const clubTournaments = tournaments.filter(t => t.clubId === id);
-  const clubSeasons = seasons.filter(s => s.clubId === id);
+  const clubTournaments = tournaments.filter(t => t.clubId === club?.id);
+  const clubSeasons = seasons.filter(s => s.clubId === club?.id);
   const activeSeasons = clubSeasons.filter(s => s.isActive);
   const currentSeason = activeSeasons[0]; // Default to first active season
 

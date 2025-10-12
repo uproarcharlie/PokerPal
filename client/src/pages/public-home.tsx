@@ -7,6 +7,7 @@ import { Trophy, Calendar, Users } from "lucide-react";
 interface Club {
   id: string;
   name: string;
+  slug: string;
   description?: string;
   imageUrl?: string;
 }
@@ -110,7 +111,7 @@ export default function PublicHome() {
           ) : (
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {clubs.map((club) => (
-                <Link key={club.id} href={`/club/${club.id}`}>
+                <Link key={club.id} href={`/club/${club.slug}`}>
                   <Card className="hover:border-primary transition-colors cursor-pointer h-full">
                     <CardHeader>
                       {club.imageUrl ? (

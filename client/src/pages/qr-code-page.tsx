@@ -7,6 +7,7 @@ import type { Tournament } from "@shared/schema";
 interface Club {
   id: string;
   name: string;
+  slug: string;
   imageUrl?: string;
   description?: string;
 }
@@ -56,7 +57,7 @@ export function QRCodePage() {
       <Card className="w-full max-w-2xl">
         <CardHeader className="text-center space-y-4">
           {club && (
-            <Link href={`/club/${club.id}`}>
+            <Link href={`/club/${club.slug}`}>
               <div className="flex items-center justify-center gap-3 hover:opacity-80 transition-opacity cursor-pointer">
                 {club.imageUrl ? (
                   <img

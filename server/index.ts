@@ -26,11 +26,7 @@ const limiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   // Skip rate limiting for failed requests that shouldn't count
-  skipFailedRequests: true,
-  // Use X-Forwarded-For header since we're behind Cloudflare/Railway
-  keyGenerator: (req) => {
-    return req.ip || req.headers['x-forwarded-for'] as string || 'unknown';
-  }
+  skipFailedRequests: true
 });
 
 // Apply rate limiting to API routes only

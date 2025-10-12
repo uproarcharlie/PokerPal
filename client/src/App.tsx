@@ -41,7 +41,7 @@ function Router() {
       <Route path="/home" component={PublicHome} />
       <Route path="/register/:tournamentId" component={PublicRegisterPage} />
       <Route path="/tournament/:id" component={PublicTournamentView} />
-      <Route path="/club/:id" component={PublicClubView} />
+      <Route path="/club/:slug" component={PublicClubView} />
       <Route path="/qr/:tournamentId" component={QRCodePage} />
       <Route path="/tournaments/:tournamentId/actions" component={PlayerActions} />
 

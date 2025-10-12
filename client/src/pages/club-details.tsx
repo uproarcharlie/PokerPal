@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 interface Club {
   id: string;
   name: string;
+  slug: string;
   description?: string;
   createdAt: string;
 }
@@ -59,7 +60,7 @@ export default function ClubDetails() {
   const activeSeasons = clubSeasons.filter(s => s.isActive);
   const activeTournaments = clubTournaments.filter(t => t.status === 'in_progress' || t.status === 'registration');
 
-  const publicClubUrl = `${window.location.origin}/club/${id}`;
+  const publicClubUrl = `${window.location.origin}/club/${club?.slug || id}`;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(publicClubUrl);

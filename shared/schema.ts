@@ -7,6 +7,7 @@ import { z } from "zod";
 export const clubs = pgTable("clubs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
+  slug: text("slug").notNull().unique(),
   description: text("description"),
   imageUrl: text("image_url"),
   timezone: text("timezone"), // Auto-detected from address

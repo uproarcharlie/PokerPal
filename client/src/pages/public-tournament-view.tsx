@@ -38,6 +38,7 @@ interface Tournament {
 interface Club {
   id: string;
   name: string;
+  slug: string;
   description?: string;
   imageUrl?: string;
 }
@@ -298,7 +299,7 @@ export default function PublicTournamentView() {
         <div className="max-w-6xl mx-auto px-4 md:px-8 py-6 md:py-8">
           {/* Club Branding */}
           <div className="flex items-center justify-between mb-6">
-            <Link href={`/club/${tournament.clubId}`}>
+            <Link href={`/club/${club?.slug || tournament.clubId}`}>
               <div className="flex items-center gap-3 hover:opacity-80 transition-opacity cursor-pointer">
                 {club?.imageUrl ? (
                   <img

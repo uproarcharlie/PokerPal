@@ -26,6 +26,9 @@ import { ArrowLeft, Check, Trash2 } from "lucide-react";
 
 const clubSchema = z.object({
   name: z.string().min(1, "Club name is required"),
+  slug: z.string()
+    .min(1, "URL slug is required")
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must be lowercase letters, numbers, and hyphens only"),
   description: z.string().optional(),
   imageUrl: z.string().optional(),
   address: z.string().optional(),
@@ -42,6 +45,7 @@ type ClubFormData = z.infer<typeof clubSchema>;
 interface Club {
   id: string;
   name: string;
+  slug: string;
   description?: string;
   imageUrl?: string;
   address?: string;
@@ -67,6 +71,7 @@ export default function ClubSettings() {
     resolver: zodResolver(clubSchema),
     defaultValues: {
       name: "",
+      slug: "",
       description: "",
       imageUrl: "",
       address: "",
@@ -84,6 +89,7 @@ export default function ClubSettings() {
     if (club) {
       form.reset({
         name: club.name || "",
+        slug: club.slug || "",
         description: club.description || "",
         imageUrl: club.imageUrl || "",
         address: club.address || "",
@@ -245,6 +251,23 @@ export default function ClubSettings() {
                           <FormControl>
                             <Input placeholder="Elite Poker Club" {...field} />
                           </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="slug"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>URL Slug*</FormLabel>
+                          <FormControl>
+                            <Input placeholder="elite-poker-club" {...field} />
+                          </FormControl>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Your club will be accessible at: club/{field.value || 'your-slug'}
+                          </p>
                           <FormMessage />
                         </FormItem>
                       )}

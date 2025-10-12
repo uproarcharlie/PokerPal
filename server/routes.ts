@@ -424,6 +424,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get club by slug
+  app.get("/api/clubs/slug/:slug", async (req, res) => {
+    try {
+      const club = await storage.getClubBySlug(req.params.slug);
+      if (!club) {
+        return res.status(404).json({ error: "Club not found" });
+      }
+      res.json(club);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch club" });
+    }
+  });
+
   app.post("/api/clubs", requireAuth, async (req, res) => {
     try {
       const validatedData = insertClubSchema.parse(req.body);

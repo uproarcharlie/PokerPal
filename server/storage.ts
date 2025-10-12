@@ -18,6 +18,7 @@ import {
 export interface IStorage {
   // Clubs
   getClub(id: string): Promise<Club | undefined>;
+  getClubBySlug(slug: string): Promise<Club | undefined>;
   getClubs(): Promise<Club[]>;
   createClub(club: InsertClub): Promise<Club>;
   updateClub(id: string, club: Partial<InsertClub>): Promise<Club | undefined>;
@@ -89,6 +90,11 @@ export class DatabaseStorage implements IStorage {
   // Clubs
   async getClub(id: string): Promise<Club | undefined> {
     const [club] = await db.select().from(clubs).where(eq(clubs.id, id));
+    return club || undefined;
+  }
+
+  async getClubBySlug(slug: string): Promise<Club | undefined> {
+    const [club] = await db.select().from(clubs).where(eq(clubs.slug, slug));
     return club || undefined;
   }
 

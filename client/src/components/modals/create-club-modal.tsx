@@ -30,6 +30,9 @@ import { Check } from "lucide-react";
 
 const clubSchema = z.object({
   name: z.string().min(1, "Club name is required"),
+  slug: z.string()
+    .min(1, "URL slug is required")
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must be lowercase letters, numbers, and hyphens only"),
   description: z.string().optional(),
   imageUrl: z.string().optional(),
   timezone: z.string().optional(),
@@ -50,6 +53,7 @@ export function CreateClubModal({ open, onOpenChange }: CreateClubModalProps) {
     resolver: zodResolver(clubSchema),
     defaultValues: {
       name: "",
+      slug: "",
       description: "",
       imageUrl: "",
       timezone: "",
@@ -141,8 +145,38 @@ export function CreateClubModal({ open, onOpenChange }: CreateClubModalProps) {
                 <FormItem>
                   <FormLabel>Club Name*</FormLabel>
                   <FormControl>
-                    <Input placeholder="Elite Poker Club" {...field} data-testid="club-name" />
+                    <Input
+                      placeholder="Elite Poker Club"
+                      {...field}
+                      data-testid="club-name"
+                      onChange={(e) => {
+                        field.onChange(e);
+                        // Auto-generate slug from name
+                        const slug = e.target.value
+                          .toLowerCase()
+                          .replace(/[^a-z0-9]+/g, '-')
+                          .replace(/^-+|-+$/g, '');
+                        form.setValue('slug', slug);
+                      }}
+                    />
                   </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="slug"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>URL Slug*</FormLabel>
+                  <FormControl>
+                    <Input placeholder="elite-poker-club" {...field} />
+                  </FormControl>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Your club will be accessible at: club/{field.value || 'your-slug'}
+                  </p>
                   <FormMessage />
                 </FormItem>
               )}
