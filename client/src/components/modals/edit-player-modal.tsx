@@ -73,6 +73,7 @@ export function EditPlayerModal({ open, onOpenChange, player }: EditPlayerModalP
         ...data,
         email: data.email || undefined,
         phone: data.phone || undefined,
+        imageUrl: data.imageUrl || undefined,
       };
 
       const response = await apiRequest("PUT", `/api/players/${player?.id}`, payload);
