@@ -4,7 +4,7 @@ import session from "express-session";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { registerRoutes } from "./routes";
-import { serveStatic, log } from "./vite";
+import { serveStatic, log } from "./vite.js";
 import { sessionConfig } from "./config/auth";
 
 const app = express();
@@ -90,7 +90,7 @@ app.use((req, res, next) => {
   // setting up all the other routes so the catch-all route
   // doesn't interfere with the other routes
   if (app.get("env") === "development") {
-    const { setupVite } = await import("./vite");
+    const { setupVite } = await import("./vite.js");
     await setupVite(app, server);
   } else {
     serveStatic(app);
