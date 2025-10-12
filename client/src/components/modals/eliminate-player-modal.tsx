@@ -57,13 +57,13 @@ export function EliminatePlayerModal({
       const response = await apiRequest("PUT", `/api/registrations/${registration.id}`, {
         isEliminated: true,
         eliminationTime: new Date().toISOString(),
-        eliminatedBy: eliminatedBy || null,
+        eliminatedBy: (eliminatedBy && eliminatedBy !== "none") ? eliminatedBy : null,
       });
       return response.json();
     },
     onSuccess: async () => {
       // If a player was assigned the knockout, update their knockout count
-      if (eliminatedBy) {
+      if (eliminatedBy && eliminatedBy !== "none") {
         const knockoutRegistration = allRegistrations.find(r => r.playerId === eliminatedBy);
         if (knockoutRegistration) {
           await apiRequest("PUT", `/api/registrations/${knockoutRegistration.id}`, {
@@ -117,7 +117,7 @@ export function EliminatePlayerModal({
                 <SelectValue placeholder="Select player (optional)" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">None</SelectItem>
+                <SelectItem value="none">None</SelectItem>
                 {activePlayers.map((reg) => (
                   <SelectItem key={reg.playerId} value={reg.playerId}>
                     {reg.player?.name || "Unknown Player"}
