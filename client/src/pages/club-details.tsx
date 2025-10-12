@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ArrowLeft, Users, Trophy, Calendar, Settings as SettingsIcon, ChartLine, ExternalLink, Copy, Check } from "lucide-react";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/auth-context";
 
 interface Club {
   id: string;
@@ -35,6 +36,7 @@ interface Season {
 export default function ClubDetails() {
   const { id } = useParams();
   const { toast } = useToast();
+  const { isAdmin } = useAuth();
   const [copied, setCopied] = useState(false);
 
   const { data: club, isLoading: clubLoading } = useQuery<Club>({
@@ -128,24 +130,28 @@ export default function ClubDetails() {
                 </p>
               </div>
             </div>
-            <div className="flex gap-3">
-              <Link href={`/tournaments?clubId=${club.id}`}>
-                <Button variant="outline">
-                  <Trophy className="w-4 h-4 mr-2" />
-                  Create Tournament
-                </Button>
-              </Link>
-              <Link href={`/seasons?clubId=${club.id}`}>
-                <Button variant="outline">
-                  <Calendar className="w-4 h-4 mr-2" />
-                  Create Season
-                </Button>
-              </Link>
-              <Button variant="outline">
-                <SettingsIcon className="w-4 h-4 mr-2" />
-                Settings
-              </Button>
-            </div>
+            {isAdmin && (
+              <div className="flex gap-3">
+                <Link href={`/tournaments?clubId=${club.id}`}>
+                  <Button variant="outline">
+                    <Trophy className="w-4 h-4 mr-2" />
+                    Create Tournament
+                  </Button>
+                </Link>
+                <Link href={`/seasons?clubId=${club.id}`}>
+                  <Button variant="outline">
+                    <Calendar className="w-4 h-4 mr-2" />
+                    Create Season
+                  </Button>
+                </Link>
+                <Link href={`/clubs/${club.id}/settings`}>
+                  <Button variant="outline">
+                    <SettingsIcon className="w-4 h-4 mr-2" />
+                    Settings
+                  </Button>
+                </Link>
+              </div>
+            )}
           </div>
         </div>
       </header>
