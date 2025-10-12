@@ -116,18 +116,20 @@ export function AdminRegistrationsPage() {
   const registrationUrl = `${window.location.origin}/register/${tournamentId}`;
 
   return (
-    <div className="container mx-auto p-6 space-y-6">
+    <div className="container mx-auto p-4 md:p-6 space-y-4 md:space-y-6">
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
-              <CardTitle>{tournament.name}</CardTitle>
-              <CardDescription>Pending Payment Confirmations</CardDescription>
+              <CardTitle className="text-lg md:text-xl">{tournament.name}</CardTitle>
+              <CardDescription className="text-xs md:text-sm">Pending Payment Confirmations</CardDescription>
             </div>
             <Button
-              onClick={() => window.open(`/admin/qr/${tournamentId}`, '_blank')}
+              onClick={() => window.open(`/qr/${tournamentId}`, '_blank')}
               variant="outline"
+              size="sm"
               data-testid="view-qr-code"
+              className="w-full sm:w-auto"
             >
               <QrCode className="w-4 h-4 mr-2" />
               Show QR Code
@@ -135,9 +137,9 @@ export function AdminRegistrationsPage() {
           </div>
         </CardHeader>
         <CardContent>
-          <div className="mb-4 p-4 bg-muted rounded-lg">
-            <p className="text-sm font-medium mb-2">Registration Link</p>
-            <div className="flex items-center space-x-2">
+          <div className="mb-4 p-3 md:p-4 bg-muted rounded-lg">
+            <p className="text-xs md:text-sm font-medium mb-2">Registration Link</p>
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
               <code className="flex-1 p-2 bg-background rounded text-xs overflow-x-auto">
                 {registrationUrl}
               </code>
@@ -152,6 +154,7 @@ export function AdminRegistrationsPage() {
                   });
                 }}
                 data-testid="copy-registration-link"
+                className="w-full sm:w-auto"
               >
                 Copy
               </Button>
@@ -166,57 +169,115 @@ export function AdminRegistrationsPage() {
                 <p className="text-sm">New registrations will appear here automatically</p>
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Player</TableHead>
-                    <TableHead>Phone</TableHead>
-                    <TableHead>High Hands</TableHead>
-                    <TableHead>Amount</TableHead>
-                    <TableHead>Time</TableHead>
-                    <TableHead className="text-right">Action</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
+              <>
+                {/* Desktop table view */}
+                <div className="hidden md:block">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Player</TableHead>
+                        <TableHead>Phone</TableHead>
+                        <TableHead>High Hands</TableHead>
+                        <TableHead>Amount</TableHead>
+                        <TableHead>Time</TableHead>
+                        <TableHead className="text-right">Action</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {pendingRegistrations.map((registration) => (
+                        <TableRow key={registration.id} data-testid={`registration-${registration.id}`}>
+                          <TableCell className="font-medium">
+                            {registration.player?.name || "Unknown Player"}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {registration.player?.phone || "N/A"}
+                          </TableCell>
+                          <TableCell>
+                            {registration.enteringHighHands ? (
+                              <Badge variant="secondary">
+                                <Trophy className="w-3 h-3 mr-1" />
+                                Yes
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline">No</Badge>
+                            )}
+                          </TableCell>
+                          <TableCell className="font-semibold text-lg">
+                            ${registration.amountOwed.toFixed(2)}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground text-sm">
+                            {new Date(registration.registrationTime).toLocaleTimeString()}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              onClick={() => confirmPaymentMutation.mutate(registration.id)}
+                              disabled={confirmPaymentMutation.isPending}
+                              size="sm"
+                              data-testid={`confirm-payment-${registration.id}`}
+                            >
+                              <CheckCircle2 className="w-4 h-4 mr-2" />
+                              Confirm Payment
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+
+                {/* Mobile card view */}
+                <div className="md:hidden p-3 space-y-3">
                   {pendingRegistrations.map((registration) => (
-                    <TableRow key={registration.id} data-testid={`registration-${registration.id}`}>
-                      <TableCell className="font-medium">
-                        {registration.player?.name || "Unknown Player"}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {registration.player?.phone || "N/A"}
-                      </TableCell>
-                      <TableCell>
-                        {registration.enteringHighHands ? (
-                          <Badge variant="secondary">
-                            <Trophy className="w-3 h-3 mr-1" />
-                            Yes
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline">No</Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="font-semibold text-lg">
-                        ${registration.amountOwed.toFixed(2)}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground text-sm">
-                        {new Date(registration.registrationTime).toLocaleTimeString()}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          onClick={() => confirmPaymentMutation.mutate(registration.id)}
-                          disabled={confirmPaymentMutation.isPending}
-                          size="sm"
-                          data-testid={`confirm-payment-${registration.id}`}
-                        >
-                          <CheckCircle2 className="w-4 h-4 mr-2" />
-                          Confirm Payment
-                        </Button>
-                      </TableCell>
-                    </TableRow>
+                    <Card key={registration.id} className="border-2" data-testid={`registration-${registration.id}`}>
+                      <CardContent className="p-4">
+                        <div className="space-y-3">
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <p className="font-semibold text-base">
+                                {registration.player?.name || "Unknown Player"}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {registration.player?.phone || "N/A"}
+                              </p>
+                            </div>
+                            <span className="text-xs text-muted-foreground">
+                              {new Date(registration.registrationTime).toLocaleTimeString()}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm text-muted-foreground">High Hands</p>
+                              {registration.enteringHighHands ? (
+                                <Badge variant="secondary" className="mt-1">
+                                  <Trophy className="w-3 h-3 mr-1" />
+                                  Yes
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="mt-1">No</Badge>
+                              )}
+                            </div>
+                            <div className="text-right">
+                              <p className="text-sm text-muted-foreground">Amount</p>
+                              <p className="text-2xl font-bold">${registration.amountOwed.toFixed(2)}</p>
+                            </div>
+                          </div>
+
+                          <Button
+                            onClick={() => confirmPaymentMutation.mutate(registration.id)}
+                            disabled={confirmPaymentMutation.isPending}
+                            className="w-full"
+                            data-testid={`confirm-payment-${registration.id}`}
+                          >
+                            <CheckCircle2 className="w-4 h-4 mr-2" />
+                            Confirm Payment
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
                   ))}
-                </TableBody>
-              </Table>
+                </div>
+              </>
             )}
           </div>
 

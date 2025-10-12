@@ -4,7 +4,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CreateTournamentModal } from "@/components/modals/create-tournament-modal";
-import { Plus, Trophy, Eye, Edit, ArrowLeft, Filter, Download, Link as LinkIcon, QrCode, Users } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Plus, Trophy, Eye, Edit, ArrowLeft, Filter, Download, Link as LinkIcon, QrCode, Users, MoreVertical, ExternalLink } from "lucide-react";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 
@@ -121,7 +128,7 @@ export default function Tournaments() {
   };
 
   const copyQRLink = async (tournamentId: string) => {
-    const url = `${window.location.origin}/admin/qr/${tournamentId}`;
+    const url = `${window.location.origin}/qr/${tournamentId}`;
     try {
       await navigator.clipboard.writeText(url);
       toast({
@@ -211,12 +218,7 @@ export default function Tournaments() {
                       {tournaments.map((tournament) => (
                         <tr key={tournament.id} className="hover:bg-muted/20 transition-colors" data-testid={`tournament-row-${tournament.id}`}>
                           <td className="py-4 px-6">
-                            <div>
-                              <p className="font-medium text-foreground">{tournament.name}</p>
-                              <p className="text-sm text-muted-foreground">
-                                {tournament.seasonId ? `Season: ${tournament.seasonId}` : 'No Season'}
-                              </p>
-                            </div>
+                            <p className="font-medium text-foreground">{tournament.name}</p>
                           </td>
                           <td className="py-4 px-6">
                             <div className="flex items-center gap-2">
@@ -245,48 +247,51 @@ export default function Tournaments() {
                           </td>
                           <td className="py-4 px-6">
                             <div className="flex items-center justify-end gap-2">
-                              <Button 
+                              <Button
                                 asChild
-                                variant="ghost" 
+                                variant="ghost"
                                 size="sm"
                               >
-                                <Link href={`/admin/registrations/${tournament.id}`} data-testid={`registrations-${tournament.id}`}>
-                                  <Users className="w-4 h-4 mr-1" />
-                                  Registrations
-                                </Link>
-                              </Button>
-                              <Button 
-                                variant="ghost" 
-                                size="sm" 
-                                onClick={() => copyRegistrationLink(tournament.id)}
-                                data-testid={`copy-registration-link-${tournament.id}`}
-                              >
-                                <LinkIcon className="w-4 h-4 mr-1" />
-                                Copy Link
-                              </Button>
-                              <Button 
-                                variant="ghost" 
-                                size="sm" 
-                                onClick={() => copyQRLink(tournament.id)}
-                                data-testid={`copy-qr-link-${tournament.id}`}
-                              >
-                                <QrCode className="w-4 h-4 mr-1" />
-                                Copy QR
-                              </Button>
-                              <Button 
-                                asChild
-                                variant="ghost" 
-                                size="sm"
-                              >
-                                <Link href={`/tournaments/${tournament.id}`} data-testid={`view-tournament-${tournament.id}`}>
+                                <Link href={`/admin/tournaments/${tournament.id}`} data-testid={`view-tournament-${tournament.id}`}>
                                   <Eye className="w-4 h-4 mr-1" />
-                                  View
+                                  Manage
                                 </Link>
                               </Button>
-                              <Button variant="ghost" size="sm" data-testid={`edit-tournament-${tournament.id}`}>
-                                <Edit className="w-4 h-4 mr-1" />
-                                Edit
-                              </Button>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button variant="ghost" size="sm">
+                                    <MoreVertical className="w-4 h-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuItem asChild>
+                                    <Link href={`/tournament/${tournament.id}`} data-testid={`public-view-${tournament.id}`}>
+                                      <ExternalLink className="w-4 h-4 mr-2" />
+                                      Public View
+                                    </Link>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem asChild>
+                                    <Link href={`/admin/registrations/${tournament.id}`} data-testid={`registrations-${tournament.id}`}>
+                                      <Users className="w-4 h-4 mr-2" />
+                                      Registrations
+                                    </Link>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem onClick={() => copyRegistrationLink(tournament.id)} data-testid={`copy-registration-link-${tournament.id}`}>
+                                    <LinkIcon className="w-4 h-4 mr-2" />
+                                    Copy Registration Link
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onClick={() => copyQRLink(tournament.id)} data-testid={`copy-qr-link-${tournament.id}`}>
+                                    <QrCode className="w-4 h-4 mr-2" />
+                                    Copy QR Link
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem data-testid={`edit-tournament-${tournament.id}`}>
+                                    <Edit className="w-4 h-4 mr-2" />
+                                    Edit
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                             </div>
                           </td>
                         </tr>

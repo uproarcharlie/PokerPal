@@ -10,6 +10,11 @@ interface Tournament {
   addonAmount?: string;
   rakeType: string;
   rakeAmount: string;
+  enableHighHand?: boolean;
+  highHandAmount?: string;
+  highHandRakeType?: string;
+  highHandRakeAmount?: string;
+  highHandPayouts?: number;
 }
 
 interface PrizePoolCalculatorProps {
@@ -17,15 +22,23 @@ interface PrizePoolCalculatorProps {
   grossTotal: number;
   rake: number;
   netPrizePool: number;
+  totalBuyIns: number;
+  totalRebuys: number;
+  totalAddons: number;
+  highHandEntrants?: number;
 }
 
-export function PrizePoolCalculator({ 
-  tournament, 
-  grossTotal, 
-  rake, 
-  netPrizePool 
+export function PrizePoolCalculator({
+  tournament,
+  grossTotal,
+  rake,
+  netPrizePool,
+  totalBuyIns,
+  totalRebuys,
+  totalAddons,
+  highHandEntrants = 0,
 }: PrizePoolCalculatorProps) {
-  
+
   const formatCurrency = (amount: number) => {
     return `$${Math.round(amount).toLocaleString()}`;
   };
@@ -34,10 +47,20 @@ export function PrizePoolCalculator({
     if (tournament.rakeType === 'percentage') {
       return `${tournament.rakeAmount}%`;
     } else if (tournament.rakeType === 'fixed') {
-      return `$${tournament.rakeAmount}`;
+      return `$${tournament.rakeAmount} per entry`;
     }
     return 'No Rake';
   };
+
+  // Calculate high hand pool based on entrants
+  const highHandGross = highHandEntrants * parseFloat(tournament.highHandAmount || '0');
+  const highHandRakeAmount = tournament.highHandRakeType === 'percentage'
+    ? highHandGross * (parseFloat(tournament.highHandRakeAmount || '0') / 100)
+    : parseFloat(tournament.highHandRakeAmount || '0');
+  const highHandNet = highHandGross - highHandRakeAmount;
+  const highHandPerWinner = tournament.highHandPayouts && tournament.highHandPayouts > 0
+    ? highHandNet / tournament.highHandPayouts
+    : highHandNet;
 
   return (
     <Card>
@@ -54,31 +77,31 @@ export function PrizePoolCalculator({
             <div className="space-y-3">
               <div className="flex items-center justify-between py-2">
                 <span className="text-sm text-muted-foreground">
-                  Buy-ins (${tournament.buyInAmount} each)
+                  Buy-ins ({totalBuyIns} × ${tournament.buyInAmount})
                 </span>
                 <span className="text-sm font-semibold text-foreground" data-testid="buyins-total">
-                  {formatCurrency(parseFloat(tournament.buyInAmount) * (grossTotal / (parseFloat(tournament.buyInAmount) + parseFloat(tournament.rebuyAmount || '0') + parseFloat(tournament.addonAmount || '0'))))}
+                  {formatCurrency(totalBuyIns * parseFloat(tournament.buyInAmount))}
                 </span>
               </div>
-              
-              {tournament.rebuyAmount && (
+
+              {tournament.rebuyAmount && totalRebuys > 0 && (
                 <div className="flex items-center justify-between py-2">
                   <span className="text-sm text-muted-foreground">
-                    Re-buys (${tournament.rebuyAmount} each)
+                    Re-buys ({totalRebuys} × ${tournament.rebuyAmount})
                   </span>
                   <span className="text-sm font-semibold text-foreground" data-testid="rebuys-total">
-                    ${Math.round(grossTotal * 0.2).toLocaleString()}
+                    {formatCurrency(totalRebuys * parseFloat(tournament.rebuyAmount))}
                   </span>
                 </div>
               )}
-              
-              {tournament.addonAmount && (
+
+              {tournament.addonAmount && totalAddons > 0 && (
                 <div className="flex items-center justify-between py-2">
                   <span className="text-sm text-muted-foreground">
-                    Add-ons (${tournament.addonAmount} each)
+                    Add-ons ({totalAddons} × ${tournament.addonAmount})
                   </span>
                   <span className="text-sm font-semibold text-foreground" data-testid="addons-total">
-                    ${Math.round(grossTotal * 0.1).toLocaleString()}
+                    {formatCurrency(totalAddons * parseFloat(tournament.addonAmount))}
                   </span>
                 </div>
               )}
@@ -91,7 +114,7 @@ export function PrizePoolCalculator({
                   {formatCurrency(grossTotal)}
                 </span>
               </div>
-              
+
               {tournament.rakeType !== 'none' && rake > 0 && (
                 <div className="flex items-center justify-between py-2">
                   <span className="text-sm text-muted-foreground">
@@ -113,10 +136,51 @@ export function PrizePoolCalculator({
               </div>
             </div>
 
-            <Button className="w-full mt-4" data-testid="lock-prize-pool">
-              <Lock className="w-4 h-4 mr-2" />
-              Lock Prize Pool
-            </Button>
+            {tournament.enableHighHand && tournament.highHandAmount && highHandEntrants > 0 && (
+              <div className="border-t border-border pt-3">
+                <div className="flex items-center justify-between py-2">
+                  <span className="text-sm text-muted-foreground">
+                    High Hand Entries ({highHandEntrants} × ${tournament.highHandAmount})
+                  </span>
+                  <span className="text-sm font-semibold text-foreground">
+                    {formatCurrency(highHandGross)}
+                  </span>
+                </div>
+
+                {tournament.highHandRakeType && tournament.highHandRakeType !== 'none' && highHandRakeAmount > 0 && (
+                  <div className="flex items-center justify-between py-2">
+                    <span className="text-sm text-muted-foreground">
+                      High Hand Rake ({tournament.highHandRakeType === 'percentage' ? `${tournament.highHandRakeAmount}%` : `$${tournament.highHandRakeAmount}`})
+                    </span>
+                    <span className="text-sm text-destructive">
+                      -{formatCurrency(highHandRakeAmount)}
+                    </span>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between py-2">
+                  <span className="text-sm font-medium text-foreground">Net High Hand Pool</span>
+                  <span className="text-sm font-bold text-accent">
+                    {formatCurrency(highHandNet)}
+                  </span>
+                </div>
+
+                {tournament.highHandPayouts && tournament.highHandPayouts > 1 && (
+                  <>
+                    <div className="flex items-center justify-between py-2">
+                      <span className="text-sm text-muted-foreground">Number of Winners</span>
+                      <span className="text-sm font-semibold text-foreground">{tournament.highHandPayouts}</span>
+                    </div>
+                    <div className="flex items-center justify-between py-2">
+                      <span className="text-sm font-medium text-foreground">Per Winner</span>
+                      <span className="text-sm font-bold text-accent">
+                        {formatCurrency(highHandPerWinner)}
+                      </span>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </>
         ) : (
           <div className="text-center py-8">

@@ -1,285 +1,204 @@
-# Deployment Guide
+# PokerPal Deployment Guide
 
-This guide covers deploying PokerPro Tournament Manager to various platforms.
-
-## Table of Contents
-
-- [Prerequisites](#prerequisites)
-- [Building for Production](#building-for-production)
-- [Deploy to Replit](#deploy-to-replit)
-- [Deploy to Vercel](#deploy-to-vercel)
-- [Deploy to Railway](#deploy-to-railway)
-- [Deploy to Render](#deploy-to-render)
-- [Self-Hosted Deployment](#self-hosted-deployment)
+This guide will help you deploy PokerPal to production using your GoDaddy domain and Cloudflare.
 
 ## Prerequisites
 
-- A PostgreSQL database (recommend [Neon](https://neon.tech) for serverless)
-- Node.js 18+ runtime
-- Environment variables configured
+- GoDaddy domain (you already have this!)
+- Cloudflare account (you already have this!)
+- A hosting provider (choose one):
+  - **Railway** (Recommended - easiest, free tier available)
+  - **DigitalOcean** (VPS - $6/month)
+  - **AWS EC2** (more complex)
+  - **Render** (free tier available)
 
-## Building for Production
+## Option 1: Railway (Recommended - Easiest)
 
-1. **Install dependencies**:
-   ```bash
-   npm install
-   ```
+Railway is the easiest option with a generous free tier and automatic deployments.
 
-2. **Build the application**:
-   ```bash
-   npm run build
-   ```
+### Step 1: Create a Railway Account
+1. Go to https://railway.app
+2. Sign up with GitHub (recommended for easy deployments)
 
-3. **Set environment variables**:
-   ```bash
-   export NODE_ENV=production
-   export DATABASE_URL="your-production-database-url"
-   export PORT=5000
-   ```
+### Step 2: Set Up PostgreSQL Database
+1. In Railway, click **New Project** → **Provision PostgreSQL**
+2. Once created, click on the PostgreSQL service
+3. Go to **Variables** tab and copy the `DATABASE_URL`
 
-4. **Start the server**:
-   ```bash
-   npm start
-   ```
+### Step 3: Deploy Your App
+1. In Railway, click **New** → **GitHub Repo**
+2. Connect your GitHub account and select your PokerPal repository
+   - If not on GitHub yet, push your code to GitHub first:
+     ```bash
+     git init
+     git add .
+     git commit -m "Initial commit"
+     git branch -M main
+     git remote add origin https://github.com/yourusername/pokerpal.git
+     git push -u origin main
+     ```
+3. Railway will auto-detect your Node.js app
 
-## Deploy to Replit
+### Step 4: Configure Environment Variables
+In Railway, go to your app → **Variables** tab and add:
 
-### Using Replit Deployments
+```
+DATABASE_URL=<copy from PostgreSQL service>
+SESSION_SECRET=<generate random string - see below>
+NODE_ENV=production
+PORT=3000
+VITE_GOOGLE_MAPS_API_KEY=<your Google Maps API key>
+```
 
-1. **Open your Repl** in Replit
+**Generate SESSION_SECRET:**
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
 
-2. **Click "Deploy"** in the top right
+### Step 5: Get Your Railway URL
+1. Railway will deploy your app automatically
+2. Go to **Settings** → **Domains** → **Generate Domain**
+3. You'll get a URL like: `your-app.up.railway.app`
 
-3. **Configure deployment**:
-   - Select deployment type (Autoscale or Reserved VM)
-   - Set environment variables in Secrets
-   - Click "Deploy"
+### Step 6: Configure Your Domain with Cloudflare
 
-4. **Set environment variables** in Replit Secrets:
-   ```
-   DATABASE_URL=your-neon-database-url
-   NODE_ENV=production
-   ```
+#### In Cloudflare:
+1. Log into Cloudflare
+2. Select your domain
+3. Go to **DNS** tab
+4. Add a CNAME record:
+   - **Type:** CNAME
+   - **Name:** @ (for root domain) or www
+   - **Target:** your-app.up.railway.app
+   - **Proxy status:** Proxied (orange cloud)
 
-5. **Your app is deployed!** Replit provides a `.replit.app` URL
+#### In Railway:
+1. Go to **Settings** → **Domains**
+2. Click **Custom Domain**
+3. Enter your domain: `yourdomain.com` or `www.yourdomain.com`
+4. Railway will provide verification instructions if needed
 
-### Custom Domain
+### Step 7: Enable SSL (Automatic with Cloudflare)
+Cloudflare automatically provides SSL. Ensure:
+1. In Cloudflare → **SSL/TLS** → Set to **Full** or **Flexible**
+2. Enable **Always Use HTTPS**
 
-1. Go to Deployments settings
-2. Click "Add custom domain"
-3. Follow DNS configuration instructions
+---
 
-## Deploy to Vercel
+## Option 2: DigitalOcean VPS (More Control)
 
-> **Note**: Vercel is best for frontend. For full-stack, consider using Vercel for frontend + separate backend.
+### Step 1: Create a Droplet
+1. Sign up at https://www.digitalocean.com
+2. Create a Droplet:
+   - **Image:** Ubuntu 22.04 LTS
+   - **Plan:** Basic ($6/month)
+   - **Datacenter:** Choose closest to your users
+3. Add SSH key for secure access
 
-### Frontend Only
+### Step 2: Connect to Your Server
+```bash
+ssh root@your_server_ip
+```
 
-1. **Install Vercel CLI**:
-   ```bash
-   npm i -g vercel
-   ```
+### Step 3: Install Dependencies
+```bash
+# Update system
+apt update && apt upgrade -y
 
-2. **Deploy**:
-   ```bash
-   vercel
-   ```
+# Install Node.js
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt install -y nodejs
 
-3. **Set environment variables** in Vercel dashboard:
-   - `DATABASE_URL`
-   - `NODE_ENV=production`
+# Install PostgreSQL
+apt install -y postgresql postgresql-contrib
 
-### Full-Stack (with serverless functions)
+# Install Nginx (reverse proxy)
+apt install -y nginx
 
-You'll need to adapt the Express backend to Vercel serverless functions. Consider using a separate backend deployment instead.
+# Install Certbot (for SSL)
+apt install -y certbot python3-certbot-nginx
 
-## Deploy to Railway
+# Install Git
+apt install -y git
 
-1. **Install Railway CLI**:
-   ```bash
-   npm i -g @railway/cli
-   ```
+# Install PM2 (process manager)
+npm install -g pm2
+```
 
-2. **Login**:
-   ```bash
-   railway login
-   ```
+### Step 4: Set Up PostgreSQL
+```bash
+# Switch to postgres user
+sudo -u postgres psql
 
-3. **Initialize project**:
-   ```bash
-   railway init
-   ```
+# In PostgreSQL:
+CREATE DATABASE pokerpal;
+CREATE USER pokerpal WITH PASSWORD 'your_secure_password';
+GRANT ALL PRIVILEGES ON DATABASE pokerpal TO pokerpal;
+\q
+```
 
-4. **Add PostgreSQL**:
-   ```bash
-   railway add postgresql
-   ```
+### Step 5: Clone and Set Up Your App
+```bash
+# Create app directory
+mkdir -p /var/www/pokerpal
+cd /var/www/pokerpal
 
-5. **Set environment variables**:
-   ```bash
-   railway variables set NODE_ENV=production
-   ```
+# Clone your repository
+git clone https://github.com/yourusername/pokerpal.git .
 
-6. **Deploy**:
-   ```bash
-   railway up
-   ```
+# Install dependencies
+npm ci
 
-7. **Get your URL**:
-   ```bash
-   railway domain
-   ```
+# Create .env file
+nano .env
+```
 
-## Deploy to Render
+Add to `.env`:
+```
+DATABASE_URL=postgresql://pokerpal:your_secure_password@localhost:5432/pokerpal
+SESSION_SECRET=<generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))">
+NODE_ENV=production
+PORT=3000
+VITE_GOOGLE_MAPS_API_KEY=your_google_maps_api_key
+```
 
-1. **Create a new Web Service** on [Render](https://render.com)
+```bash
+# Build the app
+npm run build
 
-2. **Connect your GitHub repository**
+# Push database schema
+npm run db:push
 
-3. **Configure the service**:
-   - **Build Command**: `npm install && npm run build`
-   - **Start Command**: `npm start`
-   - **Environment**: Node
+# Create uploads directory
+mkdir -p uploads
+```
 
-4. **Add environment variables**:
-   - `DATABASE_URL` - Your PostgreSQL connection string
-   - `NODE_ENV` - `production`
+### Step 6: Set Up PM2
+```bash
+# Start the app with PM2
+pm2 start dist/index.js --name pokerpal
 
-5. **Add PostgreSQL database** (optional):
-   - Create a new PostgreSQL database
-   - Copy the Internal Database URL
-   - Set as `DATABASE_URL` environment variable
+# Save PM2 configuration
+pm2 save
 
-6. **Deploy** - Render will automatically deploy on every push
+# Set up PM2 to start on boot
+pm2 startup
+# Follow the command it outputs
+```
 
-## Self-Hosted Deployment
+### Step 7: Configure Nginx
+```bash
+nano /etc/nginx/sites-available/pokerpal
+```
 
-### Using PM2 (Process Manager)
-
-1. **Install PM2**:
-   ```bash
-   npm install -g pm2
-   ```
-
-2. **Build the application**:
-   ```bash
-   npm run build
-   ```
-
-3. **Create PM2 ecosystem file** (`ecosystem.config.js`):
-   ```javascript
-   module.exports = {
-     apps: [{
-       name: 'pokerpro',
-       script: './dist/index.js',
-       instances: 'max',
-       exec_mode: 'cluster',
-       env: {
-         NODE_ENV: 'production',
-         PORT: 5000
-       }
-     }]
-   };
-   ```
-
-4. **Start with PM2**:
-   ```bash
-   pm2 start ecosystem.config.js
-   ```
-
-5. **Setup PM2 startup**:
-   ```bash
-   pm2 startup
-   pm2 save
-   ```
-
-### Using Docker
-
-1. **Create `Dockerfile`**:
-   ```dockerfile
-   FROM node:20-alpine
-
-   WORKDIR /app
-
-   COPY package*.json ./
-   RUN npm ci --only=production
-
-   COPY . .
-   RUN npm run build
-
-   EXPOSE 5000
-
-   CMD ["npm", "start"]
-   ```
-
-2. **Create `.dockerignore`**:
-   ```
-   node_modules
-   npm-debug.log
-   .env
-   .git
-   dist
-   ```
-
-3. **Build image**:
-   ```bash
-   docker build -t pokerpro .
-   ```
-
-4. **Run container**:
-   ```bash
-   docker run -p 5000:5000 \
-     -e DATABASE_URL="your-database-url" \
-     -e NODE_ENV=production \
-     pokerpro
-   ```
-
-### Using Docker Compose
-
-1. **Create `docker-compose.yml`**:
-   ```yaml
-   version: '3.8'
-
-   services:
-     app:
-       build: .
-       ports:
-         - "5000:5000"
-       environment:
-         - NODE_ENV=production
-         - DATABASE_URL=${DATABASE_URL}
-       depends_on:
-         - db
-
-     db:
-       image: postgres:15-alpine
-       environment:
-         - POSTGRES_DB=pokerpro
-         - POSTGRES_USER=postgres
-         - POSTGRES_PASSWORD=password
-       volumes:
-         - postgres_data:/var/lib/postgresql/data
-
-   volumes:
-     postgres_data:
-   ```
-
-2. **Start services**:
-   ```bash
-   docker-compose up -d
-   ```
-
-## Nginx Reverse Proxy
-
-If deploying behind Nginx:
-
+Add:
 ```nginx
 server {
     listen 80;
-    server_name yourdomain.com;
+    server_name yourdomain.com www.yourdomain.com;
 
     location / {
-        proxy_pass http://localhost:5000;
+        proxy_pass http://localhost:3000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -287,156 +206,155 @@ server {
         proxy_cache_bypass $http_upgrade;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Handle uploads
+    location /uploads {
+        alias /var/www/pokerpal/uploads;
     }
 }
 ```
 
-## SSL/HTTPS
-
-### Using Certbot (Let's Encrypt)
-
 ```bash
-sudo certbot --nginx -d yourdomain.com
+# Enable site
+ln -s /etc/nginx/sites-available/pokerpal /etc/nginx/sites-enabled/
+
+# Test Nginx configuration
+nginx -t
+
+# Restart Nginx
+systemctl restart nginx
 ```
 
-### Using Cloudflare
+### Step 8: Configure Cloudflare DNS
+1. In Cloudflare, go to **DNS** tab
+2. Add an A record:
+   - **Type:** A
+   - **Name:** @
+   - **IPv4 address:** your_server_ip
+   - **Proxy status:** Proxied (orange cloud)
+3. Add another A record for www (optional):
+   - **Type:** A
+   - **Name:** www
+   - **IPv4 address:** your_server_ip
+   - **Proxy status:** Proxied
 
-1. Add your domain to Cloudflare
-2. Update nameservers
-3. Enable "Full (strict)" SSL mode
-4. Point DNS A record to your server IP
-
-## Environment Variables
-
-All platforms need these environment variables:
-
+### Step 9: Enable SSL with Certbot
 ```bash
-# Required
-DATABASE_URL=postgresql://user:password@host:port/database
+# Get SSL certificate
+certbot --nginx -d yourdomain.com -d www.yourdomain.com
+
+# Test auto-renewal
+certbot renew --dry-run
+```
+
+---
+
+## Option 3: Render (Free Tier Available)
+
+### Step 1: Create a Render Account
+1. Go to https://render.com
+2. Sign up with GitHub
+
+### Step 2: Create PostgreSQL Database
+1. Click **New** → **PostgreSQL**
+2. Choose free tier or paid
+3. Note down the **Internal Database URL**
+
+### Step 3: Create Web Service
+1. Click **New** → **Web Service**
+2. Connect your GitHub repository
+3. Configure:
+   - **Name:** pokerpal
+   - **Environment:** Node
+   - **Build Command:** `npm install && npm run build`
+   - **Start Command:** `npm start`
+   - **Plan:** Free or Starter
+
+### Step 4: Add Environment Variables
+In Render dashboard, add:
+```
+DATABASE_URL=<from PostgreSQL service>
+SESSION_SECRET=<generate random string>
 NODE_ENV=production
-
-# Optional
-PORT=5000
-SESSION_SECRET=your-random-secret-key
+VITE_GOOGLE_MAPS_API_KEY=<your key>
 ```
 
-## Database Setup
+### Step 5: Configure Custom Domain
+1. In Render → **Settings** → **Custom Domain**
+2. Add your domain
+3. In Cloudflare DNS:
+   - Add CNAME record pointing to your Render URL
 
-After deployment:
+---
 
+## Post-Deployment Checklist
+
+- [ ] App is accessible via your domain
+- [ ] SSL is working (https://)
+- [ ] Database is connected and working
+- [ ] File uploads are working
+- [ ] WebSocket connections work (for real-time updates)
+- [ ] Create your first admin user
+- [ ] Test tournament creation and management
+- [ ] Set up backups (database)
+
+## Monitoring and Maintenance
+
+### Railway
+- Monitor usage in Railway dashboard
+- Set up alerts for errors
+- Database auto-backups included
+
+### DigitalOcean
 ```bash
+# View app logs
+pm2 logs pokerpal
+
+# Restart app
+pm2 restart pokerpal
+
+# Backup database
+pg_dump -U pokerpal pokerpal > backup_$(date +%Y%m%d).sql
+```
+
+### Updating Your App
+```bash
+# Railway: Just push to GitHub, auto-deploys
+
+# DigitalOcean:
+cd /var/www/pokerpal
+git pull
+npm ci
+npm run build
 npm run db:push
+pm2 restart pokerpal
 ```
 
-Or with force flag if needed:
+## Cloudflare Configuration Tips
 
-```bash
-npm run db:push --force
-```
+1. **SSL/TLS Mode:** Set to **Full** (not Full Strict) or **Flexible**
+2. **Always Use HTTPS:** Enable this
+3. **Caching:** Consider enabling for static assets
+4. **Firewall:** Set up rules to protect your app
+5. **Speed:** Enable Auto Minify for JS, CSS, HTML
 
-## Health Checks
+## Getting Help
 
-Most platforms support health checks. Your app responds to:
+- Railway: https://railway.app/help
+- DigitalOcean: https://docs.digitalocean.com
+- Render: https://render.com/docs
+- Cloudflare: https://support.cloudflare.com
 
-- `GET /` - Returns the app (can check for 200 OK)
+## Recommended: Railway for Easiest Setup
 
-## Monitoring
+I recommend starting with Railway because:
+- ✅ Easiest setup (5 minutes)
+- ✅ Free tier available
+- ✅ Auto-deployments from GitHub
+- ✅ Built-in database backups
+- ✅ No server management needed
+- ✅ Scales automatically
 
-Consider adding monitoring:
-
-- **Railway**: Built-in metrics
-- **Render**: Built-in metrics  
-- **Self-hosted**: 
-  - PM2 monitoring: `pm2 monit`
-  - Add logging service (Winston, Pino)
-  - Use uptime monitoring (UptimeRobot, Pingdom)
-
-## Troubleshooting
-
-### Build Failures
-
-- Check Node.js version (needs 18+)
-- Verify all dependencies are in `package.json`
-- Check build logs for specific errors
-
-### Database Connection Issues
-
-- Verify `DATABASE_URL` format
-- Check database is accessible from deployment platform
-- Ensure SSL mode is set correctly for remote databases
-- Test connection locally first
-
-### Port Issues
-
-- Some platforms assign ports dynamically
-- Use `process.env.PORT` in your code
-- Default to 5000 if PORT not set
-
-### Memory Issues
-
-- Increase memory allocation on platform
-- Optimize database queries
-- Consider caching strategies
-
-## Scaling
-
-### Horizontal Scaling
-
-- Use Railway/Render autoscaling
-- Deploy behind load balancer
-- Ensure database can handle connections
-
-### Database Scaling
-
-- Use connection pooling
-- Consider read replicas for heavy reads
-- Monitor slow queries
-
-## Backup Strategy
-
-1. **Database backups**:
-   - Neon: Automatic backups
-   - Self-hosted: Use `pg_dump`
-
-2. **Code backups**:
-   - Git repository (GitHub/GitLab)
-   - Multiple deployment branches
-
-## Rollback Strategy
-
-1. **Using Git**:
-   ```bash
-   git revert <commit-hash>
-   git push
-   ```
-
-2. **Using deployment platform**:
-   - Most platforms keep deployment history
-   - Can rollback to previous deployment
-
-## Security Checklist
-
-- [ ] Environment variables secured
-- [ ] Database uses SSL
-- [ ] HTTPS enabled
-- [ ] CORS configured properly
-- [ ] Rate limiting enabled
-- [ ] Secrets not in code
-- [ ] Dependencies updated
-- [ ] Logs don't expose sensitive data
-
-## Cost Optimization
-
-- Use serverless databases (Neon free tier)
-- Enable autoscaling only when needed
-- Use CDN for static assets
-- Optimize images and assets
-- Monitor resource usage
-
-## Support
-
-For platform-specific issues:
-- Replit: [Replit Docs](https://docs.replit.com)
-- Vercel: [Vercel Docs](https://vercel.com/docs)
-- Railway: [Railway Docs](https://docs.railway.app)
-- Render: [Render Docs](https://render.com/docs)
+Once you're comfortable, you can migrate to DigitalOcean if you need more control.

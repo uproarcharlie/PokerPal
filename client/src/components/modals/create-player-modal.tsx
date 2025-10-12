@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { ImageUpload } from "@/components/ui/image-upload";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Check } from "lucide-react";
@@ -21,6 +22,7 @@ const playerSchema = z.object({
   name: z.string().min(1, "Player name is required"),
   email: z.string().email("Invalid email address").optional().or(z.literal("")),
   phone: z.string().optional(),
+  imageUrl: z.string().optional(),
 });
 
 type PlayerFormData = z.infer<typeof playerSchema>;
@@ -39,6 +41,7 @@ export function CreatePlayerModal({ open, onOpenChange }: CreatePlayerModalProps
       name: "",
       email: "",
       phone: "",
+      imageUrl: "",
     },
   });
 
@@ -108,6 +111,25 @@ export function CreatePlayerModal({ open, onOpenChange }: CreatePlayerModalProps
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
           <FormField
             control={form.control}
+            name="imageUrl"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Player Photo</FormLabel>
+                <FormControl>
+                  <ImageUpload
+                    onImageUpload={field.onChange}
+                    currentImage={field.value}
+                    entityType="players"
+                    placeholder="Upload player photo or avatar"
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
             name="name"
             render={({ field }) => (
               <FormItem>
@@ -119,7 +141,7 @@ export function CreatePlayerModal({ open, onOpenChange }: CreatePlayerModalProps
               </FormItem>
             )}
           />
-          
+
           <FormField
             control={form.control}
             name="email"
@@ -127,10 +149,10 @@ export function CreatePlayerModal({ open, onOpenChange }: CreatePlayerModalProps
               <FormItem>
                 <FormLabel>Email Address</FormLabel>
                 <FormControl>
-                  <Input 
-                    type="email" 
-                    placeholder="john@example.com" 
-                    {...field} 
+                  <Input
+                    type="email"
+                    placeholder="john@example.com"
+                    {...field}
                     data-testid="player-email"
                   />
                 </FormControl>
@@ -138,7 +160,7 @@ export function CreatePlayerModal({ open, onOpenChange }: CreatePlayerModalProps
               </FormItem>
             )}
           />
-          
+
           <FormField
             control={form.control}
             name="phone"
@@ -146,9 +168,9 @@ export function CreatePlayerModal({ open, onOpenChange }: CreatePlayerModalProps
               <FormItem>
                 <FormLabel>Phone Number</FormLabel>
                 <FormControl>
-                  <Input 
-                    placeholder="+1 (555) 123-4567" 
-                    {...field} 
+                  <Input
+                    placeholder="+1 (555) 123-4567"
+                    {...field}
                     data-testid="player-phone"
                   />
                 </FormControl>

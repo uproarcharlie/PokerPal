@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { EliminatePlayerModal } from "@/components/modals/eliminate-player-modal";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { UserPlus, Eye, Edit, RotateCcw, Users } from "lucide-react";
@@ -30,17 +31,17 @@ interface StandingsTableProps {
   tournamentId: string;
   registrations: TournamentRegistration[];
   isLoading: boolean;
-  onRegisterPlayer: () => void;
 }
 
-export function StandingsTable({ 
-  tournamentId, 
-  registrations, 
-  isLoading, 
-  onRegisterPlayer 
+export function StandingsTable({
+  tournamentId,
+  registrations,
+  isLoading
 }: StandingsTableProps) {
   const { toast } = useToast();
-  
+  const [eliminateModalOpen, setEliminateModalOpen] = useState(false);
+  const [selectedRegistration, setSelectedRegistration] = useState<TournamentRegistration | null>(null);
+
   const eliminatePlayerMutation = useMutation({
     mutationFn: async (registrationId: string) => {
       const response = await apiRequest("PUT", `/api/registrations/${registrationId}`, {
@@ -89,8 +90,9 @@ export function StandingsTable({
     },
   });
 
-  const handleEliminate = (registrationId: string) => {
-    eliminatePlayerMutation.mutate(registrationId);
+  const handleEliminate = (registration: TournamentRegistration) => {
+    setSelectedRegistration(registration);
+    setEliminateModalOpen(true);
   };
 
   const handleRestore = (registrationId: string) => {
@@ -133,37 +135,37 @@ export function StandingsTable({
     );
   }
 
-  // Sort registrations: active players first, then eliminated
+  // Sort registrations: active players first, then eliminated by elimination time (most recent first)
   const sortedRegistrations = [...registrations].sort((a, b) => {
+    // Active players come first
     if (a.isEliminated && !b.isEliminated) return 1;
     if (!a.isEliminated && b.isEliminated) return -1;
+
+    // Both eliminated: sort by elimination time (most recent first = higher position)
+    if (a.isEliminated && b.isEliminated) {
+      if (!a.eliminationTime) return 1;
+      if (!b.eliminationTime) return -1;
+      return new Date(b.eliminationTime).getTime() - new Date(a.eliminationTime).getTime();
+    }
+
+    // Both active: keep original order
     return 0;
   });
 
   return (
     <Card>
-      <CardHeader className="border-b border-border flex flex-row items-center justify-between">
-        <div>
-          <CardTitle>Current Standings</CardTitle>
-          <p className="text-sm text-muted-foreground mt-1">Live player rankings and eliminations</p>
-        </div>
-        <Button onClick={onRegisterPlayer} data-testid="add-player-button">
-          <UserPlus className="w-4 h-4 mr-2" />
-          Add Player
-        </Button>
+      <CardHeader className="border-b border-border">
+        <CardTitle>Current Standings</CardTitle>
+        <p className="text-sm text-muted-foreground mt-1">Live player rankings and eliminations</p>
       </CardHeader>
       <CardContent className="p-0">
         {registrations.length === 0 ? (
           <div className="p-8 text-center">
             <Users className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-foreground mb-2">No Players Registered</h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              Register players to start tracking tournament standings and eliminations.
+            <p className="text-sm text-muted-foreground">
+              Players will appear here once they register for the tournament.
             </p>
-            <Button onClick={onRegisterPlayer} data-testid="register-first-player">
-              <UserPlus className="w-4 h-4 mr-2" />
-              Register First Player
-            </Button>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -253,11 +255,10 @@ export function StandingsTable({
                               Restore
                             </Button>
                           ) : (
-                            <Button 
-                              variant="ghost" 
+                            <Button
+                              variant="ghost"
                               size="sm"
-                              onClick={() => handleEliminate(registration.id)}
-                              disabled={eliminatePlayerMutation.isPending}
+                              onClick={() => handleEliminate(registration)}
                               className="text-destructive hover:text-destructive hover:bg-destructive/10"
                               data-testid={`eliminate-player-${registration.id}`}
                             >
@@ -274,6 +275,16 @@ export function StandingsTable({
           </div>
         )}
       </CardContent>
+
+      {selectedRegistration && (
+        <EliminatePlayerModal
+          open={eliminateModalOpen}
+          onOpenChange={setEliminateModalOpen}
+          registration={selectedRegistration}
+          tournamentId={tournamentId}
+          allRegistrations={registrations}
+        />
+      )}
     </Card>
   );
 }

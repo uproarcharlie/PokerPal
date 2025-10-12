@@ -1,15 +1,18 @@
-import { eq } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { db } from "./db";
 import {
   clubs, seasons, players, tournaments, tournamentRegistrations,
-  pointsSystems, pointsAllocations,
+  pointsSystems, pointsAllocations, pendingActions, activityLog, users,
   type Club, type InsertClub,
   type Season, type InsertSeason,
   type Player, type InsertPlayer,
   type Tournament, type InsertTournament,
   type TournamentRegistration, type InsertTournamentRegistration,
   type PointsSystem, type InsertPointsSystem,
-  type PointsAllocation, type InsertPointsAllocation
+  type PointsAllocation, type InsertPointsAllocation,
+  type PendingAction, type InsertPendingAction,
+  type ActivityLog, type InsertActivityLog,
+  type User
 } from "@shared/schema";
 
 export interface IStorage {
@@ -19,6 +22,7 @@ export interface IStorage {
   createClub(club: InsertClub): Promise<Club>;
   updateClub(id: string, club: Partial<InsertClub>): Promise<Club | undefined>;
   deleteClub(id: string): Promise<boolean>;
+  getClubMembersCount(clubId: string): Promise<number>;
 
   // Seasons
   getSeason(id: string): Promise<Season | undefined>;
@@ -66,6 +70,19 @@ export interface IStorage {
   createPointsAllocation(allocation: InsertPointsAllocation): Promise<PointsAllocation>;
   updatePointsAllocation(id: string, allocation: Partial<InsertPointsAllocation>): Promise<PointsAllocation | undefined>;
   deletePointsAllocation(id: string): Promise<boolean>;
+
+  // Pending Actions
+  getPendingActions(tournamentId: string): Promise<PendingAction[]>;
+  createPendingAction(action: InsertPendingAction): Promise<PendingAction>;
+  deletePendingAction(id: string): Promise<boolean>;
+
+  // Activity Log
+  getActivityLog(tournamentId: string): Promise<ActivityLog[]>;
+  createActivityLog(activity: InsertActivityLog): Promise<ActivityLog>;
+
+  // Users (for admin management)
+  getAllUsers(): Promise<User[]>;
+  updateUser(id: string, userData: Partial<User>): Promise<User | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -92,6 +109,38 @@ export class DatabaseStorage implements IStorage {
   async deleteClub(id: string): Promise<boolean> {
     const result = await db.delete(clubs).where(eq(clubs.id, id));
     return result.rowCount !== null && result.rowCount > 0;
+  }
+
+  async getClubMembersCount(clubId: string): Promise<number> {
+    // Get all tournaments for this club
+    const clubTournaments = await db.select().from(tournaments).where(eq(tournaments.clubId, clubId));
+    const tournamentIds = clubTournaments.map(t => t.id);
+
+    if (tournamentIds.length === 0) {
+      return 0;
+    }
+
+    // Get all unique player IDs from tournament registrations
+    const registrations = await db.select({
+      playerId: tournamentRegistrations.playerId
+    })
+    .from(tournamentRegistrations)
+    .where(eq(tournamentRegistrations.tournamentId, tournamentIds[0])); // Start with first tournament
+
+    // Get registrations from all tournaments and collect unique player IDs
+    const uniquePlayerIds = new Set<string>();
+
+    for (const tournamentId of tournamentIds) {
+      const tournamentRegs = await db.select({
+        playerId: tournamentRegistrations.playerId
+      })
+      .from(tournamentRegistrations)
+      .where(eq(tournamentRegistrations.tournamentId, tournamentId));
+
+      tournamentRegs.forEach(reg => uniquePlayerIds.add(reg.playerId));
+    }
+
+    return uniquePlayerIds.size;
   }
 
   // Seasons
@@ -263,6 +312,43 @@ export class DatabaseStorage implements IStorage {
   async deletePointsAllocation(id: string): Promise<boolean> {
     const result = await db.delete(pointsAllocations).where(eq(pointsAllocations.id, id));
     return result.rowCount !== null && result.rowCount > 0;
+  }
+
+  // Pending Actions
+  async getPendingActions(tournamentId: string): Promise<PendingAction[]> {
+    return await db.select().from(pendingActions).where(eq(pendingActions.tournamentId, tournamentId));
+  }
+
+  async createPendingAction(insertAction: InsertPendingAction): Promise<PendingAction> {
+    const [action] = await db.insert(pendingActions).values(insertAction).returning();
+    return action;
+  }
+
+  async deletePendingAction(id: string): Promise<boolean> {
+    const result = await db.delete(pendingActions).where(eq(pendingActions.id, id));
+    return result.rowCount !== null && result.rowCount > 0;
+  }
+
+  // Activity Log
+  async getActivityLog(tournamentId: string): Promise<ActivityLog[]> {
+    return await db.select().from(activityLog)
+      .where(eq(activityLog.tournamentId, tournamentId))
+      .orderBy(desc(activityLog.timestamp), desc(activityLog.id));
+  }
+
+  async createActivityLog(insertActivity: InsertActivityLog): Promise<ActivityLog> {
+    const [activity] = await db.insert(activityLog).values(insertActivity).returning();
+    return activity;
+  }
+
+  // Users (for admin management)
+  async getAllUsers(): Promise<User[]> {
+    return await db.select().from(users);
+  }
+
+  async updateUser(id: string, userData: Partial<User>): Promise<User | undefined> {
+    const [user] = await db.update(users).set(userData).where(eq(users.id, id)).returning();
+    return user || undefined;
   }
 }
 

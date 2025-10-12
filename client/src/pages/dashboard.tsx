@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CreateTournamentModal } from "@/components/modals/create-tournament-modal";
-import { PlayCircle, UsersRound, DollarSign, Users, Eye, Edit, Bell, Plus, Filter, Download, Trophy, ChartLine } from "lucide-react";
+import { PlayCircle, UsersRound, DollarSign, Users, Eye, Edit, Plus, Trophy, ChartLine } from "lucide-react";
 import { useState } from "react";
 import { Link } from "wouter";
 
@@ -31,6 +31,12 @@ interface Club {
   createdAt: string;
 }
 
+interface Season {
+  id: string;
+  name: string;
+  clubId: string;
+}
+
 export default function Dashboard() {
   const [showCreateTournament, setShowCreateTournament] = useState(false);
 
@@ -44,6 +50,10 @@ export default function Dashboard() {
 
   const { data: clubs = [], isLoading: clubsLoading } = useQuery<Club[]>({
     queryKey: ["/api/clubs"],
+  });
+
+  const { data: seasons = [] } = useQuery<Season[]>({
+    queryKey: ["/api/seasons"],
   });
 
   const { data: leaderboard = [] } = useQuery({
@@ -76,106 +86,90 @@ export default function Dashboard() {
       <div className="min-h-screen">
         {/* Header */}
         <header className="bg-card border-b border-border sticky top-0 z-10">
-          <div className="px-8 py-4 flex items-center justify-between">
+          <div className="px-4 md:px-8 py-3 md:py-4 flex items-center justify-between">
             <div>
-              <h2 className="text-2xl font-bold text-foreground">Dashboard</h2>
-              <p className="text-sm text-muted-foreground mt-1">Manage your poker tournaments and clubs</p>
+              <h2 className="text-lg md:text-2xl font-bold text-primary font-display">LovePoker.club</h2>
+              <p className="text-xs md:text-sm text-muted-foreground mt-1 hidden sm:block">Where Poker Communities Thrive</p>
             </div>
-            <div className="flex items-center gap-3">
-              <Button variant="ghost" size="sm" data-testid="notifications-button">
-                <Bell className="w-4 h-4 mr-2" />
-                Notifications
-              </Button>
-              <Button onClick={() => setShowCreateTournament(true)} data-testid="create-tournament-button">
-                <Plus className="w-4 h-4 mr-2" />
-                New Tournament
+            <div className="flex items-center gap-2 md:gap-3">
+              <Button size="sm" onClick={() => setShowCreateTournament(true)} data-testid="create-tournament-button">
+                <Plus className="w-4 h-4 md:mr-2" />
+                <span className="hidden md:inline">New Tournament</span>
               </Button>
             </div>
           </div>
         </header>
 
         {/* Content */}
-        <div className="p-8 space-y-6">
+        <div className="p-4 md:p-8 space-y-4 md:space-y-6">
           {/* Stats Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <Card>
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center">
-                    <PlayCircle className="text-primary w-6 h-6" />
+          <div className="grid grid-cols-4 lg:grid-cols-4 gap-2 md:gap-6">
+            <Card className="stat-card-purple border-primary/20">
+              <CardContent className="p-3 md:p-6">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-2 md:mb-4">
+                  <div className="w-8 h-8 md:w-14 md:h-14 bg-gradient-to-br from-primary to-secondary rounded-lg md:rounded-xl flex items-center justify-center shadow-lg mb-2 md:mb-0">
+                    <PlayCircle className="text-white w-4 h-4 md:w-7 md:h-7" />
                   </div>
-                  <Badge variant="secondary" className="text-green-600 bg-green-50">+12%</Badge>
+                  <Badge className="bg-green-100 text-green-700 border-green-200 hidden md:inline-flex text-xs">+12%</Badge>
                 </div>
-                <h3 className="text-2xl font-bold text-foreground" data-testid="active-tournaments-count">
+                <h3 className="text-lg md:text-3xl font-bold text-primary font-display" data-testid="active-tournaments-count">
                   {stats?.activeTournaments || 0}
                 </h3>
-                <p className="text-sm text-muted-foreground mt-1">Active Tournaments</p>
+                <p className="text-xs md:text-sm text-primary/70 mt-1 font-medium">Active</p>
               </CardContent>
             </Card>
 
-            <Card>
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="w-12 h-12 bg-accent/10 rounded-lg flex items-center justify-center">
-                    <UsersRound className="text-accent w-6 h-6" />
+            <Card className="stat-card-gold border-amber-200">
+              <CardContent className="p-3 md:p-6">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-2 md:mb-4">
+                  <div className="w-8 h-8 md:w-14 md:h-14 bg-gradient-to-br from-amber-400 to-amber-600 rounded-lg md:rounded-xl flex items-center justify-center shadow-lg mb-2 md:mb-0">
+                    <UsersRound className="text-white w-4 h-4 md:w-7 md:h-7" />
                   </div>
-                  <Badge variant="secondary" className="text-green-600 bg-green-50">+24%</Badge>
+                  <Badge className="bg-green-100 text-green-700 border-green-200 hidden md:inline-flex text-xs">+24%</Badge>
                 </div>
-                <h3 className="text-2xl font-bold text-foreground" data-testid="total-players-count">
+                <h3 className="text-lg md:text-3xl font-bold text-amber-600 font-display" data-testid="total-players-count">
                   {stats?.totalPlayers || 0}
                 </h3>
-                <p className="text-sm text-muted-foreground mt-1">Total Players</p>
+                <p className="text-xs md:text-sm text-amber-700/70 mt-1 font-medium">Players</p>
               </CardContent>
             </Card>
 
-            <Card>
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="w-12 h-12 bg-green-500/10 rounded-lg flex items-center justify-center">
-                    <DollarSign className="text-green-600 w-6 h-6" />
+            <Card className="stat-card-green border-emerald-200">
+              <CardContent className="p-3 md:p-6">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-2 md:mb-4">
+                  <div className="w-8 h-8 md:w-14 md:h-14 bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-lg md:rounded-xl flex items-center justify-center shadow-lg mb-2 md:mb-0">
+                    <DollarSign className="text-white w-4 h-4 md:w-7 md:h-7" />
                   </div>
-                  <Badge variant="secondary" className="text-green-600 bg-green-50">+8%</Badge>
+                  <Badge className="bg-green-100 text-green-700 border-green-200 hidden md:inline-flex text-xs">+8%</Badge>
                 </div>
-                <h3 className="text-2xl font-bold text-foreground" data-testid="total-prize-pool">
+                <h3 className="text-sm md:text-3xl font-bold text-emerald-600 font-display" data-testid="total-prize-pool">
                   ${stats?.totalPrizePool?.toLocaleString() || '0'}
                 </h3>
-                <p className="text-sm text-muted-foreground mt-1">Total Prize Pool</p>
+                <p className="text-xs md:text-sm text-emerald-700/70 mt-1 font-medium">Prize Pool</p>
               </CardContent>
             </Card>
 
-            <Card>
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="w-12 h-12 bg-blue-500/10 rounded-lg flex items-center justify-center">
-                    <Users className="text-blue-600 w-6 h-6" />
+            <Card className="stat-card-blue border-blue-200">
+              <CardContent className="p-3 md:p-6">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-2 md:mb-4">
+                  <div className="w-8 h-8 md:w-14 md:h-14 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg md:rounded-xl flex items-center justify-center shadow-lg mb-2 md:mb-0">
+                    <Users className="text-white w-4 h-4 md:w-7 md:h-7" />
                   </div>
-                  <Badge variant="secondary" className="text-green-600 bg-green-50">+3</Badge>
+                  <Badge className="bg-green-100 text-green-700 border-green-200 hidden md:inline-flex text-xs">+3</Badge>
                 </div>
-                <h3 className="text-2xl font-bold text-foreground" data-testid="active-clubs-count">
+                <h3 className="text-lg md:text-3xl font-bold text-blue-600 font-display" data-testid="active-clubs-count">
                   {stats?.activeClubs || 0}
                 </h3>
-                <p className="text-sm text-muted-foreground mt-1">Active Clubs</p>
+                <p className="text-xs md:text-sm text-blue-700/70 mt-1 font-medium">Clubs</p>
               </CardContent>
             </Card>
           </div>
 
           {/* Active Tournaments */}
           <Card>
-            <CardHeader className="border-b border-border flex flex-row items-center justify-between">
-              <div>
-                <CardTitle>Active Tournaments</CardTitle>
-                <p className="text-sm text-muted-foreground mt-1">Currently running and upcoming events</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button variant="ghost" size="sm">
-                  <Filter className="w-4 h-4 mr-2" />
-                  Filter
-                </Button>
-                <Button variant="ghost" size="sm">
-                  <Download className="w-4 h-4 mr-2" />
-                  Export
-                </Button>
-              </div>
+            <CardHeader className="border-b border-border">
+              <CardTitle>Active Tournaments</CardTitle>
+              <p className="text-sm text-muted-foreground mt-1">Currently running and upcoming events</p>
             </CardHeader>
             <CardContent className="p-0">
               {activeTournaments.length === 0 ? (
@@ -217,7 +211,9 @@ export default function Dashboard() {
                             <td className="py-4 px-6">
                               <div>
                                 <p className="font-medium text-foreground">{tournament.name}</p>
-                                <p className="text-sm text-muted-foreground">Season: {tournament.seasonId || 'No Season'}</p>
+                                <p className="text-sm text-muted-foreground">
+                                  Season: {tournament.seasonId ? (seasons.find(s => s.id === tournament.seasonId)?.name || 'Unknown') : 'No Season'}
+                                </p>
                               </div>
                             </td>
                             <td className="py-4 px-6">
@@ -245,16 +241,18 @@ export default function Dashboard() {
                             </td>
                             <td className="py-4 px-6">
                               <div className="flex items-center justify-end gap-2">
-                                <Link href={`/tournaments/${tournament.id}`}>
+                                <Link href={`/admin/tournaments/${tournament.id}`}>
                                   <Button variant="ghost" size="sm" data-testid={`view-tournament-${tournament.id}`}>
                                     <Eye className="w-4 h-4 mr-1" />
-                                    View
+                                    Manage
                                   </Button>
                                 </Link>
-                                <Button variant="ghost" size="sm" data-testid={`edit-tournament-${tournament.id}`}>
-                                  <Edit className="w-4 h-4 mr-1" />
-                                  Edit
-                                </Button>
+                                <Link href={`/tournament/${tournament.id}`}>
+                                  <Button variant="ghost" size="sm" data-testid={`public-view-tournament-${tournament.id}`}>
+                                    <Eye className="w-4 h-4 mr-1" />
+                                    Public View
+                                  </Button>
+                                </Link>
                               </div>
                             </td>
                           </tr>

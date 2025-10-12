@@ -1,75 +1,78 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Poppins:wght@500;600;700&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --background: hsl(210, 20%, 98%);
-  --foreground: hsl(215, 15%, 15%);
-  --card: hsl(0, 0%, 100%);
-  --card-foreground: hsl(215, 15%, 15%);
-  --popover: hsl(0, 0%, 100%);
-  --popover-foreground: hsl(215, 15%, 15%);
-  --primary: hsl(142, 45%, 25%);
-  --primary-foreground: hsl(0, 0%, 100%);
-  --secondary: hsl(45, 85%, 55%);
-  --secondary-foreground: hsl(215, 15%, 15%);
-  --muted: hsl(215, 15%, 95%);
-  --muted-foreground: hsl(215, 15%, 45%);
-  --accent: hsl(45, 85%, 55%);
-  --accent-foreground: hsl(215, 15%, 15%);
-  --destructive: hsl(0, 84%, 60%);
-  --destructive-foreground: hsl(0, 0%, 100%);
-  --border: hsl(215, 10%, 90%);
-  --input: hsl(215, 10%, 90%);
-  --ring: hsl(142, 45%, 25%);
-  --chart-1: hsl(142, 45%, 25%);
-  --chart-2: hsl(159, 100%, 36%);
-  --chart-3: hsl(42, 92%, 56%);
-  --chart-4: hsl(147, 78%, 42%);
-  --chart-5: hsl(341, 75%, 51%);
-  --sidebar: hsl(0, 0%, 100%);
-  --sidebar-foreground: hsl(215, 15%, 15%);
-  --sidebar-primary: hsl(142, 45%, 25%);
-  --sidebar-primary-foreground: hsl(0, 0%, 100%);
-  --sidebar-accent: hsl(45, 85%, 55%);
-  --sidebar-accent-foreground: hsl(215, 15%, 15%);
-  --sidebar-border: hsl(215, 10%, 90%);
-  --sidebar-ring: hsl(142, 45%, 25%);
+  /* Love Poker Club Brand Colors - Vibrant Edition */
+  --background: 243 244 246; /* Subtle gray with purple tint */
+  --foreground: 31 41 55; /* Darker charcoal for better contrast */
+  --card: 255 255 255; /* White */
+  --card-foreground: 31 41 55; /* Charcoal */
+  --popover: 255 255 255; /* White */
+  --popover-foreground: 31 41 55; /* Charcoal */
+  --primary: 107 70 193; /* Royal Velvet #6B46C1 - vibrant purple */
+  --primary-foreground: 255 255 255; /* Pure white for contrast */
+  --secondary: 147 51 234; /* Amethyst #9333EA - electric purple */
+  --secondary-foreground: 255 255 255; /* Pure white */
+  --muted: 237 233 254; /* Lavender tinted muted */
+  --muted-foreground: 107 70 193; /* Purple muted text */
+  --accent: 245 158 11; /* Warm Gold #F59E0B - vibrant accent */
+  --accent-foreground: 31 41 55; /* Dark text on gold */
+  --destructive: 239 68 68; /* Coral Red #EF4444 */
+  --destructive-foreground: 255 255 255; /* White */
+  --border: 216 180 254; /* Brighter Lavender border */
+  --input: 237 233 254; /* Lavender input background */
+  --ring: 147 51 234; /* Amethyst ring */
+  --chart-1: 107 70 193; /* Royal Velvet */
+  --chart-2: 147 51 234; /* Amethyst */
+  --chart-3: 245 158 11; /* Warm Gold */
+  --chart-4: 5 150 105; /* Sage Green */
+  --chart-5: 196 181 253; /* Lavender Mist */
+  --sidebar: 250 245 255; /* Very light purple tint */
+  --sidebar-foreground: 31 41 55; /* Dark charcoal */
+  --sidebar-primary: 107 70 193; /* Royal Velvet */
+  --sidebar-primary-foreground: 255 255 255; /* White */
+  --sidebar-accent: 147 51 234; /* Amethyst */
+  --sidebar-accent-foreground: 255 255 255; /* White */
+  --sidebar-border: 216 180 254; /* Lavender border */
+  --sidebar-ring: 147 51 234; /* Amethyst */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-serif: Georgia, serif;
   --font-mono: Menlo, monospace;
   --radius: 0.5rem;
 }
 
 .dark {
-  --background: hsl(0, 0%, 0%);
-  --foreground: hsl(200, 6.67%, 91.18%);
-  --card: hsl(228, 9.80%, 10%);
-  --card-foreground: hsl(0, 0%, 85.10%);
-  --popover: hsl(0, 0%, 0%);
-  --popover-foreground: hsl(200, 6.67%, 91.18%);
-  --primary: hsl(142, 45%, 25%);
-  --primary-foreground: hsl(0, 0%, 100%);
-  --secondary: hsl(195, 15.38%, 94.90%);
-  --secondary-foreground: hsl(215, 15%, 15%);
-  --muted: hsl(0, 0%, 9.41%);
-  --muted-foreground: hsl(210, 3.39%, 46.27%);
-  --accent: hsl(45, 85%, 55%);
-  --accent-foreground: hsl(215, 15%, 15%);
-  --destructive: hsl(0, 84%, 60%);
-  --destructive-foreground: hsl(0, 0%, 100%);
-  --border: hsl(210, 5.26%, 14.90%);
-  --input: hsl(207, 27.66%, 18.43%);
-  --ring: hsl(142, 45%, 25%);
-  --sidebar: hsl(228, 9.80%, 10%);
-  --sidebar-foreground: hsl(0, 0%, 85.10%);
-  --sidebar-primary: hsl(142, 45%, 25%);
-  --sidebar-primary-foreground: hsl(0, 0%, 100%);
-  --sidebar-accent: hsl(45, 85%, 55%);
-  --sidebar-accent-foreground: hsl(215, 15%, 15%);
-  --sidebar-border: hsl(205, 15.79%, 26.08%);
-  --sidebar-ring: hsl(142, 45%, 25%);
+  /* Love Poker Club Dark Mode - Midnight base */
+  --background: 17 24 39; /* Midnight #111827 */
+  --foreground: 249 250 251; /* Pearl */
+  --card: 31 41 55; /* Dark card */
+  --card-foreground: 249 250 251; /* Pearl */
+  --popover: 17 24 39; /* Midnight */
+  --popover-foreground: 249 250 251; /* Pearl */
+  --primary: 107 70 193; /* Royal Velvet */
+  --primary-foreground: 249 250 251; /* Pearl */
+  --secondary: 147 51 234; /* Amethyst */
+  --secondary-foreground: 249 250 251; /* Pearl */
+  --muted: 55 65 81; /* Dark muted */
+  --muted-foreground: 156 163 175; /* Silver */
+  --accent: 147 51 234; /* Amethyst */
+  --accent-foreground: 249 250 251; /* Pearl */
+  --destructive: 239 68 68; /* Coral Red */
+  --destructive-foreground: 249 250 251; /* Pearl */
+  --border: 88 28 135; /* Deep Plum #581C87 */
+  --input: 55 65 81;
+  --ring: 107 70 193; /* Royal Velvet */
+  --sidebar: 17 24 39; /* Midnight */
+  --sidebar-foreground: 249 250 251; /* Pearl */
+  --sidebar-primary: 107 70 193; /* Royal Velvet */
+  --sidebar-primary-foreground: 249 250 251; /* Pearl */
+  --sidebar-accent: 147 51 234; /* Amethyst */
+  --sidebar-accent-foreground: 249 250 251; /* Pearl */
+  --sidebar-border: 55 65 81;
+  --sidebar-ring: 107 70 193; /* Royal Velvet */
 }
 
 @layer base {
@@ -80,5 +83,45 @@
 
   body {
     @apply font-sans antialiased bg-background text-foreground;
+  }
+
+  /* Add subtle gradient backgrounds */
+  h1, h2, h3 {
+    @apply text-primary;
+  }
+}
+
+@layer components {
+  /* Vibrant gradient cards */
+  .gradient-card {
+    background: linear-gradient(135deg, rgb(var(--primary) / 0.05) 0%, rgb(var(--secondary) / 0.05) 100%);
+    border: 1px solid rgb(var(--border));
+  }
+
+  /* Colorful stat cards */
+  .stat-card-purple {
+    background: linear-gradient(135deg, rgb(107 70 193 / 0.1) 0%, rgb(147 51 234 / 0.1) 100%);
+  }
+
+  .stat-card-gold {
+    background: linear-gradient(135deg, rgb(245 158 11 / 0.1) 0%, rgb(251 191 36 / 0.1) 100%);
+  }
+
+  .stat-card-green {
+    background: linear-gradient(135deg, rgb(5 150 105 / 0.1) 0%, rgb(16 185 129 / 0.1) 100%);
+  }
+
+  .stat-card-blue {
+    background: linear-gradient(135deg, rgb(59 130 246 / 0.1) 0%, rgb(96 165 250 / 0.1) 100%);
+  }
+
+  /* Vibrant button enhancement */
+  button[data-primary="true"] {
+    background: linear-gradient(135deg, rgb(var(--primary)) 0%, rgb(var(--secondary)) 100%);
+    box-shadow: 0 4px 14px 0 rgb(var(--primary) / 0.39);
+  }
+
+  button[data-primary="true"]:hover {
+    box-shadow: 0 6px 20px rgb(var(--primary) / 0.5);
   }
 }

@@ -2,6 +2,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useMutation } from "@tanstack/react-query";
+import { useState } from "react";
 import { FormSlideout } from "@/components/ui/form-slideout";
 import {
   Form,
@@ -12,8 +13,17 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
+import { ImageUpload } from "@/components/ui/image-upload";
+import { RichTextEditor } from "@/components/ui/rich-text-editor";
+import { AddressAutocomplete } from "@/components/ui/address-autocomplete";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Check } from "lucide-react";
@@ -21,6 +31,9 @@ import { Check } from "lucide-react";
 const clubSchema = z.object({
   name: z.string().min(1, "Club name is required"),
   description: z.string().optional(),
+  imageUrl: z.string().optional(),
+  timezone: z.string().optional(),
+  address: z.string().optional(),
 });
 
 type ClubFormData = z.infer<typeof clubSchema>;
@@ -38,6 +51,9 @@ export function CreateClubModal({ open, onOpenChange }: CreateClubModalProps) {
     defaultValues: {
       name: "",
       description: "",
+      imageUrl: "",
+      timezone: "",
+      address: "",
     },
   });
 
@@ -101,6 +117,25 @@ export function CreateClubModal({ open, onOpenChange }: CreateClubModalProps) {
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <FormField
               control={form.control}
+              name="imageUrl"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Club Image</FormLabel>
+                  <FormControl>
+                    <ImageUpload
+                      onImageUpload={field.onChange}
+                      currentImage={field.value}
+                      entityType="clubs"
+                      placeholder="Upload club logo or image"
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
               name="name"
               render={({ field }) => (
                 <FormItem>
@@ -112,7 +147,7 @@ export function CreateClubModal({ open, onOpenChange }: CreateClubModalProps) {
                 </FormItem>
               )}
             />
-            
+
             <FormField
               control={form.control}
               name="description"
@@ -120,15 +155,41 @@ export function CreateClubModal({ open, onOpenChange }: CreateClubModalProps) {
                 <FormItem>
                   <FormLabel>Description</FormLabel>
                   <FormControl>
-                    <Textarea
-                      rows={3}
+                    <RichTextEditor
+                      content={field.value || ''}
+                      onChange={field.onChange}
                       placeholder="Describe your club, its mission, or special features..."
-                      className="resize-none"
-                      {...field}
-                      data-testid="club-description"
                     />
                   </FormControl>
                   <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="address"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Address</FormLabel>
+                  <FormControl>
+                    <AddressAutocomplete
+                      value={field.value}
+                      onChange={(address, timezone) => {
+                        field.onChange(address);
+                        if (timezone) {
+                          form.setValue("timezone", timezone);
+                        }
+                      }}
+                      placeholder="Start typing an address..."
+                    />
+                  </FormControl>
+                  <FormMessage />
+                  {form.watch("timezone") && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Timezone: {form.watch("timezone")}
+                    </p>
+                  )}
                 </FormItem>
               )}
             />

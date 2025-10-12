@@ -1,0 +1,416 @@
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useParams, Link } from "wouter";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Trophy, Users, DollarSign, Calendar, UserPlus, Lock, Target } from "lucide-react";
+
+interface Tournament {
+  id: string;
+  name: string;
+  description?: string;
+  clubId: string;
+  seasonId?: string;
+  pointsSystemId?: string;
+  startDateTime: string;
+  status: string;
+  buyInAmount: string;
+  rebuyAmount?: string;
+  addonAmount?: string;
+  maxPlayers: number;
+  enableHighHand: boolean;
+  highHandAmount?: string;
+  payoutStructure: string;
+  rakeType?: string;
+  rakeAmount?: string;
+  rebuyRakeType?: string;
+  rebuyRakeAmount?: string;
+  addonRakeType?: string;
+  addonRakeAmount?: string;
+  trackPoints: boolean;
+}
+
+interface Club {
+  id: string;
+  name: string;
+}
+
+interface Season {
+  id: string;
+  name: string;
+}
+
+interface PointsSystem {
+  id: string;
+  name: string;
+}
+
+interface TournamentRegistration {
+  id: string;
+  playerId: string;
+  finalPosition?: number;
+  prizeAmount?: string;
+  pointsAwarded?: number;
+  isEliminated: boolean;
+  knockouts: number;
+  buyIns: number;
+  rebuys: number;
+  addons: number;
+  player: {
+    name: string;
+  } | null;
+}
+
+export default function PublicTournamentView() {
+  const { id } = useParams();
+  const [activeTab, setActiveTab] = useState("details");
+
+  const { data: tournament, isLoading: tournamentLoading } = useQuery<Tournament>({
+    queryKey: ["/api/tournaments", id],
+  });
+
+  const { data: club } = useQuery<Club>({
+    queryKey: ["/api/clubs", tournament?.clubId],
+    enabled: !!tournament?.clubId,
+  });
+
+  const { data: season } = useQuery<Season>({
+    queryKey: ["/api/seasons", tournament?.seasonId],
+    enabled: !!tournament?.seasonId,
+  });
+
+  const { data: pointsSystem } = useQuery<PointsSystem>({
+    queryKey: ["/api/points-systems", tournament?.pointsSystemId],
+    enabled: !!tournament?.pointsSystemId,
+  });
+
+  const { data: registrations = [] } = useQuery<TournamentRegistration[]>({
+    queryKey: ["/api/tournaments", id, "registrations"],
+    enabled: !!id,
+    refetchInterval: 5000, // Refresh every 5 seconds
+  });
+
+  if (tournamentLoading) {
+    return (
+      <div className="min-h-screen bg-background">
+        <div className="animate-pulse">
+          <div className="bg-card border-b border-border p-8">
+            <div className="max-w-6xl mx-auto">
+              <div className="h-8 bg-muted rounded w-64 mb-4"></div>
+              <div className="h-4 bg-muted rounded w-96"></div>
+            </div>
+          </div>
+          <div className="max-w-6xl mx-auto p-8 space-y-6">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {[1, 2, 3, 4].map(i => (
+                <div key={i} className="h-24 bg-muted rounded"></div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!tournament) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <Card className="max-w-md">
+          <CardContent className="pt-6">
+            <p className="text-center text-muted-foreground">Tournament not found</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  const totalPlayers = registrations.length;
+  const activePlayers = registrations.filter(r => !r.isEliminated).length;
+  const sortedStandings = [...registrations].sort((a, b) => {
+    // Active players first
+    if (a.isEliminated && !b.isEliminated) return 1;
+    if (!a.isEliminated && b.isEliminated) return -1;
+
+    // Both eliminated: sort by elimination time (most recent first)
+    if (a.isEliminated && b.isEliminated) {
+      return 0; // Could add elimination time sorting here
+    }
+
+    // Both active
+    return 0;
+  });
+
+  // Calculate prize pool
+  const totalBuyIns = registrations.reduce((sum, reg) => sum + reg.buyIns, 0);
+  const totalRebuys = registrations.reduce((sum, reg) => sum + reg.rebuys, 0);
+  const totalAddons = registrations.reduce((sum, reg) => sum + reg.addons, 0);
+
+  const buyInTotal = totalBuyIns * parseFloat(tournament.buyInAmount);
+  const rebuyTotal = totalRebuys * parseFloat(tournament.rebuyAmount || '0');
+  const addonTotal = totalAddons * parseFloat(tournament.addonAmount || '0');
+  const grossTotal = buyInTotal + rebuyTotal + addonTotal;
+
+  // Calculate rake
+  let buyInRake = 0;
+  if (tournament.rakeType === 'percentage') {
+    buyInRake = buyInTotal * (parseFloat(tournament.rakeAmount || '0') / 100);
+  } else if (tournament.rakeType === 'fixed') {
+    buyInRake = totalBuyIns * parseFloat(tournament.rakeAmount || '0');
+  }
+
+  let rebuyRake = 0;
+  if (tournament.rebuyRakeType === 'percentage') {
+    rebuyRake = rebuyTotal * (parseFloat(tournament.rebuyRakeAmount || '0') / 100);
+  } else if (tournament.rebuyRakeType === 'fixed') {
+    rebuyRake = totalRebuys * parseFloat(tournament.rebuyRakeAmount || '0');
+  }
+
+  let addonRake = 0;
+  if (tournament.addonRakeType === 'percentage') {
+    addonRake = addonTotal * (parseFloat(tournament.addonRakeAmount || '0') / 100);
+  } else if (tournament.addonRakeType === 'fixed') {
+    addonRake = totalAddons * parseFloat(tournament.addonRakeAmount || '0');
+  }
+
+  const rake = buyInRake + rebuyRake + addonRake;
+  const netPrizePool = grossTotal - rake;
+
+  // Prize is locked until tournament is in progress or completed
+  const isPrizePoolLocked = tournament.status === 'scheduled' || tournament.status === 'registration';
+
+  // Calculate prize payouts
+  const getPrizePayouts = () => {
+    if (netPrizePool <= 0) return [];
+
+    const payoutStructures: Record<string, number[]> = {
+      'standard': [0.50, 0.30, 0.20],
+      'top3': [0.50, 0.30, 0.20],
+      'top5': [0.40, 0.25, 0.20, 0.10, 0.05],
+      'top8': [0.35, 0.22, 0.15, 0.12, 0.08, 0.04, 0.02, 0.02],
+      'top9': [0.30, 0.20, 0.15, 0.12, 0.09, 0.06, 0.04, 0.02, 0.02],
+    };
+
+    const percentages = payoutStructures[tournament.payoutStructure] || payoutStructures['standard'];
+
+    return percentages.map((percentage, index) => ({
+      position: index + 1,
+      percentage: percentage * 100,
+      amount: Math.round(netPrizePool * percentage),
+    }));
+  };
+
+  const prizePayouts = getPrizePayouts();
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'in_progress':
+        return 'bg-green-100 text-green-800';
+      case 'registration':
+        return 'bg-blue-100 text-blue-800';
+      case 'scheduled':
+        return 'bg-yellow-100 text-yellow-800';
+      case 'completed':
+        return 'bg-gray-100 text-gray-800';
+      default:
+        return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const getStatusLabel = (status: string) => {
+    switch (status) {
+      case 'in_progress':
+        return 'In Progress';
+      case 'registration':
+        return 'Registration Open';
+      case 'scheduled':
+        return 'Scheduled';
+      case 'completed':
+        return 'Completed';
+      default:
+        return status;
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-background">
+      {/* Header */}
+      <header className="bg-card border-b border-border">
+        <div className="max-w-6xl mx-auto px-8 py-6">
+          <div className="flex items-start justify-between">
+            <div>
+              <h1 className="text-3xl font-bold text-foreground mb-2">{tournament.name}</h1>
+              <p className="text-muted-foreground">
+                {club?.name || 'Unknown Club'} • {new Date(tournament.startDateTime).toLocaleDateString()}
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <Badge className={getStatusColor(tournament.status)}>
+                <span className="w-2 h-2 bg-current rounded-full mr-2 animate-pulse"></span>
+                {getStatusLabel(tournament.status)}
+              </Badge>
+              {(tournament.status === 'registration' || tournament.status === 'scheduled') && (
+                <Link href={`/register/${tournament.id}`}>
+                  <Button size="lg">
+                    <UserPlus className="w-4 h-4 mr-2" />
+                    Register Now
+                  </Button>
+                </Link>
+              )}
+            </div>
+          </div>
+
+          {tournament.description && (
+            <p className="mt-4 text-muted-foreground max-w-3xl">{tournament.description}</p>
+          )}
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <div className="max-w-6xl mx-auto p-8">
+        {/* Stats */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+          <Card>
+            <CardContent className="pt-6">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-primary/10 rounded-lg">
+                  <Users className="w-5 h-5 text-primary" />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Players</p>
+                  <p className="text-2xl font-bold">{totalPlayers}/{tournament.maxPlayers}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {tournament.status === 'in_progress' && (
+            <Card>
+              <CardContent className="pt-6">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 bg-green-100 rounded-lg">
+                    <Users className="w-5 h-5 text-green-600" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Active</p>
+                    <p className="text-2xl font-bold">{activePlayers}</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          <Card>
+            <CardContent className="pt-6">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-accent/10 rounded-lg">
+                  <DollarSign className="w-5 h-5 text-accent" />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Buy-in</p>
+                  <p className="text-2xl font-bold">${tournament.buyInAmount}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="pt-6">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-blue-100 rounded-lg">
+                  <Calendar className="w-5 h-5 text-blue-600" />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Start Time</p>
+                  <p className="text-sm font-semibold">{new Date(tournament.startDateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Standings/Results */}
+        {(tournament.status === 'in_progress' || tournament.status === 'completed') && finishedPlayers.length > 0 && (
+          <Card>
+            <CardHeader className="border-b border-border">
+              <CardTitle className="flex items-center gap-2">
+                <Trophy className="w-5 h-5 text-accent" />
+                {tournament.status === 'completed' ? 'Final Results' : 'Current Standings'}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              <div className="divide-y divide-border">
+                {finishedPlayers.map((reg) => (
+                  <div key={reg.id} className="p-4 flex items-center justify-between hover:bg-muted/20 transition-colors">
+                    <div className="flex items-center gap-4">
+                      <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${
+                        reg.finalPosition === 1 ? 'bg-yellow-100 text-yellow-800' :
+                        reg.finalPosition === 2 ? 'bg-gray-100 text-gray-800' :
+                        reg.finalPosition === 3 ? 'bg-orange-100 text-orange-800' :
+                        'bg-muted text-muted-foreground'
+                      }`}>
+                        {reg.finalPosition}
+                      </div>
+                      <div>
+                        <p className="font-semibold text-foreground">{reg.player?.name || 'Unknown Player'}</p>
+                      </div>
+                    </div>
+                    {reg.prizeAmount && parseFloat(reg.prizeAmount) > 0 && (
+                      <div className="text-right">
+                        <p className="text-lg font-bold text-accent">${parseFloat(reg.prizeAmount).toLocaleString()}</p>
+                        <p className="text-xs text-muted-foreground">Prize</p>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Entry Info */}
+        <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-6">
+          <Card>
+            <CardHeader className="border-b border-border">
+              <CardTitle>Entry Details</CardTitle>
+            </CardHeader>
+            <CardContent className="p-6 space-y-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Buy-in</span>
+                <span className="font-semibold">${tournament.buyInAmount}</span>
+              </div>
+              {tournament.rebuyAmount && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Re-buy</span>
+                  <span className="font-semibold">${tournament.rebuyAmount}</span>
+                </div>
+              )}
+              {tournament.addonAmount && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Add-on</span>
+                  <span className="font-semibold">${tournament.addonAmount}</span>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {tournament.enableHighHand && tournament.highHandAmount && (
+            <Card>
+              <CardHeader className="border-b border-border">
+                <CardTitle className="flex items-center gap-2">
+                  <Trophy className="w-5 h-5 text-accent" />
+                  High Hand Bonus
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-6">
+                <p className="text-3xl font-bold text-accent">${parseFloat(tournament.highHandAmount).toLocaleString()}</p>
+                <p className="text-sm text-muted-foreground mt-1">Additional prize for highest hand</p>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

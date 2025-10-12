@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams, useLocation } from "wouter";
+import { useParams, useLocation, Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -13,8 +13,15 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { CheckCircle2, UserPlus, Users, Trophy } from "lucide-react";
+import { CheckCircle2, UserPlus, Users, Trophy, ArrowLeft } from "lucide-react";
 import type { Tournament, Player } from "@shared/schema";
+
+interface Club {
+  id: string;
+  name: string;
+  imageUrl?: string;
+  description?: string;
+}
 
 const newPlayerSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -41,6 +48,11 @@ export function PublicRegisterPage() {
 
   const { data: tournament, isLoading: tournamentLoading } = useQuery<Tournament>({
     queryKey: ["/api/tournaments", tournamentId],
+  });
+
+  const { data: club, isLoading: clubLoading } = useQuery<Club>({
+    queryKey: [`/api/clubs/${tournament?.clubId}`],
+    enabled: !!tournament?.clubId,
   });
 
   const { data: players = [] } = useQuery<Player[]>({
@@ -188,17 +200,40 @@ export function PublicRegisterPage() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background p-4">
         <Card className="w-full max-w-md">
-          <CardHeader className="text-center">
-            <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto mb-4" />
-            <CardTitle className="text-2xl">Registration Complete!</CardTitle>
-            <CardDescription>
-              You're registered for {tournament.name}
-            </CardDescription>
+          <CardHeader className="space-y-4 text-center">
+            {club && (
+              <Link href={`/club/${club.id}`}>
+                <div className="flex items-center justify-center gap-3 hover:opacity-80 transition-opacity cursor-pointer">
+                  {club.imageUrl ? (
+                    <img
+                      src={club.imageUrl}
+                      alt={club.name}
+                      className="w-16 h-16 rounded-lg object-cover border-2 border-primary/20"
+                    />
+                  ) : (
+                    <div className="w-16 h-16 bg-gradient-to-br from-primary to-accent rounded-lg flex items-center justify-center text-white text-xl font-bold border-2 border-primary/20">
+                      {club.name.substring(0, 2).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="text-left">
+                    <p className="text-2xl font-bold text-primary">{club.name}</p>
+                    <p className="text-xs text-muted-foreground">Poker Club</p>
+                  </div>
+                </div>
+              </Link>
+            )}
+            <div className="pt-4">
+              <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto mb-4" />
+              <CardTitle className="text-2xl">Registration Complete!</CardTitle>
+              <CardDescription className="mt-2">
+                You're registered for {tournament.name}
+              </CardDescription>
+            </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="bg-muted p-4 rounded-lg space-y-2">
               <p className="text-sm font-medium">Please proceed to the payment desk</p>
-              <p className="text-2xl font-bold">
+              <p className="text-3xl font-bold text-primary">
                 $
                 {(
                   parseFloat(tournament.buyInAmount) +
@@ -214,9 +249,17 @@ export function PublicRegisterPage() {
                 )}
               </p>
             </div>
-            <Button onClick={handleStartOver} variant="outline" className="w-full" data-testid="register-another">
-              Register Another Player
-            </Button>
+            <div className="space-y-2">
+              <Button onClick={handleStartOver} variant="outline" className="w-full" size="lg" data-testid="register-another">
+                Register Another Player
+              </Button>
+              <Link href={`/tournament/${tournamentId}`}>
+                <Button variant="ghost" className="w-full" size="lg">
+                  <ArrowLeft className="w-4 h-4 mr-2" />
+                  Back to Tournament
+                </Button>
+              </Link>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -226,10 +269,33 @@ export function PublicRegisterPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>{tournament.name}</CardTitle>
-          <CardDescription>Tournament Registration</CardDescription>
-          <div className="flex items-center justify-between mt-4">
+        <CardHeader className="space-y-4">
+          {club && (
+            <Link href={`/club/${club.id}`}>
+              <div className="flex items-center justify-center gap-3 hover:opacity-80 transition-opacity cursor-pointer">
+                {club.imageUrl ? (
+                  <img
+                    src={club.imageUrl}
+                    alt={club.name}
+                    className="w-16 h-16 rounded-lg object-cover border-2 border-primary/20"
+                  />
+                ) : (
+                  <div className="w-16 h-16 bg-gradient-to-br from-primary to-accent rounded-lg flex items-center justify-center text-white text-xl font-bold border-2 border-primary/20">
+                    {club.name.substring(0, 2).toUpperCase()}
+                  </div>
+                )}
+                <div className="text-left">
+                  <p className="text-2xl font-bold text-primary">{club.name}</p>
+                  <p className="text-xs text-muted-foreground">Poker Club</p>
+                </div>
+              </div>
+            </Link>
+          )}
+          <div className="text-center pt-2">
+            <CardTitle className="text-xl">{tournament.name}</CardTitle>
+            <CardDescription className="mt-1">Tournament Registration</CardDescription>
+          </div>
+          <div className="flex items-center justify-between pt-2">
             {[1, 2, 3].map((s) => (
               <div
                 key={s}
@@ -239,7 +305,7 @@ export function PublicRegisterPage() {
               />
             ))}
           </div>
-          <p className="text-sm text-muted-foreground mt-2">
+          <p className="text-sm text-muted-foreground text-center">
             Step {step} of 3
           </p>
         </CardHeader>

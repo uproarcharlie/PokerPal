@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CreatePlayerModal } from "@/components/modals/create-player-modal";
+import { EditPlayerModal } from "@/components/modals/edit-player-modal";
 import { Plus, UsersRound, ArrowLeft, Eye, Edit, Mail, Phone, Filter, Download } from "lucide-react";
 import { Link } from "wouter";
 
@@ -12,14 +13,44 @@ interface Player {
   name: string;
   email?: string;
   phone?: string;
+  imageUrl?: string;
   createdAt: string;
+}
+
+interface Tournament {
+  id: string;
+  clubId: string;
+}
+
+interface TournamentRegistration {
+  id: string;
+  playerId: string;
+  tournamentId: string;
+}
+
+interface Club {
+  id: string;
+  name: string;
 }
 
 export default function Players() {
   const [showCreatePlayer, setShowCreatePlayer] = useState(false);
+  const [editingPlayer, setEditingPlayer] = useState<Player | null>(null);
 
   const { data: players = [], isLoading } = useQuery<Player[]>({
     queryKey: ["/api/players"],
+  });
+
+  const { data: tournaments = [] } = useQuery<Tournament[]>({
+    queryKey: ["/api/tournaments"],
+  });
+
+  const { data: registrations = [] } = useQuery<TournamentRegistration[]>({
+    queryKey: ["/api/registrations"],
+  });
+
+  const { data: clubs = [] } = useQuery<Club[]>({
+    queryKey: ["/api/clubs"],
   });
 
   if (isLoading) {
@@ -47,6 +78,24 @@ export default function Players() {
       .join('')
       .toUpperCase()
       .substring(0, 2);
+  };
+
+  const getPlayerStats = (playerId: string) => {
+    const playerRegistrations = registrations.filter(r => r.playerId === playerId);
+    const tournamentIds = playerRegistrations.map(r => r.tournamentId);
+    const playerTournaments = tournaments.filter(t => tournamentIds.includes(t.id));
+
+    const uniqueClubIds = new Set<string>();
+    playerTournaments.forEach(t => uniqueClubIds.add(t.clubId));
+
+    const clubNames = Array.from(uniqueClubIds)
+      .map(clubId => clubs.find(c => c.id === clubId)?.name)
+      .filter(Boolean);
+
+    return {
+      tournamentsCount: playerTournaments.length,
+      clubNames: clubNames
+    };
   };
 
   return (
@@ -113,75 +162,100 @@ export default function Players() {
                         <th className="text-left py-3 px-6 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Player</th>
                         <th className="text-left py-3 px-6 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Contact</th>
                         <th className="text-left py-3 px-6 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Tournaments</th>
-                        <th className="text-left py-3 px-6 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Total Points</th>
+                        <th className="text-left py-3 px-6 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Clubs</th>
                         <th className="text-left py-3 px-6 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Join Date</th>
                         <th className="text-right py-3 px-6 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {players.map((player) => (
-                        <tr key={player.id} className="hover:bg-muted/20 transition-colors" data-testid={`player-row-${player.id}`}>
-                          <td className="py-4 px-6">
-                            <div className="flex items-center gap-3">
-                              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary to-accent flex items-center justify-center text-white text-sm font-semibold">
-                                {getPlayerInitials(player.name)}
+                      {players.map((player) => {
+                        const stats = getPlayerStats(player.id);
+                        return (
+                          <tr key={player.id} className="hover:bg-muted/20 transition-colors" data-testid={`player-row-${player.id}`}>
+                            <td className="py-4 px-6">
+                              <div className="flex items-center gap-3">
+                                {player.imageUrl ? (
+                                  <img
+                                    src={player.imageUrl}
+                                    alt={player.name}
+                                    className="w-10 h-10 rounded-full object-cover"
+                                  />
+                                ) : (
+                                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary to-accent flex items-center justify-center text-white text-sm font-semibold">
+                                    {getPlayerInitials(player.name)}
+                                  </div>
+                                )}
+                                <div>
+                                  <p className="font-medium text-foreground">{player.name}</p>
+                                  <p className="text-sm text-muted-foreground">ID: {player.id.substring(0, 8)}...</p>
+                                </div>
                               </div>
+                            </td>
+                            <td className="py-4 px-6">
+                              <div className="space-y-1">
+                                {player.email && (
+                                  <div className="flex items-center gap-2">
+                                    <Mail className="w-4 h-4 text-muted-foreground" />
+                                    <span className="text-sm text-foreground">{player.email}</span>
+                                  </div>
+                                )}
+                                {player.phone && (
+                                  <div className="flex items-center gap-2">
+                                    <Phone className="w-4 h-4 text-muted-foreground" />
+                                    <span className="text-sm text-foreground">{player.phone}</span>
+                                  </div>
+                                )}
+                                {!player.email && !player.phone && (
+                                  <span className="text-sm text-muted-foreground">No contact info</span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-4 px-6">
                               <div>
-                                <p className="font-medium text-foreground">{player.name}</p>
-                                <p className="text-sm text-muted-foreground">ID: {player.id.substring(0, 8)}...</p>
+                                <p className="text-sm font-semibold text-foreground">{stats.tournamentsCount}</p>
+                                <p className="text-xs text-muted-foreground">tournaments played</p>
                               </div>
-                            </div>
-                          </td>
-                          <td className="py-4 px-6">
-                            <div className="space-y-1">
-                              {player.email && (
-                                <div className="flex items-center gap-2">
-                                  <Mail className="w-4 h-4 text-muted-foreground" />
-                                  <span className="text-sm text-foreground">{player.email}</span>
-                                </div>
-                              )}
-                              {player.phone && (
-                                <div className="flex items-center gap-2">
-                                  <Phone className="w-4 h-4 text-muted-foreground" />
-                                  <span className="text-sm text-foreground">{player.phone}</span>
-                                </div>
-                              )}
-                              {!player.email && !player.phone && (
-                                <span className="text-sm text-muted-foreground">No contact info</span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="py-4 px-6">
-                            <div>
-                              <p className="text-sm font-semibold text-foreground">0</p>
-                              <p className="text-xs text-muted-foreground">tournaments played</p>
-                            </div>
-                          </td>
-                          <td className="py-4 px-6">
-                            <div>
-                              <p className="text-sm font-semibold text-foreground">0</p>
-                              <p className="text-xs text-muted-foreground">lifetime points</p>
-                            </div>
-                          </td>
-                          <td className="py-4 px-6">
-                            <span className="text-sm text-muted-foreground">
-                              {new Date(player.createdAt).toLocaleDateString()}
-                            </span>
-                          </td>
-                          <td className="py-4 px-6">
-                            <div className="flex items-center justify-end gap-2">
-                              <Button variant="ghost" size="sm" data-testid={`view-player-${player.id}`}>
-                                <Eye className="w-4 h-4 mr-1" />
-                                View
-                              </Button>
-                              <Button variant="ghost" size="sm" data-testid={`edit-player-${player.id}`}>
-                                <Edit className="w-4 h-4 mr-1" />
-                                Edit
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                            </td>
+                            <td className="py-4 px-6">
+                              <div>
+                                {stats.clubNames.length > 0 ? (
+                                  <div className="flex flex-wrap gap-1">
+                                    {stats.clubNames.map((clubName, idx) => (
+                                      <Badge key={idx} variant="secondary" className="text-xs">
+                                        {clubName}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="text-sm text-muted-foreground">No clubs</span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-4 px-6">
+                              <span className="text-sm text-muted-foreground">
+                                {new Date(player.createdAt).toLocaleDateString()}
+                              </span>
+                            </td>
+                            <td className="py-4 px-6">
+                              <div className="flex items-center justify-end gap-2">
+                                <Button variant="ghost" size="sm" data-testid={`view-player-${player.id}`}>
+                                  <Eye className="w-4 h-4 mr-1" />
+                                  View
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => setEditingPlayer(player)}
+                                  data-testid={`edit-player-${player.id}`}
+                                >
+                                  <Edit className="w-4 h-4 mr-1" />
+                                  Edit
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -191,9 +265,15 @@ export default function Players() {
         </div>
       </div>
 
-      <CreatePlayerModal 
-        open={showCreatePlayer} 
+      <CreatePlayerModal
+        open={showCreatePlayer}
         onOpenChange={setShowCreatePlayer}
+      />
+
+      <EditPlayerModal
+        open={!!editingPlayer}
+        onOpenChange={(open) => !open && setEditingPlayer(null)}
+        player={editingPlayer}
       />
     </>
   );

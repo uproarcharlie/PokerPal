@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CreateSeasonModal } from "@/components/modals/create-season-modal";
 import { Plus, Calendar, ArrowLeft, Eye, Settings as SettingsIcon, Trophy, Users } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 
 interface Season {
   id: string;
@@ -22,8 +22,20 @@ interface Club {
   name: string;
 }
 
+interface Tournament {
+  id: string;
+  seasonId?: string;
+}
+
+interface TournamentRegistration {
+  id: string;
+  playerId: string;
+  tournamentId: string;
+}
+
 export default function Seasons() {
   const [showCreateSeason, setShowCreateSeason] = useState(false);
+  const [, setLocation] = useLocation();
 
   const { data: seasons = [], isLoading } = useQuery<Season[]>({
     queryKey: ["/api/seasons"],
@@ -31,6 +43,14 @@ export default function Seasons() {
 
   const { data: clubs = [] } = useQuery<Club[]>({
     queryKey: ["/api/clubs"],
+  });
+
+  const { data: tournaments = [] } = useQuery<Tournament[]>({
+    queryKey: ["/api/tournaments"],
+  });
+
+  const { data: registrations = [] } = useQuery<TournamentRegistration[]>({
+    queryKey: ["/api/registrations"],
   });
 
   if (isLoading) {
@@ -63,6 +83,21 @@ export default function Seasons() {
   const getClubInitials = (clubId: string) => {
     const clubName = getClubName(clubId);
     return clubName.substring(0, 2).toUpperCase();
+  };
+
+  const getSeasonStats = (seasonId: string) => {
+    const seasonTournaments = tournaments.filter(t => t.seasonId === seasonId);
+    const tournamentIds = seasonTournaments.map(t => t.id);
+
+    const uniquePlayerIds = new Set<string>();
+    registrations
+      .filter(r => tournamentIds.includes(r.tournamentId))
+      .forEach(r => uniquePlayerIds.add(r.playerId));
+
+    return {
+      tournamentsCount: seasonTournaments.length,
+      playersCount: uniquePlayerIds.size
+    };
   };
 
   return (
@@ -123,34 +158,38 @@ export default function Seasons() {
                           </Badge>
                         )}
                       </div>
-                      <Button variant="ghost" size="sm" data-testid={`season-menu-${season.id}`}>
-                        <SettingsIcon className="w-4 h-4" />
-                      </Button>
                     </div>
                   </CardHeader>
 
                   <CardContent>
                     <div className="space-y-3 mb-4">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-muted-foreground">Start Date</span>
-                        <span className="font-semibold text-foreground">
-                          {new Date(season.startDate).toLocaleDateString()}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-muted-foreground">End Date</span>
-                        <span className="font-semibold text-foreground">
-                          {season.endDate ? new Date(season.endDate).toLocaleDateString() : 'Ongoing'}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-muted-foreground">Tournaments</span>
-                        <span className="font-semibold text-foreground">0</span>
-                      </div>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-muted-foreground">Players</span>
-                        <span className="font-semibold text-foreground">0</span>
-                      </div>
+                      {(() => {
+                        const stats = getSeasonStats(season.id);
+                        return (
+                          <>
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-muted-foreground">Start Date</span>
+                              <span className="font-semibold text-foreground">
+                                {new Date(season.startDate).toLocaleDateString()}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-muted-foreground">End Date</span>
+                              <span className="font-semibold text-foreground">
+                                {season.endDate ? new Date(season.endDate).toLocaleDateString() : 'Ongoing'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-muted-foreground">Tournaments</span>
+                              <span className="font-semibold text-foreground">{stats.tournamentsCount}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-muted-foreground">Players</span>
+                              <span className="font-semibold text-foreground">{stats.playersCount}</span>
+                            </div>
+                          </>
+                        );
+                      })()}
                     </div>
 
                     <div className="pt-4 border-t border-border space-y-2">
@@ -173,10 +212,11 @@ export default function Seasons() {
                           <Eye className="w-4 h-4 mr-1" />
                           View
                         </Button>
-                        <Button 
-                          variant="outline" 
-                          size="sm" 
+                        <Button
+                          variant="outline"
+                          size="sm"
                           className="flex-1"
+                          onClick={() => setLocation(`/seasons/${season.id}/settings`)}
                           data-testid={`settings-season-${season.id}`}
                         >
                           <SettingsIcon className="w-4 h-4 mr-1" />
@@ -192,8 +232,8 @@ export default function Seasons() {
         </div>
       </div>
 
-      <CreateSeasonModal 
-        open={showCreateSeason} 
+      <CreateSeasonModal
+        open={showCreateSeason}
         onOpenChange={setShowCreateSeason}
       />
     </>
