@@ -4,9 +4,8 @@ import { useParams, Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Trophy, Calendar, Users, TrendingUp, Info, Medal, Globe } from "lucide-react";
+import { Trophy, Calendar, Users, TrendingUp, Info, Globe } from "lucide-react";
 import { FaDiscord, FaTwitter, FaFacebook, FaInstagram } from "react-icons/fa";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 interface Club {
   id: string;
@@ -56,19 +55,6 @@ function SeasonLeaderboard({ season }: { season: Season }) {
     queryKey: [`/api/seasons/${season.id}/leaderboard`],
   });
 
-  const getRankIcon = (rank: number) => {
-    switch (rank) {
-      case 1:
-        return <Medal className="w-5 h-5 text-yellow-500" />;
-      case 2:
-        return <Medal className="w-5 h-5 text-gray-400" />;
-      case 3:
-        return <Medal className="w-5 h-5 text-amber-600" />;
-      default:
-        return <span className="text-muted-foreground font-semibold">{rank}</span>;
-    }
-  };
-
   return (
     <TabsContent key={season.id} value={season.id}>
       <Card>
@@ -82,9 +68,9 @@ function SeasonLeaderboard({ season }: { season: Season }) {
             {season.endDate && ` - ${new Date(season.endDate).toLocaleDateString()}`}
           </p>
         </CardHeader>
-        <CardContent className="p-6">
+        <CardContent className="p-0">
           {isLoading ? (
-            <div className="text-center py-8">
+            <div className="p-8 text-center">
               <div className="animate-pulse space-y-3">
                 <div className="h-12 bg-muted rounded"></div>
                 <div className="h-12 bg-muted rounded"></div>
@@ -92,41 +78,87 @@ function SeasonLeaderboard({ season }: { season: Season }) {
               </div>
             </div>
           ) : leaderboard.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
+            <div className="p-8 text-center">
               <TrendingUp className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-              <p>No standings yet</p>
-              <p className="text-sm mt-2">Points will appear here once tournaments are completed</p>
+              <h3 className="text-lg font-semibold text-foreground mb-2">No Leaderboard Data</h3>
+              <p className="text-sm text-muted-foreground">
+                Complete some tournaments in this season to see player rankings.
+              </p>
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-16">Rank</TableHead>
-                    <TableHead>Player</TableHead>
-                    <TableHead className="text-right">Tournaments</TableHead>
-                    <TableHead className="text-right">Points</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {leaderboard.map((entry, index) => (
-                    <TableRow key={entry.player.id} className={index < 3 ? 'bg-primary/5' : ''}>
-                      <TableCell className="font-medium">
-                        <div className="flex items-center justify-center">
-                          {getRankIcon(index + 1)}
-                        </div>
-                      </TableCell>
-                      <TableCell className="font-semibold">{entry.player.name}</TableCell>
-                      <TableCell className="text-right text-muted-foreground">
-                        {entry.tournaments}
-                      </TableCell>
-                      <TableCell className="text-right font-bold text-primary">
-                        {entry.points}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-border bg-muted/30">
+                    <th className="text-left py-3 px-4 text-xs font-semibold text-muted-foreground uppercase">Rank</th>
+                    <th className="text-left py-3 px-4 text-xs font-semibold text-muted-foreground uppercase">Player</th>
+                    <th className="text-center py-3 px-4 text-xs font-semibold text-muted-foreground uppercase">Tournaments</th>
+                    <th className="text-right py-3 px-4 text-xs font-semibold text-muted-foreground uppercase">Points</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {leaderboard.map((entry, index) => {
+                    const position = index + 1;
+                    const isTopThree = position <= 3;
+
+                    return (
+                      <tr key={entry.player.id} className={`hover:bg-muted/20 ${isTopThree ? 'bg-accent/5' : ''}`}>
+                        <td className="py-4 px-4">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
+                            position === 1 ? 'bg-yellow-100 text-yellow-800' :
+                            position === 2 ? 'bg-gray-100 text-gray-800' :
+                            position === 3 ? 'bg-amber-100 text-amber-800' :
+                            'bg-muted text-muted-foreground'
+                          }`}>
+                            {position}
+                          </div>
+                        </td>
+                        <td className="py-4 px-4">
+                          <div className="flex items-center gap-3">
+                            {entry.player.imageUrl ? (
+                              <img
+                                src={entry.player.imageUrl}
+                                alt={entry.player.name}
+                                className="w-10 h-10 rounded-full object-cover"
+                              />
+                            ) : (
+                              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary to-accent flex items-center justify-center text-white text-sm font-semibold">
+                                {entry.player.name.split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 2)}
+                              </div>
+                            )}
+                            <div>
+                              <p className="font-semibold text-foreground">{entry.player.name}</p>
+                              {isTopThree && (
+                                <div className="flex items-center gap-1 mt-1">
+                                  <Trophy className={`w-3 h-3 ${
+                                    position === 1 ? 'text-yellow-500' :
+                                    position === 2 ? 'text-gray-400' :
+                                    'text-amber-600'
+                                  }`} />
+                                  <span className="text-xs text-muted-foreground">
+                                    {position === 1 ? '1st Place' : position === 2 ? '2nd Place' : '3rd Place'}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-4 px-4 text-center">
+                          <Badge variant="outline" className="font-medium">
+                            {entry.tournaments}
+                          </Badge>
+                        </td>
+                        <td className="py-4 px-4 text-right">
+                          <span className={`text-xl font-bold ${isTopThree ? 'text-accent' : 'text-foreground'}`}>
+                            {entry.points.toLocaleString()}
+                          </span>
+                          <span className="text-xs text-muted-foreground ml-1">pts</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </CardContent>
