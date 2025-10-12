@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import { z } from "zod";
 import { storage } from "./storage";
 import { upload } from "./config/multer";
+import { uploadToCloud, isCloudStorageEnabled } from "./services/storage";
 import { AuthService } from "./services/auth";
 import { requireAuth, requireAdmin, requireFullMember } from "./middleware/auth";
 import fs from "fs";
@@ -373,28 +374,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================
 
   // Image upload endpoint (requires authentication)
-  app.post("/api/upload", requireAuth, upload.single('image'), (req, res) => {
+  app.post("/api/upload", requireAuth, upload.single('image'), async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ error: "No file uploaded" });
       }
 
       const entityType = req.body.entityType || 'misc';
-      const entityDir = path.join('uploads', entityType);
 
-      // Create entity directory if it doesn't exist
-      if (!fs.existsSync(entityDir)) {
-        fs.mkdirSync(entityDir, { recursive: true });
+      // Use cloud storage in production, local storage in development
+      if (isCloudStorageEnabled()) {
+        try {
+          const result = await uploadToCloud(req.file, entityType);
+          res.json({ imageUrl: result.url });
+        } catch (error) {
+          console.error('Cloud upload error:', error);
+          return res.status(500).json({ error: "Failed to upload to cloud storage" });
+        }
+      } else {
+        // Local file storage (development)
+        const entityDir = path.join('uploads', entityType);
+
+        // Create entity directory if it doesn't exist
+        if (!fs.existsSync(entityDir)) {
+          fs.mkdirSync(entityDir, { recursive: true });
+        }
+
+        // Move file from uploads/ to uploads/entityType/
+        const oldPath = req.file.path;
+        const newPath = path.join(entityDir, req.file.filename);
+
+        fs.renameSync(oldPath, newPath);
+
+        const imageUrl = `/uploads/${entityType}/${req.file.filename}`;
+        res.json({ imageUrl });
       }
-
-      // Move file from uploads/ to uploads/entityType/
-      const oldPath = req.file.path;
-      const newPath = path.join(entityDir, req.file.filename);
-
-      fs.renameSync(oldPath, newPath);
-
-      const imageUrl = `/uploads/${entityType}/${req.file.filename}`;
-      res.json({ imageUrl });
     } catch (error) {
       console.error('Upload error:', error);
       res.status(500).json({ error: "Failed to upload image" });
