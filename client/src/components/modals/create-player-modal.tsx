@@ -2,6 +2,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useMutation } from "@tanstack/react-query";
+import { useState } from "react";
 import { FormSlideout } from "@/components/ui/form-slideout";
 import {
   Form,
@@ -34,6 +35,7 @@ interface CreatePlayerModalProps {
 
 export function CreatePlayerModal({ open, onOpenChange }: CreatePlayerModalProps) {
   const { toast } = useToast();
+  const [isImageUploading, setIsImageUploading] = useState(false);
 
   const form = useForm<PlayerFormData>({
     resolver: zodResolver(playerSchema),
@@ -51,6 +53,7 @@ export function CreatePlayerModal({ open, onOpenChange }: CreatePlayerModalProps
         ...data,
         email: data.email || undefined,
         phone: data.phone || undefined,
+        imageUrl: data.imageUrl || undefined,
       };
 
       const response = await apiRequest("POST", "/api/players", payload);
@@ -95,14 +98,14 @@ export function CreatePlayerModal({ open, onOpenChange }: CreatePlayerModalProps
           >
             Cancel
           </Button>
-          <Button 
+          <Button
             type="submit"
             onClick={form.handleSubmit(onSubmit)}
-            disabled={createPlayerMutation.isPending}
+            disabled={createPlayerMutation.isPending || isImageUploading}
             data-testid="create-player-final"
           >
             <Check className="w-4 h-4 mr-2" />
-            {createPlayerMutation.isPending ? "Creating..." : "Create Player"}
+            {isImageUploading ? "Uploading image..." : createPlayerMutation.isPending ? "Creating..." : "Create Player"}
           </Button>
         </>
       }
@@ -121,6 +124,7 @@ export function CreatePlayerModal({ open, onOpenChange }: CreatePlayerModalProps
                     currentImage={field.value}
                     entityType="players"
                     placeholder="Upload player photo or avatar"
+                    onUploadingChange={setIsImageUploading}
                   />
                 </FormControl>
                 <FormMessage />

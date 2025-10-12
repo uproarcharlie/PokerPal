@@ -2,7 +2,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useMutation } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { FormSlideout } from "@/components/ui/form-slideout";
 import {
   Form,
@@ -44,6 +44,7 @@ interface EditPlayerModalProps {
 
 export function EditPlayerModal({ open, onOpenChange, player }: EditPlayerModalProps) {
   const { toast } = useToast();
+  const [isImageUploading, setIsImageUploading] = useState(false);
 
   const form = useForm<PlayerFormData>({
     resolver: zodResolver(playerSchema),
@@ -120,10 +121,10 @@ export function EditPlayerModal({ open, onOpenChange, player }: EditPlayerModalP
           <Button
             type="submit"
             onClick={form.handleSubmit(onSubmit)}
-            disabled={updatePlayerMutation.isPending}
+            disabled={updatePlayerMutation.isPending || isImageUploading}
           >
             <Check className="w-4 h-4 mr-2" />
-            {updatePlayerMutation.isPending ? "Saving..." : "Save Changes"}
+            {isImageUploading ? "Uploading image..." : updatePlayerMutation.isPending ? "Saving..." : "Save Changes"}
           </Button>
         </>
       }
@@ -142,6 +143,7 @@ export function EditPlayerModal({ open, onOpenChange, player }: EditPlayerModalP
                     currentImage={field.value}
                     entityType="players"
                     placeholder="Upload player photo or avatar"
+                    onUploadingChange={setIsImageUploading}
                   />
                 </FormControl>
                 <FormMessage />

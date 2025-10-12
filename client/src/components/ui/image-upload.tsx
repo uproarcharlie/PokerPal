@@ -7,9 +7,10 @@ interface ImageUploadProps {
   currentImage?: string | null;
   entityType: "clubs" | "players" | "tournaments";
   placeholder?: string;
+  onUploadingChange?: (uploading: boolean) => void;
 }
 
-export function ImageUpload({ onImageUpload, currentImage, entityType, placeholder }: ImageUploadProps) {
+export function ImageUpload({ onImageUpload, currentImage, entityType, placeholder, onUploadingChange }: ImageUploadProps) {
   const [uploading, setUploading] = useState(false);
   const [preview, setPreview] = useState<string | null>(currentImage || null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -39,6 +40,7 @@ export function ImageUpload({ onImageUpload, currentImage, entityType, placehold
 
     // Upload to server
     setUploading(true);
+    onUploadingChange?.(true);
     try {
       const formData = new FormData();
       formData.append('image', file);
@@ -61,6 +63,7 @@ export function ImageUpload({ onImageUpload, currentImage, entityType, placehold
       setPreview(currentImage || null);
     } finally {
       setUploading(false);
+      onUploadingChange?.(false);
     }
   };
 
