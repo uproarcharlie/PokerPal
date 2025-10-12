@@ -27,16 +27,10 @@ export function ProtectedRoute({ children, requireAdmin = false }: ProtectedRout
     return null;
   }
 
-  // Check admin requirement
+  // Check admin requirement - redirect to login with message
   if (requireAdmin && !isAdmin) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-center">
-          <h1 className="text-2xl font-bold text-red-500">Access Denied</h1>
-          <p className="text-muted-foreground mt-2">You need admin privileges to access this page.</p>
-        </div>
-      </div>
-    );
+    setLocation("/login");
+    return null;
   }
 
   return <>{children}</>;
