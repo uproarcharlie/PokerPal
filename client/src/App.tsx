@@ -14,6 +14,7 @@ import Tournaments from "@/pages/tournaments";
 import TournamentDetails from "@/pages/tournament-details";
 import PublicTournamentView from "@/pages/public-tournament-view";
 import PublicClubView from "@/pages/public-club-view";
+import PublicHome from "@/pages/public-home";
 import Seasons from "@/pages/seasons";
 import SeasonSettings from "@/pages/season-settings";
 import Leaderboards from "@/pages/leaderboards";
@@ -37,6 +38,7 @@ function Router() {
       <Route path="/register" component={RegisterPage} />
 
       {/* Public routes without sidebar */}
+      <Route path="/home" component={PublicHome} />
       <Route path="/register/:tournamentId" component={PublicRegisterPage} />
       <Route path="/tournament/:id" component={PublicTournamentView} />
       <Route path="/club/:id" component={PublicClubView} />

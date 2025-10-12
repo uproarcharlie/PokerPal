@@ -27,9 +27,9 @@ export function ProtectedRoute({ children, requireAdmin = false }: ProtectedRout
     return null;
   }
 
-  // Check admin requirement - redirect to login with message
+  // Check admin requirement - redirect to public home page
   if (requireAdmin && !isAdmin) {
-    setLocation("/login");
+    setLocation("/home");
     return null;
   }
 
