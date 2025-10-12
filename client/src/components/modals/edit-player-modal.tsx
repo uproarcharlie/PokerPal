@@ -69,14 +69,12 @@ export function EditPlayerModal({ open, onOpenChange, player }: EditPlayerModalP
 
   const updatePlayerMutation = useMutation({
     mutationFn: async (data: PlayerFormData) => {
-      console.log('[DEBUG] Form data before payload:', data);
       const payload = {
         ...data,
         email: data.email || undefined,
         phone: data.phone || undefined,
         imageUrl: data.imageUrl || undefined,
       };
-      console.log('[DEBUG] Payload being sent:', payload);
 
       const response = await apiRequest("PUT", `/api/players/${player?.id}`, payload);
       return response.json();

@@ -581,11 +581,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put("/api/players/:id", async (req, res) => {
     try {
-      console.log('[DEBUG] Update player request body:', JSON.stringify(req.body, null, 2));
       const validatedData = insertPlayerSchema.partial().parse(req.body);
-      console.log('[DEBUG] Validated data:', JSON.stringify(validatedData, null, 2));
       const player = await storage.updatePlayer(req.params.id, validatedData);
-      console.log('[DEBUG] Updated player:', JSON.stringify(player, null, 2));
       if (!player) {
         return res.status(404).json({ error: "Player not found" });
       }
