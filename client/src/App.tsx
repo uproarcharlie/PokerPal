@@ -77,10 +77,10 @@ function Router() {
         </ProtectedRoute>
       )} />
 
-      {/* Standard routes with sidebar - PROTECTED */}
+      {/* Standard routes with sidebar - PROTECTED (Admin Only) */}
       <Route>
         {() => (
-          <ProtectedRoute>
+          <ProtectedRoute requireAdmin={true}>
             <div className="flex h-screen overflow-hidden">
               <Sidebar />
               <main className="flex-1 overflow-y-auto pt-[57px] lg:pt-0">
