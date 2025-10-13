@@ -30,7 +30,7 @@ export default function LandingPage() {
     <div className="min-h-screen bg-gradient-to-b from-background to-muted/20">
       {/* Navigation */}
       <nav className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container flex h-16 items-center justify-between">
+        <div className="container mx-auto flex h-16 items-center justify-between px-4">
           <div className="flex items-center gap-2">
             <img
               src="/assets/icon.png"
@@ -51,7 +51,7 @@ export default function LandingPage() {
       </nav>
 
       {/* Hero Section */}
-      <section className="container py-20 lg:py-32">
+      <section className="container mx-auto px-4 py-20 lg:py-32">
         <div className="mx-auto max-w-5xl text-center">
           <Badge className="mb-4 text-sm" variant="secondary">
             <Sparkles className="mr-1 h-3 w-3" />
@@ -124,7 +124,7 @@ export default function LandingPage() {
 
       {/* Problem Section */}
       <section className="border-y bg-muted/50 py-20">
-        <div className="container">
+        <div className="container mx-auto px-4">
           <div className="mx-auto max-w-3xl text-center">
             <h2 className="mb-4 text-3xl font-bold sm:text-4xl">
               Running a poker club shouldn't be this hard
@@ -176,7 +176,7 @@ export default function LandingPage() {
       </section>
 
       {/* Features Section */}
-      <section className="container py-20">
+      <section className="container mx-auto px-4 py-20">
         <div className="mx-auto max-w-6xl">
           <div className="mb-16 text-center">
             <Badge className="mb-4" variant="outline">
@@ -321,7 +321,7 @@ export default function LandingPage() {
 
       {/* Stats/Social Proof Section */}
       <section className="border-y bg-muted/50 py-20">
-        <div className="container">
+        <div className="container mx-auto px-4">
           <div className="mx-auto max-w-5xl">
             <div className="mb-12 text-center">
               <h2 className="mb-4 text-3xl font-bold">
@@ -362,7 +362,7 @@ export default function LandingPage() {
       </section>
 
       {/* Benefits Section */}
-      <section className="container py-20">
+      <section className="container mx-auto px-4 py-20">
         <div className="mx-auto max-w-6xl">
           <div className="mb-16 text-center">
             <h2 className="mb-4 text-3xl font-bold sm:text-4xl">
@@ -464,7 +464,7 @@ export default function LandingPage() {
 
       {/* Pricing Section */}
       <section className="border-y bg-muted/50 py-20">
-        <div className="container">
+        <div className="container mx-auto px-4">
           <div className="mx-auto max-w-5xl">
             <div className="mb-16 text-center">
               <Badge className="mb-4" variant="outline">
@@ -635,7 +635,7 @@ export default function LandingPage() {
       </section>
 
       {/* How It Works */}
-      <section className="container py-20">
+      <section className="container mx-auto px-4 py-20">
         <div className="mx-auto max-w-5xl">
           <div className="mb-16 text-center">
             <h2 className="mb-4 text-3xl font-bold sm:text-4xl">
@@ -683,7 +683,7 @@ export default function LandingPage() {
 
       {/* Final CTA */}
       <section className="border-y bg-primary py-20 text-primary-foreground">
-        <div className="container">
+        <div className="container mx-auto px-4">
           <div className="mx-auto max-w-3xl text-center">
             <h2 className="mb-4 text-3xl font-bold sm:text-4xl">
               Ready to level up your poker club?
@@ -720,7 +720,7 @@ export default function LandingPage() {
 
       {/* Footer */}
       <footer className="border-t py-12">
-        <div className="container">
+        <div className="container mx-auto px-4">
           <div className="flex flex-col items-center justify-between gap-4 sm:flex-row">
             <div className="flex items-center gap-2">
               <img
