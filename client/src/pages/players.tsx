@@ -5,8 +5,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CreatePlayerModal } from "@/components/modals/create-player-modal";
 import { EditPlayerModal } from "@/components/modals/edit-player-modal";
-import { Plus, UsersRound, ArrowLeft, Eye, Edit, Mail, Phone, Filter, Download } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Plus, UsersRound, ArrowLeft, Eye, Edit, Mail, Phone, Filter, Download, Info } from "lucide-react";
 import { Link } from "wouter";
+import { useAuth } from "@/contexts/auth-context";
 
 interface Player {
   id: string;
@@ -31,11 +33,14 @@ interface TournamentRegistration {
 interface Club {
   id: string;
   name: string;
+  ownerId?: string | null;
 }
 
 export default function Players() {
+  const { isAdmin, user } = useAuth();
   const [showCreatePlayer, setShowCreatePlayer] = useState(false);
   const [editingPlayer, setEditingPlayer] = useState<Player | null>(null);
+  const [selectedClubId, setSelectedClubId] = useState<string>("");
 
   const { data: players = [], isLoading } = useQuery<Player[]>({
     queryKey: ["/api/players"],
@@ -52,6 +57,11 @@ export default function Players() {
   const { data: clubs = [] } = useQuery<Club[]>({
     queryKey: ["/api/clubs"],
   });
+
+  // Filter clubs to only show owned clubs for non-admins
+  const ownedClubs = isAdmin
+    ? clubs
+    : clubs.filter(club => club.ownerId === user?.id);
 
   if (isLoading) {
     return (
@@ -94,60 +104,137 @@ export default function Players() {
 
     return {
       tournamentsCount: playerTournaments.length,
-      clubNames: clubNames
+      clubNames: clubNames,
+      clubIds: Array.from(uniqueClubIds)
     };
   };
+
+  // Filter players based on selected club (for non-admins)
+  const filteredPlayers = isAdmin
+    ? players
+    : selectedClubId
+      ? players.filter(player => {
+          const stats = getPlayerStats(player.id);
+          return stats.clubIds.includes(selectedClubId);
+        })
+      : [];
 
   return (
     <>
       <div className="min-h-screen">
         <header className="bg-card border-b border-border sticky top-0 z-10">
           <div className="px-8 py-4">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-4">
-                <Link href="/">
-                  <Button variant="ghost" size="sm" data-testid="back-to-dashboard">
+                <Link href="/clubs">
+                  <Button variant="ghost" size="sm" data-testid="back-to-clubs">
                     <ArrowLeft className="w-4 h-4" />
                   </Button>
                 </Link>
                 <div>
                   <h2 className="text-2xl font-bold text-foreground">Player Management</h2>
-                  <p className="text-sm text-muted-foreground mt-1">Manage your poker players and their information</p>
+                  <p className="text-sm text-muted-foreground mt-1">View players who have registered for tournaments</p>
                 </div>
               </div>
-              <Button onClick={() => setShowCreatePlayer(true)} data-testid="create-player-button">
-                <Plus className="w-4 h-4 mr-2" />
-                Create New Player
-              </Button>
             </div>
+
+            {/* Info banner */}
+            <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-4">
+              <div className="flex items-start gap-3">
+                <Info className="w-5 h-5 text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="text-sm text-blue-900 dark:text-blue-100 font-medium">
+                    Players are automatically created when they register for tournaments
+                  </p>
+                  <p className="text-xs text-blue-700 dark:text-blue-300 mt-1">
+                    To add players to your club, have them register for a tournament using the registration link or QR code.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Club selector for non-admins */}
+            {!isAdmin && (
+              <div className="flex items-center gap-3">
+                <label className="text-sm font-medium text-foreground">Select Club:</label>
+                {ownedClubs.length > 0 ? (
+                  <Select value={selectedClubId} onValueChange={setSelectedClubId}>
+                    <SelectTrigger className="w-[300px]">
+                      <SelectValue placeholder="Choose a club to view its players" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ownedClubs.map((club) => (
+                        <SelectItem key={club.id} value={club.id}>
+                          {club.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground">You don't own any clubs yet</span>
+                    <Link href="/clubs">
+                      <Button size="sm" variant="outline">
+                        <Plus className="w-4 h-4 mr-1" />
+                        Create Club
+                      </Button>
+                    </Link>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </header>
 
         <div className="p-8">
-          {players.length === 0 ? (
+          {!isAdmin && ownedClubs.length === 0 ? (
             <div className="text-center py-16">
               <UsersRound className="w-16 h-16 text-muted-foreground mx-auto mb-6" />
-              <h3 className="text-xl font-semibold text-foreground mb-3">No Players Found</h3>
+              <h3 className="text-xl font-semibold text-foreground mb-3">No Clubs Yet</h3>
               <p className="text-muted-foreground mb-6 max-w-md mx-auto">
-                Create player profiles to register them for tournaments and track their performance across games.
+                You need to create a club first before you can view players. Players are automatically added when they register for your tournaments.
               </p>
-              <Button onClick={() => setShowCreatePlayer(true)} data-testid="create-first-player">
-                <Plus className="w-4 h-4 mr-2" />
-                Create Your First Player
-              </Button>
+              <Link href="/clubs">
+                <Button>
+                  <Plus className="w-4 h-4 mr-2" />
+                  Create Your First Club
+                </Button>
+              </Link>
+            </div>
+          ) : !isAdmin && !selectedClubId ? (
+            <div className="text-center py-16">
+              <UsersRound className="w-16 h-16 text-muted-foreground mx-auto mb-6" />
+              <h3 className="text-xl font-semibold text-foreground mb-3">Select a Club</h3>
+              <p className="text-muted-foreground mb-6 max-w-md mx-auto">
+                Choose a club from the dropdown above to view its players.
+              </p>
+            </div>
+          ) : filteredPlayers.length === 0 ? (
+            <div className="text-center py-16">
+              <UsersRound className="w-16 h-16 text-muted-foreground mx-auto mb-6" />
+              <h3 className="text-xl font-semibold text-foreground mb-3">No Players Yet</h3>
+              <p className="text-muted-foreground mb-6 max-w-md mx-auto">
+                Players will appear here once they register for tournaments in this club.
+              </p>
+              <Link href="/tournaments">
+                <Button>
+                  <Plus className="w-4 h-4 mr-2" />
+                  Create a Tournament
+                </Button>
+              </Link>
             </div>
           ) : (
             <Card>
               <CardHeader className="border-b border-border flex flex-row items-center justify-between">
                 <div>
-                  <CardTitle>All Players</CardTitle>
-                  <p className="text-sm text-muted-foreground mt-1">Manage player profiles and information</p>
+                  <CardTitle>
+                    {isAdmin ? "All Players" : `Players - ${clubs.find(c => c.id === selectedClubId)?.name}`}
+                  </CardTitle>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {filteredPlayers.length} player{filteredPlayers.length !== 1 ? 's' : ''} registered
+                  </p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="sm">
-                    <Filter className="w-4 h-4 mr-2" />
-                    Filter
-                  </Button>
                   <Button variant="ghost" size="sm">
                     <Download className="w-4 h-4 mr-2" />
                     Export
@@ -168,7 +255,7 @@ export default function Players() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {players.map((player) => {
+                      {filteredPlayers.map((player) => {
                         const stats = getPlayerStats(player.id);
                         return (
                           <tr key={player.id} className="hover:bg-muted/20 transition-colors" data-testid={`player-row-${player.id}`}>
@@ -264,11 +351,6 @@ export default function Players() {
           )}
         </div>
       </div>
-
-      <CreatePlayerModal
-        open={showCreatePlayer}
-        onOpenChange={setShowCreatePlayer}
-      />
 
       <EditPlayerModal
         open={!!editingPlayer}

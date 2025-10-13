@@ -22,7 +22,8 @@ import { AddressAutocomplete } from "@/components/ui/address-autocomplete";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Check, Trash2 } from "lucide-react";
+import { useAuth } from "@/contexts/auth-context";
+import { ArrowLeft, Check, Trash2, ShieldAlert } from "lucide-react";
 
 const clubSchema = z.object({
   name: z.string().min(1, "Club name is required"),
@@ -55,17 +56,22 @@ interface Club {
   facebookUrl?: string;
   instagramUrl?: string;
   websiteUrl?: string;
+  ownerId?: string | null;
 }
 
 export default function ClubSettings() {
   const { id } = useParams();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const { user, isAdmin } = useAuth();
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
   const { data: club, isLoading } = useQuery<Club>({
     queryKey: [`/api/clubs/${id}`],
   });
+
+  // Check if user is owner or admin
+  const canEdit = isAdmin || (club?.ownerId === user?.id);
 
   const form = useForm<ClubFormData>({
     resolver: zodResolver(clubSchema),
@@ -180,6 +186,28 @@ export default function ClubSettings() {
             <Button>Back to Clubs</Button>
           </Link>
         </div>
+      </div>
+    );
+  }
+
+  // Access denied for non-owners
+  if (!canEdit) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Card className="max-w-md">
+          <CardContent className="pt-6">
+            <div className="text-center">
+              <ShieldAlert className="mx-auto h-12 w-12 text-red-500 mb-4" />
+              <h2 className="text-2xl font-bold mb-2">Access Denied</h2>
+              <p className="text-muted-foreground mb-6">
+                You don't have permission to edit this club's settings. Only the club owner can modify these settings.
+              </p>
+              <Link href="/clubs">
+                <Button>Back to Clubs</Button>
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }

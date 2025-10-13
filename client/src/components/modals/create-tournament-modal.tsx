@@ -30,6 +30,7 @@ import { ImageUpload } from "@/components/ui/image-upload";
 import { AddressAutocomplete } from "@/components/ui/address-autocomplete";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/auth-context";
 import { InfoIcon, Check, Save } from "lucide-react";
 
 const tournamentSchema = z.object({
@@ -74,6 +75,7 @@ interface Club {
   name: string;
   address?: string;
   timezone?: string;
+  ownerId?: string | null;
 }
 
 interface Season {
@@ -99,10 +101,16 @@ interface CreateTournamentModalProps {
 export function CreateTournamentModal({ open, onOpenChange }: CreateTournamentModalProps) {
   const [isDraft, setIsDraft] = useState(false);
   const { toast } = useToast();
+  const { user, isAdmin } = useAuth();
 
   const { data: clubs = [] } = useQuery<Club[]>({
     queryKey: ["/api/clubs"],
   });
+
+  // Filter to only show clubs the user owns (or all clubs if admin)
+  const ownedClubs = isAdmin
+    ? clubs
+    : clubs.filter(club => club.ownerId === user?.id);
 
   const { data: seasons = [] } = useQuery<Season[]>({
     queryKey: ["/api/seasons"],
@@ -312,10 +320,12 @@ export function CreateTournamentModal({ open, onOpenChange }: CreateTournamentMo
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          {clubs.length === 0 ? (
-                            <SelectItem value="no-clubs" disabled>No clubs available</SelectItem>
+                          {ownedClubs.length === 0 ? (
+                            <SelectItem value="no-clubs" disabled>
+                              {isAdmin ? "No clubs available" : "You don't own any clubs"}
+                            </SelectItem>
                           ) : (
-                            clubs.map((club) => (
+                            ownedClubs.map((club) => (
                               <SelectItem key={club.id} value={club.id}>
                                 {club.name}
                               </SelectItem>

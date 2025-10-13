@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { LogIn, Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff } from "lucide-react";
 
 export default function LoginPage() {
   const [, setLocation] = useLocation();
@@ -19,7 +19,7 @@ export default function LoginPage() {
 
   // Redirect if already authenticated
   if (isAuthenticated) {
-    setLocation("/dashboard");
+    setLocation("/clubs");
     return null;
   }
 
@@ -29,7 +29,7 @@ export default function LoginPage() {
 
     try {
       await login(formData.email, formData.password);
-      setLocation("/dashboard");
+      setLocation("/clubs");
     } catch (err) {
       // Error is handled by auth context
     } finally {
@@ -41,11 +41,16 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1">
-          <div className="flex items-center gap-2">
-            <LogIn className="h-6 w-6" />
-            <CardTitle className="text-2xl font-bold">Welcome Back</CardTitle>
+          <div className="flex items-center justify-center gap-2 mb-2">
+            <img
+              src="/assets/icon.png"
+              alt="LovePoker.club"
+              className="h-12 w-12 rounded-lg object-contain"
+            />
+            <span className="text-2xl font-bold">LovePoker.club</span>
           </div>
-          <CardDescription>
+          <CardTitle className="text-2xl font-bold text-center">Welcome Back</CardTitle>
+          <CardDescription className="text-center">
             Sign in to your account to continue
           </CardDescription>
         </CardHeader>

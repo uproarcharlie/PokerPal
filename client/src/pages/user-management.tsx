@@ -33,19 +33,18 @@ export default function UserManagementPage() {
   const [, setLocation] = useLocation();
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState<"all" | "user" | "player">("all");
+  const [roleFilter, setRoleFilter] = useState<"all" | "admin" | "full_member">("all");
 
   // Fetch all users
   const { data: users, isLoading } = useQuery<User[]>({
     queryKey: ["users"],
     queryFn: async () => {
-      console.log("[USER MANAGEMENT] Fetching users, isAdmin:", isAdmin);
       const response = await fetch("/api/admin/users", {
         credentials: "include",
       });
       if (!response.ok) throw new Error("Failed to fetch users");
       const data = await response.json();
-      console.log("[USER MANAGEMENT] Received data:", data);
-      console.log("[USER MANAGEMENT] Data length:", data?.length);
       return data;
     },
     enabled: isAdmin,
@@ -167,15 +166,13 @@ export default function UserManagementPage() {
     );
   }
 
-  const filteredUsers = users?.filter(user =>
-    user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (user.email?.toLowerCase() || '').includes(searchQuery.toLowerCase())
-  );
-
-  console.log("[USER MANAGEMENT] Rendering with users:", users);
-  console.log("[USER MANAGEMENT] Rendering with filteredUsers:", filteredUsers);
-  console.log("[USER MANAGEMENT] isLoading:", isLoading);
-  console.log("[USER MANAGEMENT] isAdmin:", isAdmin);
+  const filteredUsers = users?.filter(user => {
+    const matchesSearch = user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (user.email?.toLowerCase() || '').includes(searchQuery.toLowerCase());
+    const matchesType = typeFilter === "all" || user.type === typeFilter;
+    const matchesRole = roleFilter === "all" || user.role === roleFilter;
+    return matchesSearch && matchesType && matchesRole;
+  });
 
   return (
     <div className="container max-w-7xl py-8">
@@ -186,22 +183,6 @@ export default function UserManagementPage() {
             User Management
           </h1>
           <p className="text-muted-foreground">Manage all users, club members, and permissions</p>
-          <Button
-            onClick={async () => {
-              console.log("[DEBUG] Fetching /api/admin/users directly...");
-              const res = await fetch("/api/admin/users", { credentials: "include" });
-              console.log("[DEBUG] Response status:", res.status);
-              const data = await res.json();
-              console.log("[DEBUG] Response data:", data);
-              console.log("[DEBUG] Data length:", data?.length);
-              alert(`Found ${data?.length || 0} users/players. Check console for details.`);
-            }}
-            variant="outline"
-            size="sm"
-            className="mt-2"
-          >
-            Debug API
-          </Button>
         </div>
       </div>
 
@@ -231,17 +212,41 @@ export default function UserManagementPage() {
 
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle>All Users & Club Members</CardTitle>
-              <CardDescription>View and manage all registered users and club members</CardDescription>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle>All Users & Club Members</CardTitle>
+                <CardDescription>View and manage all registered users and club members</CardDescription>
+              </div>
             </div>
-            <div className="w-64">
-              <Input
-                placeholder="Search users..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
+            <div className="flex gap-4">
+              <div className="flex-1">
+                <Input
+                  placeholder="Search users..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+              </div>
+              <Select value={typeFilter} onValueChange={(value: any) => setTypeFilter(value)}>
+                <SelectTrigger className="w-[180px]">
+                  <SelectValue placeholder="Filter by type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Types</SelectItem>
+                  <SelectItem value="user">Users</SelectItem>
+                  <SelectItem value="player">Club Members</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={roleFilter} onValueChange={(value: any) => setRoleFilter(value)}>
+                <SelectTrigger className="w-[180px]">
+                  <SelectValue placeholder="Filter by role" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Roles</SelectItem>
+                  <SelectItem value="admin">Admin</SelectItem>
+                  <SelectItem value="full_member">Full Member</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
         </CardHeader>

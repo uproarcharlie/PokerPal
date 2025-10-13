@@ -226,8 +226,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const allUsers = await storage.getAllUsers();
       const allPlayers = await storage.getPlayers();
 
-      console.log(`[USER MANAGEMENT] Found ${allUsers.length} users and ${allPlayers.length} players`);
-
       // Transform users
       const usersData = allUsers.map(user => ({
         id: user.id,
@@ -262,7 +260,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return dateB.getTime() - dateA.getTime();
       });
 
-      console.log(`[USER MANAGEMENT] Returning ${allData.length} total entries`);
       res.json(allData);
     } catch (error) {
       console.error('Error fetching users:', error);
@@ -454,7 +451,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/clubs", requireAuth, async (req, res) => {
     try {
       const validatedData = insertClubSchema.parse(req.body);
-      const club = await storage.createClub(validatedData);
+      // Set the owner to the current user
+      const clubData = {
+        ...validatedData,
+        ownerId: req.user!.id
+      };
+      const club = await storage.createClub(clubData);
       res.status(201).json(club);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -467,10 +469,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/clubs/:id", requireAuth, async (req, res) => {
     try {
       const validatedData = insertClubSchema.partial().parse(req.body);
-      const club = await storage.updateClub(req.params.id, validatedData);
-      if (!club) {
+
+      // Check ownership
+      const existingClub = await storage.getClub(req.params.id);
+      if (!existingClub) {
         return res.status(404).json({ error: "Club not found" });
       }
+
+      // Allow admin or owner to update
+      const isAdmin = req.user!.role === 'admin';
+      const isOwner = existingClub.ownerId === req.user!.id;
+
+      if (!isAdmin && !isOwner) {
+        return res.status(403).json({ error: "You don't have permission to update this club" });
+      }
+
+      const club = await storage.updateClub(req.params.id, validatedData);
       res.json(club);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -482,6 +496,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/clubs/:id", requireAuth, async (req, res) => {
     try {
+      // Check ownership before delete
+      const existingClub = await storage.getClub(req.params.id);
+      if (!existingClub) {
+        return res.status(404).json({ error: "Club not found" });
+      }
+
+      // Allow admin or owner to delete
+      const isAdmin = req.user!.role === 'admin';
+      const isOwner = existingClub.ownerId === req.user!.id;
+
+      if (!isAdmin && !isOwner) {
+        return res.status(403).json({ error: "You don't have permission to delete this club" });
+      }
+
       const deleted = await storage.deleteClub(req.params.id);
       if (!deleted) {
         return res.status(404).json({ error: "Club not found" });
@@ -667,10 +695,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put("/api/tournaments/:id", async (req, res) => {
+  app.put("/api/tournaments/:id", requireAuth, async (req, res) => {
     try {
       const validatedData = insertTournamentSchema.partial().parse(req.body);
       const oldTournament = await storage.getTournament(req.params.id);
+
+      if (!oldTournament) {
+        return res.status(404).json({ error: "Tournament not found" });
+      }
+
+      // Check ownership - user must own the club this tournament belongs to
+      const club = await storage.getClub(oldTournament.clubId);
+      const isAdmin = req.user!.role === 'admin';
+      const isOwner = club?.ownerId === req.user!.id;
+
+      if (!isAdmin && !isOwner) {
+        return res.status(403).json({ error: "You don't have permission to update this tournament" });
+      }
+
       const tournament = await storage.updateTournament(req.params.id, validatedData);
       if (!tournament) {
         return res.status(404).json({ error: "Tournament not found" });
@@ -710,11 +752,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/tournaments/:id", async (req, res) => {
+  app.delete("/api/tournaments/:id", requireAuth, async (req, res) => {
     try {
-      console.log(`Deleting tournament with ID: ${req.params.id}`);
+      const tournament = await storage.getTournament(req.params.id);
+      if (!tournament) {
+        return res.status(404).json({ error: "Tournament not found" });
+      }
+
+      // Check ownership - user must own the club this tournament belongs to
+      const club = await storage.getClub(tournament.clubId);
+      const isAdmin = req.user!.role === 'admin';
+      const isOwner = club?.ownerId === req.user!.id;
+
+      if (!isAdmin && !isOwner) {
+        return res.status(403).json({ error: "You don't have permission to delete this tournament" });
+      }
+
       const deleted = await storage.deleteTournament(req.params.id);
-      console.log(`Delete result: ${deleted}`);
       if (!deleted) {
         return res.status(404).json({ error: "Tournament not found" });
       }
@@ -957,9 +1011,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put("/api/registrations/:id", async (req, res) => {
     try {
-      console.log('PUT /api/registrations/:id - Request body:', req.body);
       const validatedData = insertTournamentRegistrationSchema.partial().parse(req.body);
-      console.log('Validated data:', validatedData);
       const oldRegistration = await storage.getTournamentRegistration(req.params.id);
 
       // Check if prize pool is locked for rebuys/addons/high hands

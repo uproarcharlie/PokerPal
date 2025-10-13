@@ -34,6 +34,7 @@ interface Tournament {
 interface Club {
   id: string;
   name: string;
+  imageUrl?: string;
 }
 
 export default function Tournaments() {
@@ -108,6 +109,11 @@ export default function Tournaments() {
   const getClubInitials = (clubId: string) => {
     const clubName = getClubName(clubId);
     return clubName.substring(0, 2).toUpperCase();
+  };
+
+  const getClubImage = (clubId: string) => {
+    const club = clubs.find(c => c.id === clubId);
+    return club?.imageUrl;
   };
 
   const copyRegistrationLink = async (tournamentId: string) => {
@@ -222,9 +228,17 @@ export default function Tournaments() {
                           </td>
                           <td className="py-4 px-6">
                             <div className="flex items-center gap-2">
-                              <div className="w-8 h-8 bg-gradient-to-br from-primary to-accent rounded-md flex items-center justify-center text-white text-xs font-bold">
-                                {getClubInitials(tournament.clubId)}
-                              </div>
+                              {getClubImage(tournament.clubId) ? (
+                                <img
+                                  src={getClubImage(tournament.clubId)}
+                                  alt={getClubName(tournament.clubId)}
+                                  className="w-8 h-8 rounded-md object-cover"
+                                />
+                              ) : (
+                                <div className="w-8 h-8 bg-gradient-to-br from-primary to-accent rounded-md flex items-center justify-center text-white text-xs font-bold">
+                                  {getClubInitials(tournament.clubId)}
+                                </div>
+                              )}
                               <span className="text-sm font-medium text-foreground">{getClubName(tournament.clubId)}</span>
                             </div>
                           </td>

@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CreateClubModal } from "@/components/modals/create-club-modal";
 import { Plus, Users, Eye, Settings as SettingsIcon, ArrowLeft, ChevronDown, ChevronUp } from "lucide-react";
 import { Link, useLocation } from "wouter";
+import { useAuth } from "@/contexts/auth-context";
 
 interface Club {
   id: string;
@@ -12,6 +13,7 @@ interface Club {
   description?: string;
   imageUrl?: string;
   createdAt: string;
+  ownerId?: string | null;
 }
 
 interface Tournament {
@@ -28,6 +30,7 @@ interface Season {
 }
 
 export default function Clubs() {
+  const { user, isAdmin } = useAuth();
   const [showCreateClub, setShowCreateClub] = useState(false);
   const [expandedDescriptions, setExpandedDescriptions] = useState<Set<string>>(new Set());
   const [, setLocation] = useLocation();
@@ -225,26 +228,28 @@ export default function Clubs() {
                     </div>
 
                     <div className="pt-4 border-t border-border flex gap-2">
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="flex-1"
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={isAdmin || club.ownerId === user?.id ? "flex-1" : "w-full"}
                         onClick={() => setLocation(`/clubs/${club.id}`)}
                         data-testid={`view-club-${club.id}`}
                       >
                         <Eye className="w-4 h-4 mr-1" />
                         View
                       </Button>
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="flex-1"
-                        onClick={() => setLocation(`/clubs/${club.id}/settings`)}
-                        data-testid={`settings-club-${club.id}`}
-                      >
-                        <SettingsIcon className="w-4 h-4 mr-1" />
-                        Settings
-                      </Button>
+                      {(isAdmin || club.ownerId === user?.id) && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-1"
+                          onClick={() => setLocation(`/clubs/${club.id}/settings`)}
+                          data-testid={`settings-club-${club.id}`}
+                        >
+                          <SettingsIcon className="w-4 h-4 mr-1" />
+                          Settings
+                        </Button>
+                      )}
                     </div>
                   </CardContent>
                 </Card>

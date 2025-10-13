@@ -17,6 +17,7 @@ export const clubs = pgTable("clubs", {
   facebookUrl: text("facebook_url"),
   instagramUrl: text("instagram_url"),
   websiteUrl: text("website_url"),
+  ownerId: varchar("owner_id").references(() => users.id, { onDelete: "set null" }), // Club owner
   createdAt: timestamp("created_at").defaultNow(),
 });
 

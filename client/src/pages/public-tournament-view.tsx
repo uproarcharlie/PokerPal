@@ -610,19 +610,10 @@ export default function PublicTournamentView() {
                         }
 
                         // Add participation points row if applicable
-                        console.log('Checking participation points:', {
-                          trackPoints: tournament.trackPoints,
-                          participationPoints: pointsSystem?.participationPoints,
-                          maxPosition,
-                          maxPlayers: tournament.maxPlayers
-                        });
-
                         if (tournament.trackPoints && pointsSystem?.participationPoints && pointsSystem.participationPoints > 0) {
                           const startPosition = maxPosition + 1;
-                          console.log('Start position:', startPosition, 'Max players:', tournament.maxPlayers);
 
                           if (startPosition <= tournament.maxPlayers) {
-                            console.log('Adding participation row!');
                             rows.push(
                               <tr key="participation" className="bg-muted/20 border-t-2 border-border">
                                 <td className="py-3 px-3">

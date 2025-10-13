@@ -15,6 +15,7 @@ import TournamentDetails from "@/pages/tournament-details";
 import PublicTournamentView from "@/pages/public-tournament-view";
 import PublicClubView from "@/pages/public-club-view";
 import PublicHome from "@/pages/public-home";
+import LandingPage from "@/pages/landing";
 import Seasons from "@/pages/seasons";
 import SeasonSettings from "@/pages/season-settings";
 import Leaderboards from "@/pages/leaderboards";
@@ -38,6 +39,7 @@ function Router() {
       <Route path="/register" component={RegisterPage} />
 
       {/* Public routes without sidebar */}
+      <Route path="/" component={LandingPage} />
       <Route path="/home" component={PublicHome} />
       <Route path="/register/:tournamentId" component={PublicRegisterPage} />
       <Route path="/tournament/:id" component={PublicTournamentView} />
@@ -79,16 +81,14 @@ function Router() {
         </ProtectedRoute>
       )} />
 
-      {/* Standard routes with sidebar - PROTECTED (Admin Only) */}
+      {/* Standard routes with sidebar - PROTECTED (Full Members & Admins) */}
       <Route>
         {() => (
-          <ProtectedRoute requireAdmin={true}>
+          <ProtectedRoute>
             <div className="flex h-screen overflow-hidden">
               <Sidebar />
               <main className="flex-1 overflow-y-auto pt-[57px] lg:pt-0">
                 <Switch>
-                  <Route path="/" component={Dashboard} />
-                  <Route path="/dashboard" component={Dashboard} />
                   <Route path="/clubs" component={Clubs} />
                   <Route path="/clubs/:id/settings" component={ClubSettings} />
                   <Route path="/clubs/:id" component={ClubDetails} />
@@ -97,7 +97,13 @@ function Router() {
                   <Route path="/seasons" component={Seasons} />
                   <Route path="/leaderboards" component={Leaderboards} />
                   <Route path="/players" component={Players} />
-                  <Route path="/users" component={UserManagement} />
+                  <Route path="/users">
+                    {() => (
+                      <ProtectedRoute requireAdmin={true}>
+                        <UserManagement />
+                      </ProtectedRoute>
+                    )}
+                  </Route>
                   <Route path="/settings" component={SettingsPage} />
                   <Route component={NotFound} />
                 </Switch>

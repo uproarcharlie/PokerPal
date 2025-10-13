@@ -63,12 +63,6 @@ export function AssignHighHandModal({
     reg => reg.enteringHighHands && reg.highHandWinner
   );
 
-  // Debug logging
-  console.log('Total registrations:', registrations.length);
-  console.log('Entering high hands:', registrations.filter(r => r.enteringHighHands).length);
-  console.log('Eligible players (entering && !won):', eligiblePlayers.length);
-  console.log('Previous winners:', previousWinners.length);
-
   const assignHighHandMutation = useMutation({
     mutationFn: async () => {
       const selectedReg = registrations.find(r => r.playerId === selectedPlayerId);

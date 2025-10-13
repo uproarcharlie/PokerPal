@@ -19,7 +19,6 @@ export function Sidebar() {
   const { user, logout, isAuthenticated, isAdmin } = useAuth();
 
   const navigation = [
-    { name: "Dashboard", href: "/", icon: LayoutDashboard },
     { name: "Clubs", href: "/clubs", icon: Users },
     { name: "Seasons", href: "/seasons", icon: Calendar },
     { name: "Tournaments", href: "/tournaments", icon: Trophy },
@@ -51,9 +50,11 @@ export function Sidebar() {
       <div className="lg:hidden fixed top-0 left-0 right-0 z-50 bg-card border-b border-border">
         <div className="flex items-center justify-between p-4">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-              <Diamond className="text-primary-foreground w-5 h-5" />
-            </div>
+            <img
+              src="/assets/icon.png"
+              alt="LovePoker.club"
+              className="w-8 h-8 rounded-lg object-contain"
+            />
             <div>
               <h1 className="text-sm font-bold text-foreground">LovePoker.club</h1>
             </div>
@@ -89,9 +90,11 @@ export function Sidebar() {
         {/* Logo - Desktop Only */}
         <div className="hidden lg:block p-6 border-b border-border">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-primary rounded-lg flex items-center justify-center">
-              <Diamond className="text-primary-foreground text-lg" />
-            </div>
+            <img
+              src="/assets/icon.png"
+              alt="LovePoker.club"
+              className="w-10 h-10 rounded-lg object-contain"
+            />
             <div>
               <h1 className="text-lg font-bold text-foreground">LovePoker.club</h1>
               <p className="text-xs text-muted-foreground">Where Communities Thrive</p>
