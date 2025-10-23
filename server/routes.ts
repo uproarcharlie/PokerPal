@@ -745,6 +745,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(tournament);
     } catch (error) {
+      console.error('Update tournament error:', error);
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: "Invalid tournament data", details: error.errors });
       }
