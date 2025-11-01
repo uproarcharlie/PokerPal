@@ -232,7 +232,14 @@ export default function Leaderboards() {
                               {entry.player.email && ` • ${entry.player.email}`}
                             </p>
                           </div>
-                          
+
+                          <div className="text-right shrink-0 mr-4">
+                            <p className={`text-xl font-bold ${isTopThree ? 'text-accent' : 'text-foreground'}`}>
+                              {entry.tournaments}
+                            </p>
+                            <p className="text-xs text-muted-foreground">tournaments</p>
+                          </div>
+
                           <div className="text-right shrink-0">
                             <p className={`text-xl font-bold ${isTopThree ? 'text-accent' : 'text-foreground'}`}>
                               {entry.points.toLocaleString()}
