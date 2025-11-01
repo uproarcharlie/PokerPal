@@ -92,8 +92,10 @@ function SeasonLeaderboard({ season }: { season: Season }) {
                   <tr className="border-b border-border bg-muted/30">
                     <th className="text-left py-3 px-4 text-xs font-semibold text-muted-foreground uppercase">Rank</th>
                     <th className="text-left py-3 px-4 text-xs font-semibold text-muted-foreground uppercase">Player</th>
-                    <th className="text-center py-3 px-4 text-xs font-semibold text-muted-foreground uppercase">Tournaments</th>
-                    <th className="text-right py-3 px-4 text-xs font-semibold text-muted-foreground uppercase">Points</th>
+                    <th className="text-center py-3 px-4 text-xs font-semibold text-muted-foreground uppercase hidden md:table-cell">Tournaments</th>
+                    <th className="text-right py-3 px-4 text-xs font-semibold text-muted-foreground uppercase hidden md:table-cell">Points</th>
+                    <th className="text-right py-3 px-4 text-xs font-semibold text-muted-foreground uppercase md:hidden">Points</th>
+                    <th className="text-center py-3 px-4 text-xs font-semibold text-muted-foreground uppercase md:hidden">Tournaments</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
@@ -143,16 +145,27 @@ function SeasonLeaderboard({ season }: { season: Season }) {
                             </div>
                           </div>
                         </td>
-                        <td className="py-4 px-4 text-center">
+                        <td className="py-4 px-4 text-center hidden md:table-cell">
                           <Badge variant="outline" className="font-medium">
                             {entry.tournaments}
                           </Badge>
                         </td>
-                        <td className="py-4 px-4 text-right">
+                        <td className="py-4 px-4 text-right hidden md:table-cell">
                           <span className={`text-xl font-bold ${isTopThree ? 'text-accent' : 'text-foreground'}`}>
                             {entry.points.toLocaleString()}
                           </span>
                           <span className="text-xs text-muted-foreground ml-1">pts</span>
+                        </td>
+                        <td className="py-4 px-4 text-right md:hidden">
+                          <span className={`text-xl font-bold ${isTopThree ? 'text-accent' : 'text-foreground'}`}>
+                            {entry.points.toLocaleString()}
+                          </span>
+                          <span className="text-xs text-muted-foreground ml-1">pts</span>
+                        </td>
+                        <td className="py-4 px-4 text-center md:hidden">
+                          <Badge variant="outline" className="font-medium">
+                            {entry.tournaments}
+                          </Badge>
                         </td>
                       </tr>
                     );
