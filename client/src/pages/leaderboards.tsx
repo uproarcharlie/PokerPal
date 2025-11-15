@@ -235,16 +235,16 @@ export default function Leaderboards() {
 
                           <div className="text-right shrink-0 mr-4">
                             <p className={`text-xl font-bold ${isTopThree ? 'text-accent' : 'text-foreground'}`}>
-                              {entry.tournaments}
+                              {entry.points.toLocaleString()}
                             </p>
-                            <p className="text-xs text-muted-foreground">tournaments</p>
+                            <p className="text-xs text-muted-foreground">points</p>
                           </div>
 
                           <div className="text-right shrink-0">
                             <p className={`text-xl font-bold ${isTopThree ? 'text-accent' : 'text-foreground'}`}>
-                              {entry.points.toLocaleString()}
+                              {entry.tournaments}
                             </p>
-                            <p className="text-xs text-muted-foreground">points</p>
+                            <p className="text-xs text-muted-foreground">tournaments</p>
                           </div>
                         </div>
                       );
