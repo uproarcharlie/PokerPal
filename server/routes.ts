@@ -4,6 +4,7 @@ import { z } from "zod";
 import { storage } from "./storage";
 import { upload } from "./config/multer";
 import { uploadToCloud, isCloudStorageEnabled } from "./services/storage";
+import { processImage } from "./services/image";
 import { AuthService } from "./services/auth";
 import { requireAuth, requireAdmin, requireFullMember } from "./middleware/auth";
 import fs from "fs";
@@ -379,10 +380,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const entityType = req.body.entityType || 'misc';
 
+      // Normalise every upload (auto-orient, downscale, high-quality WebP) so we
+      // never store multi-megapixel originals and images stay crisp and consistent.
+      const processed = await processImage(req.file.buffer, entityType);
+      const baseName = path.parse(req.file.originalname).name.replace(/[^a-zA-Z0-9-_]/g, '_') || 'image';
+      const filename = `${baseName}.${processed.ext}`;
+
       // Use cloud storage in production, local storage in development
       if (isCloudStorageEnabled()) {
         try {
-          const result = await uploadToCloud(req.file, entityType);
+          const result = await uploadToCloud(processed.buffer, processed.contentType, entityType, filename);
           res.json({ imageUrl: result.url });
         } catch (error) {
           console.error('Cloud upload error:', error);
@@ -397,13 +404,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           fs.mkdirSync(entityDir, { recursive: true });
         }
 
-        // Move file from uploads/ to uploads/entityType/
-        const oldPath = req.file.path;
-        const newPath = path.join(entityDir, req.file.filename);
+        const diskName = `image-${Date.now()}-${Math.round(Math.random() * 1e9)}.${processed.ext}`;
+        fs.writeFileSync(path.join(entityDir, diskName), processed.buffer);
 
-        fs.renameSync(oldPath, newPath);
-
-        const imageUrl = `/uploads/${entityType}/${req.file.filename}`;
+        const imageUrl = `/uploads/${entityType}/${diskName}`;
         res.json({ imageUrl });
       }
     } catch (error) {
@@ -927,18 +931,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/tournaments/:tournamentId/registrations", async (req, res) => {
     try {
       const registrations = await storage.getTournamentRegistrations(req.params.tournamentId);
-      
-      // Get player details for each registration
-      const registrationsWithPlayers = await Promise.all(
-        registrations.map(async (reg) => {
-          const player = await storage.getPlayer(reg.playerId);
-          return {
-            ...reg,
-            player: player || null
-          };
-        })
-      );
-      
+
+      // Batch-fetch all players in one query, then map (avoids an N+1 getPlayer per registration)
+      const players = await storage.getPlayersByIds(registrations.map(reg => reg.playerId));
+      const playersById = new Map(players.map(p => [p.id, p]));
+
+      const registrationsWithPlayers = registrations.map(reg => ({
+        ...reg,
+        player: playersById.get(reg.playerId) || null,
+      }));
+
       res.json(registrationsWithPlayers);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch tournament registrations" });

@@ -24,22 +24,24 @@ export interface UploadResult {
 }
 
 export async function uploadToCloud(
-  file: Express.Multer.File,
-  entityType: string
+  buffer: Buffer,
+  contentType: string,
+  entityType: string,
+  filename: string
 ): Promise<UploadResult> {
   if (!s3Client || !process.env.R2_BUCKET_NAME) {
     throw new Error("Cloud storage not configured");
   }
 
-  const key = `${entityType}/${Date.now()}-${file.originalname}`;
+  const key = `${entityType}/${Date.now()}-${filename}`;
 
   const upload = new Upload({
     client: s3Client,
     params: {
       Bucket: process.env.R2_BUCKET_NAME,
       Key: key,
-      Body: file.buffer,
-      ContentType: file.mimetype,
+      Body: buffer,
+      ContentType: contentType,
     },
   });
 

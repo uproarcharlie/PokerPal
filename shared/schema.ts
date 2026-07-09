@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, decimal, boolean, timestamp, uuid } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, decimal, boolean, timestamp, uuid, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -19,7 +19,9 @@ export const clubs = pgTable("clubs", {
   websiteUrl: text("website_url"),
   ownerId: varchar("owner_id").references(() => users.id, { onDelete: "set null" }), // Club owner
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => ({
+  ownerIdx: index("idx_clubs_owner_id").on(table.ownerId),
+}));
 
 // Seasons table
 export const seasons = pgTable("seasons", {
@@ -30,7 +32,9 @@ export const seasons = pgTable("seasons", {
   endDate: timestamp("end_date"),
   isActive: boolean("is_active").default(true),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => ({
+  clubIdx: index("idx_seasons_club_id").on(table.clubId),
+}));
 
 // Users table - Full members with authentication
 export const users = pgTable("users", {
@@ -56,7 +60,10 @@ export const players = pgTable("players", {
   imageUrl: text("image_url"),
   userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }), // Link to user if they upgrade to full member
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => ({
+  userIdx: index("idx_players_user_id").on(table.userId),
+  emailIdx: index("idx_players_email").on(table.email),
+}));
 
 // Tournaments table
 export const tournaments = pgTable("tournaments", {
@@ -97,7 +104,11 @@ export const tournaments = pgTable("tournaments", {
   useClubAddress: boolean("use_club_address").default(true),
   address: text("address"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => ({
+  clubIdx: index("idx_tournaments_club_id").on(table.clubId),
+  seasonIdx: index("idx_tournaments_season_id").on(table.seasonId),
+  pointsSystemIdx: index("idx_tournaments_points_system_id").on(table.pointsSystemId),
+}));
 
 // Tournament registrations
 export const tournamentRegistrations = pgTable("tournament_registrations", {
@@ -119,7 +130,11 @@ export const tournamentRegistrations = pgTable("tournament_registrations", {
   paymentConfirmed: boolean("payment_confirmed").default(false),
   highHandWinner: boolean("high_hand_winner").default(false),
   highHandAmount: decimal("high_hand_amount", { precision: 10, scale: 2 }),
-});
+}, (table) => ({
+  tournamentIdx: index("idx_tournament_registrations_tournament_id").on(table.tournamentId),
+  playerIdx: index("idx_tournament_registrations_player_id").on(table.playerId),
+  eliminatedByIdx: index("idx_tournament_registrations_eliminated_by").on(table.eliminatedBy),
+}));
 
 // Points systems
 export const pointsSystems = pgTable("points_systems", {
@@ -130,7 +145,9 @@ export const pointsSystems = pgTable("points_systems", {
   participationPoints: integer("participation_points").default(0),
   knockoutPoints: integer("knockout_points").default(0),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => ({
+  seasonIdx: index("idx_points_systems_season_id").on(table.seasonId),
+}));
 
 // Points allocations
 export const pointsAllocations = pgTable("points_allocations", {
@@ -140,7 +157,9 @@ export const pointsAllocations = pgTable("points_allocations", {
   positionEnd: integer("position_end"), // For position ranges
   points: integer("points").notNull(),
   description: text("description"),
-});
+}, (table) => ({
+  pointsSystemIdx: index("idx_points_allocations_points_system_id").on(table.pointsSystemId),
+}));
 
 // Pending actions
 export const pendingActions = pgTable("pending_actions", {
@@ -150,7 +169,11 @@ export const pendingActions = pgTable("pending_actions", {
   actionType: text("action_type").notNull(), // rebuy, addon, knockout
   targetPlayerId: varchar("target_player_id").references(() => players.id, { onDelete: "cascade" }),
   timestamp: timestamp("timestamp").defaultNow(),
-});
+}, (table) => ({
+  tournamentIdx: index("idx_pending_actions_tournament_id").on(table.tournamentId),
+  playerIdx: index("idx_pending_actions_player_id").on(table.playerId),
+  targetPlayerIdx: index("idx_pending_actions_target_player_id").on(table.targetPlayerId),
+}));
 
 // Activity log
 export const activityLog = pgTable("activity_log", {
@@ -161,7 +184,10 @@ export const activityLog = pgTable("activity_log", {
   eventData: text("event_data"), // JSON string for additional event details
   description: text("description").notNull(),
   timestamp: timestamp("timestamp", { withTimezone: true, mode: 'string' }).defaultNow(),
-});
+}, (table) => ({
+  // Matches getActivityLog: WHERE tournament_id = ? ORDER BY timestamp DESC, id DESC
+  tournamentTimeIdx: index("idx_activity_log_tournament_id_timestamp").on(table.tournamentId, table.timestamp),
+}));
 
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users, {

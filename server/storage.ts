@@ -1,4 +1,4 @@
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, sql, inArray } from "drizzle-orm";
 import { db } from "./db";
 import {
   clubs, seasons, players, tournaments, tournamentRegistrations,
@@ -36,6 +36,7 @@ export interface IStorage {
   // Players
   getPlayer(id: string): Promise<Player | undefined>;
   getPlayers(): Promise<Player[]>;
+  getPlayersByIds(ids: string[]): Promise<Player[]>;
   getPlayerByEmail(email: string): Promise<Player | undefined>;
   createPlayer(player: InsertPlayer): Promise<Player>;
   updatePlayer(id: string, player: Partial<InsertPlayer>): Promise<Player | undefined>;
@@ -118,35 +119,15 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getClubMembersCount(clubId: string): Promise<number> {
-    // Get all tournaments for this club
-    const clubTournaments = await db.select().from(tournaments).where(eq(tournaments.clubId, clubId));
-    const tournamentIds = clubTournaments.map(t => t.id);
-
-    if (tournamentIds.length === 0) {
-      return 0;
-    }
-
-    // Get all unique player IDs from tournament registrations
-    const registrations = await db.select({
-      playerId: tournamentRegistrations.playerId
-    })
-    .from(tournamentRegistrations)
-    .where(eq(tournamentRegistrations.tournamentId, tournamentIds[0])); // Start with first tournament
-
-    // Get registrations from all tournaments and collect unique player IDs
-    const uniquePlayerIds = new Set<string>();
-
-    for (const tournamentId of tournamentIds) {
-      const tournamentRegs = await db.select({
-        playerId: tournamentRegistrations.playerId
-      })
+    // Count distinct players who have registered for any of this club's tournaments,
+    // in a single query (previously: one query per tournament + an unused query).
+    const [row] = await db
+      .select({ count: sql<number>`count(distinct ${tournamentRegistrations.playerId})` })
       .from(tournamentRegistrations)
-      .where(eq(tournamentRegistrations.tournamentId, tournamentId));
+      .innerJoin(tournaments, eq(tournamentRegistrations.tournamentId, tournaments.id))
+      .where(eq(tournaments.clubId, clubId));
 
-      tournamentRegs.forEach(reg => uniquePlayerIds.add(reg.playerId));
-    }
-
-    return uniquePlayerIds.size;
+    return Number(row?.count ?? 0);
   }
 
   // Seasons
@@ -186,6 +167,11 @@ export class DatabaseStorage implements IStorage {
 
   async getPlayers(): Promise<Player[]> {
     return await db.select().from(players);
+  }
+
+  async getPlayersByIds(ids: string[]): Promise<Player[]> {
+    if (ids.length === 0) return [];
+    return await db.select().from(players).where(inArray(players.id, ids));
   }
 
   async getPlayerByEmail(email: string): Promise<Player | undefined> {
