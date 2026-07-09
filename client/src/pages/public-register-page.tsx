@@ -13,7 +13,8 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { CheckCircle2, UserPlus, Users, Trophy, ArrowLeft } from "lucide-react";
+import { CheckCircle2, UserPlus, Users, Trophy, ArrowLeft, User } from "lucide-react";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import type { Tournament, Player } from "@shared/schema";
 
 interface Club {
@@ -388,8 +389,16 @@ export function PublicRegisterPage() {
                     </SelectTrigger>
                     <SelectContent>
                       {players.map((player) => (
-                        <SelectItem key={player.id} value={player.id}>
-                          {player.name}
+                        <SelectItem key={player.id} value={player.id} className="py-2">
+                          <div className="flex items-center gap-2">
+                            <Avatar className="w-6 h-6">
+                              <AvatarImage src={player.imageUrl ?? undefined} alt={player.name} />
+                              <AvatarFallback>
+                                <User className="w-3 h-3" />
+                              </AvatarFallback>
+                            </Avatar>
+                            <span>{player.name}</span>
+                          </div>
                         </SelectItem>
                       ))}
                     </SelectContent>

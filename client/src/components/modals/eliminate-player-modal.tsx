@@ -17,14 +17,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { UserX } from "lucide-react";
+import { UserX, User } from "lucide-react";
 
 interface Player {
   id: string;
   name: string;
   email?: string;
+  imageUrl?: string;
 }
 
 interface TournamentRegistration {
@@ -119,8 +121,16 @@ export function EliminatePlayerModal({
               <SelectContent>
                 <SelectItem value="none">None</SelectItem>
                 {activePlayers.map((reg) => (
-                  <SelectItem key={reg.playerId} value={reg.playerId}>
-                    {reg.player?.name || "Unknown Player"}
+                  <SelectItem key={reg.playerId} value={reg.playerId} className="py-2">
+                    <div className="flex items-center gap-2">
+                      <Avatar className="w-6 h-6">
+                        <AvatarImage src={reg.player?.imageUrl} alt={reg.player?.name} />
+                        <AvatarFallback>
+                          <User className="w-3 h-3" />
+                        </AvatarFallback>
+                      </Avatar>
+                      <span>{reg.player?.name || "Unknown Player"}</span>
+                    </div>
                   </SelectItem>
                 ))}
               </SelectContent>

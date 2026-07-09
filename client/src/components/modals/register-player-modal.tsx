@@ -20,9 +20,10 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Check, Plus } from "lucide-react";
+import { Check, Plus, User } from "lucide-react";
 
 const registrationSchema = z.object({
   playerId: z.string().min(1, "Player selection is required"),
@@ -37,6 +38,7 @@ interface Player {
   id: string;
   name: string;
   email?: string;
+  imageUrl?: string;
 }
 
 interface RegisterPlayerModalProps {
@@ -144,8 +146,19 @@ export function RegisterPlayerModal({ open, onOpenChange, tournamentId }: Regist
                       <SelectItem value="no-players" disabled>No players available</SelectItem>
                     ) : (
                       players.map((player) => (
-                        <SelectItem key={player.id} value={player.id}>
-                          {player.name} {player.email && `(${player.email})`}
+                        <SelectItem key={player.id} value={player.id} className="py-2">
+                          <div className="flex items-center gap-2">
+                            <Avatar className="w-6 h-6">
+                              <AvatarImage src={player.imageUrl} alt={player.name} />
+                              <AvatarFallback>
+                                <User className="w-3 h-3" />
+                              </AvatarFallback>
+                            </Avatar>
+                            <span>
+                              {player.name}
+                              {player.email && ` (${player.email})`}
+                            </span>
+                          </div>
                         </SelectItem>
                       ))
                     )}
