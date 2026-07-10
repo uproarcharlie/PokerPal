@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { z } from "zod";
+import rateLimit from "express-rate-limit";
 import { storage } from "./storage";
 import { upload } from "./config/multer";
 import { uploadToCloud, isCloudStorageEnabled } from "./services/storage";
@@ -372,16 +373,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================
 
   // Image upload endpoint (requires authentication)
-  app.post("/api/upload", requireAuth, upload.single('image'), async (req, res) => {
+  // Shared upload handler. entityType decides the storage folder and sharp sizing.
+  async function handleImageUpload(req: any, res: any, entityType: string) {
     try {
       if (!req.file) {
         return res.status(400).json({ error: "No file uploaded" });
       }
 
-      const entityType = req.body.entityType || 'misc';
-
       // Normalise every upload (auto-orient, downscale, high-quality WebP) so we
       // never store multi-megapixel originals and images stay crisp and consistent.
+      // Re-encoding with sharp also sanitises the file (strips any embedded payload).
       const processed = await processImage(req.file.buffer, entityType);
       const baseName = path.parse(req.file.originalname).name.replace(/[^a-zA-Z0-9-_]/g, '_') || 'image';
       const filename = `${baseName}.${processed.ext}`;
@@ -414,6 +415,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error('Upload error:', error);
       res.status(500).json({ error: "Failed to upload image" });
     }
+  }
+
+  app.post("/api/upload", requireAuth, upload.single('image'), async (req, res) => {
+    await handleImageUpload(req, res, req.body.entityType || 'misc');
+  });
+
+  // Public, player-photo-only upload for the self-service tournament registration
+  // flow (players register unauthenticated via a QR link). entityType is forced to
+  // 'players' regardless of client input, and a tighter rate limit guards against
+  // storage abuse of this open endpoint.
+  const publicUploadLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 50,
+    message: { error: "Too many uploads, please try again later." },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  app.post("/api/upload/public", publicUploadLimiter, upload.single('image'), async (req, res) => {
+    await handleImageUpload(req, res, 'players');
   });
 
   // Clubs routes

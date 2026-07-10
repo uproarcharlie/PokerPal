@@ -15,6 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { CheckCircle2, UserPlus, Users, Trophy, ArrowLeft, User } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
+import { ImageUpload } from "@/components/ui/image-upload";
 import type { Tournament, Player } from "@shared/schema";
 
 interface Club {
@@ -28,6 +29,7 @@ interface Club {
 const newPlayerSchema = z.object({
   name: z.string().min(1, "Name is required"),
   phone: z.string().min(1, "Phone number is required"),
+  imageUrl: z.string().optional(),
 });
 
 export function PublicRegisterPage() {
@@ -39,12 +41,14 @@ export function PublicRegisterPage() {
   const [selectedPlayer, setSelectedPlayer] = useState<string>("");
   const [enteringHighHands, setEnteringHighHands] = useState(false);
   const [registrationComplete, setRegistrationComplete] = useState(false);
+  const [isImageUploading, setIsImageUploading] = useState(false);
 
   const form = useForm({
     resolver: zodResolver(newPlayerSchema),
     defaultValues: {
       name: "",
       phone: "",
+      imageUrl: "",
     },
   });
 
@@ -62,8 +66,13 @@ export function PublicRegisterPage() {
   });
 
   const createPlayerMutation = useMutation({
-    mutationFn: async (data: { name: string; phone: string }) => {
-      const response = await apiRequest("POST", "/api/players", data);
+    mutationFn: async (data: { name: string; phone: string; imageUrl?: string }) => {
+      const payload = {
+        name: data.name,
+        phone: data.phone,
+        imageUrl: data.imageUrl || undefined,
+      };
+      const response = await apiRequest("POST", "/api/players", payload);
       const result = await response.json();
       
       if (response.status === 409) {
@@ -354,6 +363,26 @@ export function PublicRegisterPage() {
                   <form className="space-y-4">
                     <FormField
                       control={form.control}
+                      name="imageUrl"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Your Photo (Optional)</FormLabel>
+                          <FormControl>
+                            <ImageUpload
+                              onImageUpload={field.onChange}
+                              currentImage={field.value}
+                              entityType="players"
+                              placeholder="Take a photo or upload one"
+                              onUploadingChange={setIsImageUploading}
+                              uploadUrl="/api/upload/public"
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
                       name="name"
                       render={({ field }) => (
                         <FormItem>
@@ -412,10 +441,10 @@ export function PublicRegisterPage() {
                 <Button
                   onClick={handleStep2Next}
                   className="flex-1"
-                  disabled={createPlayerMutation.isPending}
+                  disabled={createPlayerMutation.isPending || isImageUploading}
                   data-testid="step2-next"
                 >
-                  {createPlayerMutation.isPending ? "Creating..." : "Continue"}
+                  {isImageUploading ? "Uploading photo..." : createPlayerMutation.isPending ? "Creating..." : "Continue"}
                 </Button>
               </div>
             </div>
