@@ -1,5 +1,5 @@
-import { useState, useRef } from "react";
-import { Upload, X, ImageIcon, Camera } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { Upload, X, ImageIcon, Camera, SwitchCamera } from "lucide-react";
 import { Button } from "./button";
 
 interface ImageUploadProps {
@@ -18,6 +18,103 @@ export function ImageUpload({ onImageUpload, currentImage, entityType, placehold
   const [preview, setPreview] = useState<string | null>(currentImage || null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+
+  // Live camera state
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
+  const [streamReady, setStreamReady] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const supportsCamera = typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
+
+  const stopStream = () => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    setStreamReady(false);
+  };
+
+  const startCamera = async (mode: "user" | "environment") => {
+    setCameraError(null);
+    try {
+      stopStream();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: mode },
+        audio: false,
+      });
+      streamRef.current = stream;
+      setStreamReady(true);
+    } catch (err) {
+      console.error("Camera error:", err);
+      setCameraError("Couldn't access the camera. Allow camera permission, or use Upload instead.");
+    }
+  };
+
+  const openCamera = () => {
+    // No getUserMedia (very old browser) → fall back to the native capture input,
+    // which still opens the camera on mobile.
+    if (!supportsCamera) {
+      cameraInputRef.current?.click();
+      return;
+    }
+    setCameraOpen(true);
+    startCamera(facingMode);
+  };
+
+  const closeCamera = () => {
+    stopStream();
+    setCameraOpen(false);
+    setCameraError(null);
+  };
+
+  const switchCamera = () => {
+    const next = facingMode === "user" ? "environment" : "user";
+    setFacingMode(next);
+    startCamera(next);
+  };
+
+  const capturePhoto = () => {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) return;
+        const file = new File([blob], `photo-${Date.now()}.jpg`, { type: "image/jpeg" });
+        closeCamera();
+        handleFile(file);
+      },
+      "image/jpeg",
+      0.92,
+    );
+  };
+
+  // Attach the stream to the <video> once both exist.
+  useEffect(() => {
+    if (cameraOpen && streamReady && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play?.().catch(() => {});
+    }
+  }, [cameraOpen, streamReady]);
+
+  // Close on Escape while the camera is open.
+  useEffect(() => {
+    if (!cameraOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeCamera();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [cameraOpen]);
+
+  // Always stop the camera when unmounting.
+  useEffect(() => () => stopStream(), []);
 
   const handleFile = async (file: File | undefined) => {
     if (!file) return;
@@ -94,7 +191,7 @@ export function ImageUpload({ onImageUpload, currentImage, entityType, placehold
         className="hidden"
         disabled={uploading}
       />
-      {/* Take a photo — capture opens the camera directly on mobile */}
+      {/* Native capture fallback for browsers without getUserMedia */}
       <input
         ref={cameraInputRef}
         type="file"
@@ -117,7 +214,7 @@ export function ImageUpload({ onImageUpload, currentImage, entityType, placehold
               type="button"
               variant="secondary"
               size="sm"
-              onClick={() => cameraInputRef.current?.click()}
+              onClick={openCamera}
               disabled={uploading}
             >
               <Camera className="w-4 h-4 mr-2" />
@@ -165,7 +262,7 @@ export function ImageUpload({ onImageUpload, currentImage, entityType, placehold
             <Button
               type="button"
               variant="outline"
-              onClick={() => cameraInputRef.current?.click()}
+              onClick={openCamera}
               disabled={uploading}
             >
               <Camera className="w-4 h-4 mr-2" />
@@ -181,6 +278,61 @@ export function ImageUpload({ onImageUpload, currentImage, entityType, placehold
               Upload
             </Button>
           </div>
+        </div>
+      )}
+
+      {/* Live camera overlay */}
+      {cameraOpen && (
+        <div
+          className="fixed inset-0 z-[100] bg-black/90 flex flex-col items-center justify-center p-4"
+          role="dialog"
+          aria-label="Take a photo"
+        >
+          {cameraError ? (
+            <div className="text-center text-white space-y-4 max-w-sm">
+              <Camera className="w-10 h-10 mx-auto opacity-70" />
+              <p className="text-sm">{cameraError}</p>
+              <div className="flex gap-2 justify-center">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    closeCamera();
+                    fileInputRef.current?.click();
+                  }}
+                >
+                  <Upload className="w-4 h-4 mr-2" />
+                  Upload instead
+                </Button>
+                <Button type="button" variant="outline" onClick={closeCamera}>
+                  Close
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-4 w-full max-w-lg">
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                className="w-full max-h-[70vh] rounded-lg bg-black object-contain"
+              />
+              <div className="flex items-center gap-3">
+                <Button type="button" variant="outline" onClick={closeCamera}>
+                  <X className="w-4 h-4 mr-2" />
+                  Cancel
+                </Button>
+                <Button type="button" onClick={capturePhoto} disabled={!streamReady}>
+                  <Camera className="w-4 h-4 mr-2" />
+                  Capture
+                </Button>
+                <Button type="button" variant="outline" onClick={switchCamera} title="Switch camera">
+                  <SwitchCamera className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
