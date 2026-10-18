@@ -1,6 +1,9 @@
 /**
  * Tournament In-Progress Test
  *
+ * Demo seed (`npm run seed:tournament:active`). It writes only to a guarded local `*_test`
+ * database, which is created if missing and migrated first: see scripts/seed/db.ts.
+ *
  * Creates tournament that's actively running:
  * 1. Create club, season, points system
  * 2. Create players
@@ -16,8 +19,6 @@
  * DATA: Kept in database
  */
 
-import { config } from "dotenv";
-import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { eq } from "drizzle-orm";
 import {
@@ -32,10 +33,12 @@ import {
   type Club,
   type Season,
   type Tournament,
-} from "../shared/schema";
+  type TournamentRegistration,
+} from "../../shared/schema";
+import { connectSeedDatabase, guardSeedDatabase } from "./db";
 
-config();
-const { Pool } = pg;
+// Before anything else: refuse every database but a local *_test one.
+const seedDatabase = guardSeedDatabase();
 
 const colors = {
   reset: "\x1b[0m",
@@ -73,7 +76,7 @@ async function runInProgressTest() {
   logSection("TOURNAMENT IN-PROGRESS TEST");
   log("Creates active tournament ready for eliminations", colors.cyan);
 
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const pool = await connectSeedDatabase(seedDatabase);
   const db = drizzle(pool);
 
   let createdClub: Club;
@@ -85,6 +88,7 @@ async function runInProgressTest() {
     logStep(1, "Creating Club and Season");
     const [club] = await db.insert(clubs).values({
       name: "In-Progress Test Club",
+      slug: `in-progress-test-club-${Date.now().toString(36)}`,
       description: "Active tournament testing",
       address: "789 Active St, Wellington, New Zealand",
       timezone: "Pacific/Auckland",
@@ -167,7 +171,7 @@ async function runInProgressTest() {
 
     // Step 5: Register All Players
     logStep(5, "Registering All Players");
-    const registrations = [];
+    const registrations: TournamentRegistration[] = [];
     for (const player of createdPlayers) {
       const [registration] = await db.insert(tournamentRegistrations).values({
         tournamentId: tournament.id,
@@ -287,11 +291,14 @@ async function runInProgressTest() {
   } catch (error) {
     log("\n✗ TEST FAILED", colors.reset);
     console.error(error);
-    process.exit(1);
+    process.exitCode = 1;
   } finally {
     await pool.end();
     log("\nDatabase connection closed", colors.cyan);
   }
 }
 
-runInProgressTest().catch(console.error);
+runInProgressTest().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

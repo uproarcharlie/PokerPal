@@ -359,7 +359,7 @@ export default function UserManagementPage() {
                 <Label>Email</Label>
                 <Input
                   type="email"
-                  value={editingUser.email}
+                  value={editingUser.email ?? ""}
                   onChange={(e) =>
                     setEditingUser({ ...editingUser, email: e.target.value })
                   }

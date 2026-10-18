@@ -28,7 +28,7 @@ All documentation files are now included in your project:
 | `vite.config.ts` | Vite bundler configuration |
 | `tailwind.config.ts` | Tailwind CSS configuration |
 | `postcss.config.js` | PostCSS configuration |
-| `drizzle.config.ts` | Drizzle ORM database configuration |
+| `drizzle.config.ts` | drizzle-kit configuration (studio, throwaway pushes; never writes `migrations/`) |
 | `components.json` | Shadcn UI components configuration |
 
 ## 🔄 GitHub Actions
@@ -84,8 +84,7 @@ npm run dev              # Start development server
 npm run check           # TypeScript type checking
 
 # Database
-npm run db:push         # Sync database schema
-npm run db:push --force # Force sync if issues
+npm run db:migrate      # Apply the migrations (also done on every start)
 
 # Production
 npm run build           # Build for production
@@ -169,7 +168,7 @@ Your project is fully documented and ready to:
    npm install
    cp .env.example .env
    # Edit .env with your database URL
-   npm run db:push
+   npm run db:migrate
    npm run dev
    ```
 

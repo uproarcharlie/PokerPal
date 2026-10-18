@@ -23,9 +23,9 @@ Thank you for your interest in contributing! This guide will help you get starte
    # Edit .env with your database credentials
    ```
 
-5. **Initialize database**:
+5. **Initialize database** (the server also applies the migrations on every start):
    ```bash
-   npm run db:push
+   npm run db:migrate
    ```
 
 6. **Start development server**:
@@ -114,14 +114,17 @@ docs: update installation instructions
 
 1. Update `shared/schema.ts` with Drizzle ORM schema
 2. Add insert/select schemas and types
-3. Run `npm run db:push` to sync the database
+3. Add a migration, `migrations/NNNN_name.sql`, that makes the same change (see below), and run `npm run db:migrate`
 4. Update storage interface in `server/storage.ts`
 
 ### Modifying Existing Tables
 
 1. Update schema in `shared/schema.ts`
-2. Run `npm run db:push`
-3. If you get warnings, use `npm run db:push --force`
+2. Write the matching `migrations/NNNN_name.sql`. Production data must persist, so it may only add things
+   (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE … ADD COLUMN IF NOT EXISTS` with no default or a constant one,
+   `CREATE INDEX IF NOT EXISTS`, …);
+   the guard in `server/db/migration-guard.ts` refuses anything else, and the schema-parity test checks the two agree
+3. Run `npm run db:migrate` (or just start the server)
 4. Update affected TypeScript types
 
 ## Testing Your Changes

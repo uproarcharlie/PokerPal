@@ -1,39 +1,57 @@
+import crypto from "crypto";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
-import { pool } from "../db";
-import crypto from "crypto";
+import type { RequestHandler } from "express";
+import type { Pool } from "pg";
+import { getPool } from "../db";
+import type { AppEnv } from "./env";
 
-const PgStore = connectPgSimple(session);
+const SESSION_COOKIE_NAME = "pokerpal.sid";
 
-// Generate or use session secret
-const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-if (!process.env.SESSION_SECRET) {
-  console.warn('⚠️  SESSION_SECRET not set in .env, using random generated secret (sessions will reset on server restart)');
+/** Postgres-backed session store (table `session`, created on first use if missing). */
+export function createPgSessionStore(pool: Pool = getPool()): connectPgSimple.PGStore {
+  const PgStore = connectPgSimple(session);
+  return new PgStore({
+    pool,
+    tableName: "session",
+    createTableIfMissing: true,
+  });
 }
 
-export const sessionConfig = {
-  store: new PgStore({
-    pool,
-    tableName: 'session',
-    createTableIfMissing: true,
-  }),
-  secret: SESSION_SECRET,
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production', // HTTPS only in production
-    sameSite: 'lax' as const,
-  },
-  name: 'pokerpal.sid', // Custom session ID name
-};
+export function createSessionMiddleware(
+  env: AppEnv,
+  store: session.Store = createPgSessionStore(),
+): RequestHandler {
+  let secret = env.SESSION_SECRET;
+  if (!secret) {
+    // Only reachable outside production: loadEnv() requires SESSION_SECRET there.
+    secret = crypto.randomBytes(32).toString("hex");
+    console.warn("⚠️  SESSION_SECRET not set in .env, using random generated secret (sessions will reset on server restart)");
+  }
 
-// Extend express-session types
-declare module 'express-session' {
+  return session({
+    store,
+    secret,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      maxAge: SESSION_MAX_AGE_MS,
+      httpOnly: true,
+      secure: env.NODE_ENV === "production", // HTTPS only in production
+      sameSite: "lax",
+    },
+    name: SESSION_COOKIE_NAME,
+  });
+}
+
+declare module "express-session" {
   interface SessionData {
     userId: string;
     role: string;
+    /** Set while an admin impersonates another user; restored by stop-impersonation. */
+    originalAdminId?: string;
+    originalAdminRole?: string;
   }
 }

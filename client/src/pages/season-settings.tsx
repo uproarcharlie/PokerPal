@@ -28,6 +28,7 @@ import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-di
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Check, Plus, Trash2 } from "lucide-react";
+import type { PointsSystem as PointsSystemRow } from "@shared/schema";
 
 const seasonSchema = z.object({
   name: z.string().min(1, "Season name is required"),
@@ -67,14 +68,8 @@ interface Club {
   name: string;
 }
 
-interface PointsSystem {
-  id: string;
-  seasonId: string;
-  name: string;
-  description?: string;
-  participationPoints?: number;
-  knockoutPoints?: number;
-}
+// createdAt is left out: it arrives as a JSON string, not the schema's Date.
+type PointsSystem = Omit<PointsSystemRow, "createdAt">;
 
 interface PointsAllocation {
   id: string;

@@ -55,6 +55,27 @@ VITE_GOOGLE_MAPS_API_KEY=<your Google Maps API key>
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
+Optional, with defaults that suit Railway, so leave them unset unless you need a change (`.env.production.example` describes each):
+
+- `TRUST_PROXY` (default `1`): how many proxies sit in front of the app, so client IPs and https are read correctly.
+- `DB_POOL_MAX` (default `10`): the most Postgres connections the app holds open.
+- `MIGRATE_ON_BOOT` (default `true`): apply the migrations at every start. See [When a boot migration fails](#when-a-boot-migration-fails) before setting it to `false`.
+
+### How a deploy goes live
+
+`railway.json` builds the `Dockerfile` and only sends traffic to a new deployment once `/api/health` answers 200, within 120 seconds. Before it listens, the server applies `migrations/*.sql` (as `npm run db:migrate` does; see SCRIPTS.md). If that fails, it exits without listening, the healthcheck never passes, and the previous deployment keeps serving.
+
+CI builds the same image and boots it against Postgres on every push and pull request (the "Docker image" job). Railway deploys `main` as soon as it is pushed, so to have a failing CI run stop the deploy, turn on **Wait for CI** in the Railway service's settings, or merge through pull requests.
+
+#### When a boot migration fails
+
+The log shows `[migrate] MIGRATIONS FAILED`, and above it the file, line and reason.
+
+1. **During a deploy** nothing is down: the previous deployment keeps serving. Fix the migration, or revert the commit, and push again.
+2. **After a crash or restart**, nothing serves until a boot succeeds. If the database already has the schema the build needs (for example, the failing file is the newest one and the code does not use what it adds yet), set `MIGRATE_ON_BOOT=false` on the service to start without migrating. Remove it as soon as the fix is deployed, or later migrations never run.
+3. To see what would run against a database without changing anything: `DATABASE_URL=… npm run db:migrate -- --dry-run --yes`.
+4. `index … exists but is INVALID` means an earlier `CREATE INDEX CONCURRENTLY` failed part-way, leaving an index Postgres never uses. Drop the index it names with `DROP INDEX CONCURRENTLY IF EXISTS <index>`, then boot again; the migration builds it afresh.
+
 ### Step 5: Get Your Railway URL
 1. Railway will deploy your app automatically
 2. Go to **Settings** → **Domains** → **Generate Domain**
@@ -166,8 +187,9 @@ VITE_GOOGLE_MAPS_API_KEY=your_google_maps_api_key
 # Build the app
 npm run build
 
-# Push database schema
-npm run db:push
+# Database schema: the server applies migrations/ itself every time it starts.
+# To check them first without running anything:
+npm run db:migrate -- --dry-run --yes
 
 # Create uploads directory
 mkdir -p uploads
@@ -328,8 +350,7 @@ cd /var/www/pokerpal
 git pull
 npm ci
 npm run build
-npm run db:push
-pm2 restart pokerpal
+pm2 restart pokerpal  # applies any new migrations before it starts serving
 ```
 
 ## Cloudflare Configuration Tips

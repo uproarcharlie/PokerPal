@@ -1,5 +1,4 @@
 import type { Express } from "express";
-import { createServer, type Server } from "http";
 import { z } from "zod";
 import rateLimit from "express-rate-limit";
 import { storage } from "./storage";
@@ -22,7 +21,7 @@ import {
   insertUserSchema
 } from "@shared/schema";
 
-export async function registerRoutes(app: Express): Promise<Server> {
+export function registerRoutes(app: Express): void {
 
   // ============================================
   // AUTHENTICATION ROUTES
@@ -840,9 +839,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       // Calculate prize pool
-      const totalBuyIns = registrations.reduce((sum, reg) => sum + reg.buyIns, 0);
-      const totalRebuys = registrations.reduce((sum, reg) => sum + reg.rebuys, 0);
-      const totalAddons = registrations.reduce((sum, reg) => sum + reg.addons, 0);
+      // The count columns are nullable; a null count adds nothing.
+      const totalBuyIns = registrations.reduce((sum, reg) => sum + (reg.buyIns ?? 0), 0);
+      const totalRebuys = registrations.reduce((sum, reg) => sum + (reg.rebuys ?? 0), 0);
+      const totalAddons = registrations.reduce((sum, reg) => sum + (reg.addons ?? 0), 0);
 
       const buyInTotal = totalBuyIns * parseFloat(tournament.buyInAmount);
       const rebuyTotal = totalRebuys * parseFloat(tournament.rebuyAmount || '0');
@@ -914,10 +914,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
 
           // Add knockout points if applicable
-          if (player.knockouts > 0) {
+          const knockouts = player.knockouts ?? 0;
+          if (knockouts > 0) {
             const pointsSystem = await storage.getPointsSystem(tournament.pointsSystemId!);
             if (pointsSystem?.knockoutPoints) {
-              points += player.knockouts * pointsSystem.knockoutPoints;
+              points += knockouts * pointsSystem.knockoutPoints;
             }
           }
         }
@@ -1043,8 +1044,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (tournament?.prizePoolLocked) {
           // Allow elimination and knockout tracking, but prevent rebuys, addons, and high hand entries
           if (
-            (validatedData.rebuys !== undefined && validatedData.rebuys > (oldRegistration.rebuys || 0)) ||
-            (validatedData.addons !== undefined && validatedData.addons > (oldRegistration.addons || 0)) ||
+            (validatedData.rebuys !== undefined && (validatedData.rebuys ?? 0) > (oldRegistration.rebuys || 0)) ||
+            (validatedData.addons !== undefined && (validatedData.addons ?? 0) > (oldRegistration.addons || 0)) ||
             (validatedData.enteringHighHands === true && !oldRegistration.enteringHighHands)
           ) {
             return res.status(400).json({ error: "Prize pool is locked. No rebuys, addons, or high hand entries allowed." });
@@ -1087,8 +1088,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      if (validatedData.rebuys !== undefined && validatedData.rebuys > (oldRegistration?.rebuys || 0)) {
-        const rebuyCount = validatedData.rebuys - (oldRegistration?.rebuys || 0);
+      if (validatedData.rebuys !== undefined && (validatedData.rebuys ?? 0) > (oldRegistration?.rebuys || 0)) {
+        const rebuyCount = (validatedData.rebuys ?? 0) - (oldRegistration?.rebuys || 0);
         await storage.createActivityLog({
           tournamentId: registration.tournamentId,
           playerId: registration.playerId,
@@ -1097,8 +1098,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      if (validatedData.addons !== undefined && validatedData.addons > (oldRegistration?.addons || 0)) {
-        const addonCount = validatedData.addons - (oldRegistration?.addons || 0);
+      if (validatedData.addons !== undefined && (validatedData.addons ?? 0) > (oldRegistration?.addons || 0)) {
+        const addonCount = (validatedData.addons ?? 0) - (oldRegistration?.addons || 0);
         await storage.createActivityLog({
           tournamentId: registration.tournamentId,
           playerId: registration.playerId,
@@ -1486,6 +1487,4 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  const httpServer = createServer(app);
-  return httpServer;
 }

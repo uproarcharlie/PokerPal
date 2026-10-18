@@ -66,13 +66,10 @@ NODE_ENV=development
 ## Step 5: Initialize Database
 
 ```bash
-npm run db:push
+npm run db:migrate
 ```
 
-If you get errors, force push:
-```bash
-npm run db:push --force
-```
+The server also applies the migrations in `migrations/` every time it starts.
 
 ## Step 6: Start the App
 
@@ -130,8 +127,8 @@ npm run dev              # Start dev server with hot reload
 npm run check           # Run TypeScript type checking
 
 # Database
-npm run db:push         # Sync database schema
-npm run db:push --force # Force sync if issues
+npm run db:migrate              # Apply the migrations (also done on every start)
+npm run db:migrate -- --dry-run # Check them and show what would run
 
 # Production
 npm run build           # Build for production
@@ -161,8 +158,10 @@ npm run check
 
 ### Database schema issues?
 
+The server logs why a migration failed and refuses to start. Check them without running anything:
+
 ```bash
-npm run db:push --force
+npm run db:migrate -- --dry-run
 ```
 
 ## Useful Links

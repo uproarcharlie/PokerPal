@@ -87,29 +87,28 @@ npm run start
 
 ## Database Scripts
 
-### `npm run db:push`
-**Purpose:** Push database schema changes to PostgreSQL
+### `npm run db:migrate`
+**Purpose:** Apply the SQL migrations in `migrations/` to `DATABASE_URL`
 
 **What it does:**
-- Uses Drizzle Kit to sync schema with database
-- Creates/updates tables based on `shared/schema.ts`
-- Applies migrations automatically
-- Does NOT create migration files (direct push)
+- Exactly what the server does every time it starts, before it listens: checks every file
+  with the destructive-SQL guard (`server/db/migration-guard.ts`), takes an advisory lock and
+  runs each new or edited file in its own transaction
+- Prints the target as host:port/database, never the credentials
+- Refuses a database that is not on localhost unless given `--yes`
 
 **When to use:**
-- After modifying `shared/schema.ts`
-- During development when iterating on schema
-- For quick schema updates without migration history
+- After adding a `migrations/NNNN_name.sql` (the server would also apply it on its next start)
+- `-- --dry-run` checks the files and shows what would run, without executing anything
 
 **Example:**
 ```bash
-npm run db:push
+npm run db:migrate
+npm run db:migrate -- --dry-run
 ```
 
 **⚠️ Warning:**
-- Not recommended for production
-- Can cause data loss if not careful
-- Use migrations for production deployments
+- Migrations may only add things (production data must persist); the guard refuses the rest
 
 ---
 
@@ -392,8 +391,8 @@ npm run dev
 # In another terminal, check types
 npm run check
 
-# Push schema changes
-npm run db:push
+# Apply new migrations (the dev server also applies them when it starts)
+npm run db:migrate
 ```
 
 ### Production Deployment
@@ -420,8 +419,8 @@ npm run check
 ### Schema Changes
 ```bash
 # 1. Modify shared/schema.ts
-# 2. Push changes to database
-npm run db:push
+# 2. Write the matching, additive migrations/NNNN_name.sql and apply it
+npm run db:migrate
 
 # 3. Test with sample data
 npm run test:tournament
@@ -437,7 +436,7 @@ npm run check
 ### First Time Setup
 1. `npm install` - Install dependencies
 2. Setup `.env` file
-3. `npm run db:push` - Create database schema
+3. `npm run db:migrate` - Create database schema
 4. `npm run test:tournament` - Generate sample data
 5. `npm run dev` - Start development
 
@@ -445,7 +444,7 @@ npm run check
 1. `npm run dev` - Start development server
 2. Make changes
 3. `npm run check` - Verify types (optional)
-4. `npm run db:push` - If schema changed
+4. `npm run db:migrate` - If you added a migration
 
 ### Pre-Deployment
 1. `npm run check` - Verify types
@@ -462,10 +461,10 @@ npm run check
 - ✓ Verify `DATABASE_URL` in `.env`
 - ✓ Ensure port 3000 is available
 
-### `npm run db:push` fails
+### `npm run db:migrate` fails
 - ✓ Database exists
 - ✓ User has CREATE permissions
-- ✓ No syntax errors in `shared/schema.ts`
+- ✓ The message names the file, line and rule the guard or Postgres rejected
 
 ### `npm run test:tournament` fails
 - ✓ Database is accessible
@@ -497,7 +496,7 @@ npm run check
 | `npm run build` | Production build | - | - |
 | `npm run start` | Start production | - | - |
 | `npm run check` | Type check | - | - |
-| `npm run db:push` | Update schema | - | Yes |
+| `npm run db:migrate` | Apply migrations | - | Yes |
 | `npm run test:tournament` | Full lifecycle test | Completed | ✅ Yes |
 | `npm run test:tournament:cleanup` | Full lifecycle test | Completed | ❌ No |
 | `npm run test:tournament:setup` | Registration phase test | Scheduled | ✅ Yes |

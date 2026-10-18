@@ -1,6 +1,9 @@
 /**
  * Tournament Setup Test
  *
+ * Demo seed (`npm run seed:tournament:setup`). It writes only to a guarded local `*_test`
+ * database, which is created if missing and migrated first: see scripts/seed/db.ts.
+ *
  * Creates tournament infrastructure and stops at registration phase:
  * 1. Create a club
  * 2. Create a season
@@ -15,8 +18,6 @@
  * DATA: Kept in database
  */
 
-import { config } from "dotenv";
-import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import {
   clubs,
@@ -30,10 +31,11 @@ import {
   type Club,
   type Season,
   type Tournament,
-} from "../shared/schema";
+} from "../../shared/schema";
+import { connectSeedDatabase, guardSeedDatabase } from "./db";
 
-config();
-const { Pool } = pg;
+// Before anything else: refuse every database but a local *_test one.
+const seedDatabase = guardSeedDatabase();
 
 const colors = {
   reset: "\x1b[0m",
@@ -70,7 +72,7 @@ async function runSetupTest() {
   logSection("TOURNAMENT SETUP TEST");
   log("Creates tournament ready for registration", colors.cyan);
 
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const pool = await connectSeedDatabase(seedDatabase);
   const db = drizzle(pool);
 
   let createdClub: Club;
@@ -82,6 +84,7 @@ async function runSetupTest() {
     logStep(1, "Creating Club");
     const [club] = await db.insert(clubs).values({
       name: "Setup Test Club",
+      slug: `setup-test-club-${Date.now().toString(36)}`,
       description: "Tournament setup testing club",
       address: "456 Setup Ave, Wellington, New Zealand",
       timezone: "Pacific/Auckland",
@@ -225,11 +228,14 @@ async function runSetupTest() {
   } catch (error) {
     log("\n✗ TEST FAILED", colors.reset);
     console.error(error);
-    process.exit(1);
+    process.exitCode = 1;
   } finally {
     await pool.end();
     log("\nDatabase connection closed", colors.cyan);
   }
 }
 
-runSetupTest().catch(console.error);
+runSetupTest().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

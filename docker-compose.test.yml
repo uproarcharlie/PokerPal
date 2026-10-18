@@ -1,0 +1,29 @@
+# Throwaway Postgres for the test suites, for machines without a local server.
+# Data lives in tmpfs, so nothing survives `npm run db:test:down`.
+#
+#   npm run db:test:up
+#   export TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5433/pokerpal_test
+#   npm test && npm run test:e2e
+#
+# See test/README.md.
+name: pokerpal-test
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    # Loopback only: never reachable from the network.
+    ports:
+      - "127.0.0.1:5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    # Durability is pointless for throwaway data; skipping it makes the suites faster.
+    command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 15

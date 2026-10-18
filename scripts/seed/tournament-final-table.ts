@@ -1,6 +1,9 @@
 /**
  * Tournament Final Table Test
  *
+ * Demo seed (`npm run seed:tournament:final`). It writes only to a guarded local `*_test`
+ * database, which is created if missing and migrated first: see scripts/seed/db.ts.
+ *
  * Creates tournament at final table stage:
  * 1. Create club, season, points system
  * 2. Create players
@@ -15,8 +18,6 @@
  * DATA: Kept in database
  */
 
-import { config } from "dotenv";
-import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { eq } from "drizzle-orm";
 import {
@@ -31,10 +32,11 @@ import {
   type Club,
   type Season,
   type Tournament,
-} from "../shared/schema";
+} from "../../shared/schema";
+import { connectSeedDatabase, guardSeedDatabase } from "./db";
 
-config();
-const { Pool } = pg;
+// Before anything else: refuse every database but a local *_test one.
+const seedDatabase = guardSeedDatabase();
 
 const colors = {
   reset: "\x1b[0m",
@@ -73,7 +75,7 @@ async function runFinalTableTest() {
   logSection("TOURNAMENT FINAL TABLE TEST");
   log("Creates tournament at final table (4 players remaining)", colors.cyan);
 
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const pool = await connectSeedDatabase(seedDatabase);
   const db = drizzle(pool);
 
   let createdClub: Club;
@@ -85,6 +87,7 @@ async function runFinalTableTest() {
     logStep(1, "Creating Club and Season");
     const [club] = await db.insert(clubs).values({
       name: "Final Table Test Club",
+      slug: `final-table-test-club-${Date.now().toString(36)}`,
       description: "Final table testing",
       address: "321 Finals Rd, Wellington, New Zealand",
       timezone: "Pacific/Auckland",
@@ -266,11 +269,14 @@ async function runFinalTableTest() {
   } catch (error) {
     log("\n✗ TEST FAILED", colors.reset);
     console.error(error);
-    process.exit(1);
+    process.exitCode = 1;
   } finally {
     await pool.end();
     log("\nDatabase connection closed", colors.cyan);
   }
 }
 
-runFinalTableTest().catch(console.error);
+runFinalTableTest().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

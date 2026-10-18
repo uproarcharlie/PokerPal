@@ -1,6 +1,9 @@
 /**
  * Tournament Lifecycle Integration Test (With Cleanup)
  *
+ * Demo seed (`npm run seed:tournament:cleanup`). It writes only to a guarded local `*_test`
+ * database, which is created if missing and migrated first: see scripts/seed/db.ts.
+ *
  * This test runs through the complete tournament lifecycle and then cleans up all data:
  * 1. Create a club
  * 2. Create a season
@@ -20,8 +23,6 @@
  * 16. DELETE all test data (cleanup)
  */
 
-import { config } from "dotenv";
-import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { eq } from "drizzle-orm";
 import {
@@ -39,12 +40,11 @@ import {
   type Player,
   type Tournament,
   type TournamentRegistration,
-} from "../shared/schema";
+} from "../../shared/schema";
+import { connectSeedDatabase, guardSeedDatabase } from "./db";
 
-// Load environment variables
-config();
-
-const { Pool } = pg;
+// Before anything else: refuse every database but a local *_test one.
+const seedDatabase = guardSeedDatabase();
 
 // ANSI color codes for terminal output
 const colors = {
@@ -84,17 +84,15 @@ async function runTournamentLifecycleTest() {
   logSection("TOURNAMENT LIFECYCLE TEST (WITH CLEANUP)");
 
   // Connect to database
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-  });
 
+  const pool = await connectSeedDatabase(seedDatabase);
   const db = drizzle(pool);
 
-  let createdClub: Club;
-  let createdSeason: Season;
+  let createdClub: Club | undefined;
+  let createdSeason: Season | undefined;
   let createdPointsSystem: PointsSystem;
   let createdPlayers: Player[] = [];
-  let createdTournament: Tournament;
+  let createdTournament: Tournament | undefined;
   let registrations: TournamentRegistration[] = [];
 
   try {
@@ -102,6 +100,7 @@ async function runTournamentLifecycleTest() {
     logStep(1, "Creating Club");
     const [club] = await db.insert(clubs).values({
       name: "Test Poker Club (Cleanup Test)",
+      slug: `test-poker-club-cleanup-${Date.now().toString(36)}`,
       description: "A test club for integration testing - will be deleted",
       address: "123 Test Street, Wellington, New Zealand",
       timezone: "Pacific/Auckland",
@@ -396,7 +395,7 @@ async function runTournamentLifecycleTest() {
       else if (position === 5) positionPoints = 40;
       else if (position >= 6 && position <= 10) positionPoints = 30;
 
-      const totalPoints = positionPoints + pointsSystem.participationPoints;
+      const totalPoints = positionPoints + (pointsSystem.participationPoints ?? 0);
 
       await db.update(tournamentRegistrations)
         .set({ pointsAwarded: totalPoints })
@@ -466,7 +465,7 @@ async function runTournamentLifecycleTest() {
   } catch (error) {
     log("\n✗ TEST FAILED", colors.red);
     console.error(error);
-    process.exit(1);
+    process.exitCode = 1;
   } finally {
     // Cleanup: Delete test data
     logSection("CLEANUP");
@@ -492,4 +491,7 @@ async function runTournamentLifecycleTest() {
 }
 
 // Run the test
-runTournamentLifecycleTest().catch(console.error);
+runTournamentLifecycleTest().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

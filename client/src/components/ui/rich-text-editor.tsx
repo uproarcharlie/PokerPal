@@ -1,9 +1,7 @@
 import { useEditor, EditorContent } from '@tiptap/react';
-import StarterKit from '@tiptap/starter-kit';
-import Link from '@tiptap/extension-link';
-import Placeholder from '@tiptap/extension-placeholder';
 import { Bold, Italic, List, ListOrdered, Link2, Undo, Redo } from 'lucide-react';
 import { Button } from './button';
+import { richTextExtensions } from './rich-text-extensions';
 import { cn } from '@/lib/utils';
 
 interface RichTextEditorProps {
@@ -20,18 +18,7 @@ export function RichTextEditor({
   className,
 }: RichTextEditorProps) {
   const editor = useEditor({
-    extensions: [
-      StarterKit,
-      Link.configure({
-        openOnClick: false,
-        HTMLAttributes: {
-          class: 'text-primary underline',
-        },
-      }),
-      Placeholder.configure({
-        placeholder,
-      }),
-    ],
+    extensions: richTextExtensions(placeholder),
     content,
     onUpdate: ({ editor }) => {
       onChange(editor.getHTML());

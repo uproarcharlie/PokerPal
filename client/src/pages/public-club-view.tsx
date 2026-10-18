@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Trophy, Calendar, Users, TrendingUp, Info, Globe } from "lucide-react";
 import { FaDiscord, FaTwitter, FaFacebook, FaInstagram } from "react-icons/fa";
+import type { Player } from "@shared/schema";
 
 interface Club {
   id: string;
@@ -41,11 +42,7 @@ interface Season {
 }
 
 interface LeaderboardEntry {
-  player: {
-    id: string;
-    name: string;
-    email?: string;
-  };
+  player: Pick<Player, "id" | "name" | "imageUrl">;
   points: number;
   tournaments: number;
 }

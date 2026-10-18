@@ -94,7 +94,7 @@ Your repository now includes:
 - `tsconfig.json` - TypeScript configuration
 - `vite.config.ts` - Vite bundler configuration
 - `tailwind.config.ts` - Tailwind CSS configuration
-- `drizzle.config.ts` - Database ORM configuration
+- `drizzle.config.ts` - drizzle-kit configuration (schema changes go in `migrations/`)
 
 ### GitHub Actions 🔄
 - `.github/workflows/ci.yml` - Continuous Integration workflow
@@ -124,8 +124,8 @@ cp .env.example .env
 # Edit .env with your database credentials
 nano .env  # or use your preferred editor
 
-# Initialize database
-npm run db:push
+# Initialize database (the server also applies the migrations on every start)
+npm run db:migrate
 
 # Start development server
 npm run dev
@@ -287,7 +287,7 @@ git push
 2. ✅ Clone to local machine
 3. ✅ Set up `.env` locally
 4. ✅ Run `npm install`
-5. ✅ Run `npm run db:push`
+5. ✅ Run `npm run db:migrate`
 6. ✅ Start developing!
 
 ## Resources

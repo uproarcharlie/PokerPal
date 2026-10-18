@@ -77,16 +77,11 @@ NODE_ENV=development
 
 ### 4. Database Setup
 
-Push the database schema:
+The server applies the SQL migrations in `migrations/` every time it starts, so `npm run dev` builds the schema
+on an empty database by itself. To apply them without starting the server:
 
 ```bash
-npm run db:push
-```
-
-If you encounter any issues, force push the schema:
-
-```bash
-npm run db:push --force
+npm run db:migrate             # add -- --dry-run to only check them and see what would run
 ```
 
 ### 5. Start Development Server
@@ -103,7 +98,7 @@ The application will be available at `http://localhost:5000`
 - `npm run build` - Build for production
 - `npm run start` - Start production server
 - `npm run check` - Run TypeScript type checking
-- `npm run db:push` - Push database schema changes
+- `npm run db:migrate` - Apply the database migrations (the server also does this on every start)
 
 ## Project Structure
 
@@ -229,12 +224,13 @@ Run type checking:
 npm run check
 ```
 
-### Database Schema Sync Issues
+### Database Schema Issues
 
-Force push schema:
+The server refuses to start if a migration fails, and logs why. Check the migrations without running them:
 ```bash
-npm run db:push --force
+npm run db:migrate -- --dry-run
 ```
+On a deployed server, see "When a boot migration fails" in DEPLOYMENT.md.
 
 ## Contributing
 

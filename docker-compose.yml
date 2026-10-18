@@ -3,6 +3,10 @@ version: '3.8'
 services:
   app:
     build: .
+    # The image runs as the unprivileged `node` user, but ./uploads below is a host directory the image
+    # cannot chown (and installs from the old root image hold root-owned folders), so local uploads would
+    # fail with EACCES. Root keeps them working exactly as before; drop this once uploads go to R2.
+    user: root
     ports:
       - "3000:3000"
     environment:

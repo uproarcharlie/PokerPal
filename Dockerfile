@@ -1,40 +1,31 @@
-# Build stage
-FROM node:20-alpine AS builder
+# Build: install all dependencies and bundle the client (dist/public), the server
+# (dist/index.js) and the SQL migrations it applies at boot (dist/migrations).
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
 
-# Install dependencies
-RUN npm ci
-
-# Copy source code
 COPY . .
-
-# Build the application
 RUN npm run build
 
-# Production stage
-FROM node:20-alpine AS production
+# Runtime: production dependencies and dist/ only, run as the unprivileged `node` user.
+FROM node:22-alpine AS runtime
 
+ENV NODE_ENV=production
 WORKDIR /app
 
-# Install production dependencies only
-COPY package*.json ./
-RUN npm ci --omit=dev
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
 
-# Copy built files from builder
 COPY --from=builder /app/dist ./dist
 
-# Create uploads directory
-RUN mkdir -p uploads
+# Uploads fall back to local disk when cloud storage is not configured, so `node` must be able to write here.
+RUN mkdir -p uploads && chown node:node uploads
 
-# Expose port
+USER node
+
 EXPOSE 3000
 
-# Set environment to production
-ENV NODE_ENV=production
-
-# Start the application
 CMD ["node", "dist/index.js"]

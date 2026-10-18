@@ -49,6 +49,10 @@ interface Tournament {
   rebuyPeriodMinutes?: number;
   rakeType: string;
   rakeAmount: string;
+  rebuyRakeType: string | null;
+  rebuyRakeAmount: string | null;
+  addonRakeType: string | null;
+  addonRakeAmount: string | null;
   payoutStructure: string;
   enableHighHand: boolean;
   highHandAmount?: string;

@@ -2,50 +2,180 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main]
   pull_request:
-    branches: [ main, develop ]
+    branches: [main]
+
+# A newer push to the same branch or PR supersedes the run in progress.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
+  quality:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+
+  test:
+    name: Unit, API and component tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # The API tests clone pokerpal_test_template from this server; see test/README.md.
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/pokerpal_test
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      # One run across all projects, so coverage thresholds see a single merged report.
+      - run: npx vitest run --coverage
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 14
+          if-no-files-found: ignore
+
   build:
+    name: Production build
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        node-version: [18.x, 20.x]
-
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
+          if-no-files-found: error
 
-    - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v3
-      with:
-        node-version: ${{ matrix.node-version }}
-        cache: 'npm'
-
-    - name: Install dependencies
-      run: npm ci
-
-    - name: Type check
-      run: npm run check
-
-    - name: Build
-      run: npm run build
-
-  lint:
+  docker:
+    # The image Railway builds and runs: alpine (musl) binaries such as sharp's, `npm ci --omit=dev`,
+    # and the server running as the unprivileged node user are only exercised here.
+    name: Docker image (what Railway deploys)
     runs-on: ubuntu-latest
-
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          # An empty database for the image to migrate on boot, as on a fresh deploy.
+          POSTGRES_DB: pokerpal_docker
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
+      - run: docker build --tag pokerpal:ci .
+      - name: Boot the image as Railway runs it, until its healthcheck passes
+        run: |
+          docker run --detach --name pokerpal --network host \
+            --env DATABASE_URL=postgres://postgres:postgres@localhost:5432/pokerpal_docker \
+            --env SESSION_SECRET=ci --env PORT=3000 \
+            pokerpal:ci
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://localhost:3000/api/health > health.json; then
+              cat health.json
+              jq -e '.status == "ok" and .db == "ok" and .migrations.files > 0' health.json
+              exit
+            fi
+            [ "$(docker inspect --format '{{.State.Running}}' pokerpal)" = "true" ] || break
+            sleep 2
+          done
+          echo "::error::The image never passed its healthcheck"
+          exit 1
+      - name: Store an uploaded photo (sharp, and uploads/ written by the node user)
+        run: |
+          # A 1x1 PNG.
+          echo 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' | base64 -d > photo.png
+          image_url=$(curl -fsS --form 'image=@photo.png;type=image/png' http://localhost:3000/api/upload/public | jq -er .imageUrl)
+          echo "Stored $image_url"
+          curl -fsS --output /dev/null --write-out '%{content_type}\n' "http://localhost:3000$image_url" | grep -x image/webp
+          docker exec pokerpal sh -c 'test "$(id -un)" = node && ls -ln uploads/players'
+      - name: Server logs
+        if: always()
+        run: docker logs pokerpal || true
 
-    - name: Use Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: '20.x'
-        cache: 'npm'
-
-    - name: Install dependencies
-      run: npm ci
-
-    - name: Type check
-      run: npm run check
+  e2e:
+    name: End-to-end (production build)
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # The e2e server runs on pokerpal_test_e2e on this server.
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/pokerpal_test
+      # Serve the exact dist/ the build job produced.
+      E2E_SKIP_BUILD: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14

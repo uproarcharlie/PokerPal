@@ -1,13 +1,32 @@
+# Dependencies and build output are produced inside the image
 node_modules
-.git
-.gitignore
-.env
-.env.local
-.local
-npm-debug.log
 dist
-*.md
-uploads/*
-!uploads/.gitkeep
+
+# Version control and editor/OS clutter
+.git
+.github
+.gitignore
 .vscode
 .idea
+.claude
+**/.DS_Store
+.replit
+.local
+*.md
+npm-debug.log*
+*.tsbuildinfo
+
+# Secrets and local configuration
+.env
+.env.*
+
+# Runtime data and assets that are not part of the build
+uploads
+attached_assets
+
+# Test artefacts
+tmp
+coverage
+playwright-report
+test-results
+blob-report

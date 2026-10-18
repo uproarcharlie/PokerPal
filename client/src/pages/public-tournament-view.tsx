@@ -70,6 +70,7 @@ interface TournamentRegistration {
   prizeAmount?: string;
   pointsAwarded?: number;
   isEliminated: boolean;
+  eliminationTime: string | null;
   knockouts: number;
   buyIns: number;
   rebuys: number;
