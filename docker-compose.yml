@@ -14,6 +14,8 @@ services:
       - SESSION_SECRET=${SESSION_SECRET}
       - NODE_ENV=production
       - PORT=3000
+      # Without R2, production stores images on local disk only in a directory named here (the volume below).
+      - UPLOAD_DIR=/app/uploads
       - VITE_GOOGLE_MAPS_API_KEY=${VITE_GOOGLE_MAPS_API_KEY}
     volumes:
       - ./uploads:/app/uploads

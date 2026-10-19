@@ -4,9 +4,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { EliminatePlayerModal } from "@/components/modals/eliminate-player-modal";
+import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { UserPlus, Eye, Edit, RotateCcw, Users } from "lucide-react";
+import { Edit, RotateCcw, Trash2, Users } from "lucide-react";
+import { formatMoney, toCents } from "@shared/domain/money";
+import { registrationRemovalProblem } from "@shared/domain/standings";
 
 interface TournamentRegistration {
   id: string;
@@ -20,6 +23,9 @@ interface TournamentRegistration {
   pointsAwarded?: number;
   isEliminated: boolean;
   eliminationTime?: string;
+  eliminatedBy?: string | null;
+  knockouts?: number | null;
+  highHandWinner?: boolean | null;
   player: {
     id: string;
     name: string;
@@ -31,36 +37,43 @@ interface StandingsTableProps {
   tournamentId: string;
   registrations: TournamentRegistration[];
   isLoading: boolean;
+  /** Eliminate, restore and remove are for the club's staff (viewer.canManage). */
+  canManage?: boolean;
+  /** Completed or cancelled: the standings can no longer change here (a finished one is fixed with Correct Results). */
+  closed?: boolean;
+  completed?: boolean;
 }
+
 
 export function StandingsTable({
   tournamentId,
   registrations,
-  isLoading
+  isLoading,
+  canManage = false,
+  closed = false,
+  completed = false,
 }: StandingsTableProps) {
   const { toast } = useToast();
   const [eliminateModalOpen, setEliminateModalOpen] = useState(false);
   const [selectedRegistration, setSelectedRegistration] = useState<TournamentRegistration | null>(null);
+  const [toRemove, setToRemove] = useState<TournamentRegistration | null>(null);
 
-  const eliminatePlayerMutation = useMutation({
+  // A mis-tapped or fake sign-up comes out again; the server keeps the whole entry in the audit log (P2REV0-02).
+  const removeRegistrationMutation = useMutation({
     mutationFn: async (registrationId: string) => {
-      const response = await apiRequest("PUT", `/api/registrations/${registrationId}`, {
-        isEliminated: true,
-        eliminationTime: new Date().toISOString()
-      });
-      return response.json();
+      await apiRequest("DELETE", `/api/registrations/${registrationId}`);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tournaments", tournamentId, "registrations"] });
-      toast({
-        title: "Success",
-        description: "Player eliminated successfully",
-      });
+      queryClient.invalidateQueries({ queryKey: ["/api/tournaments", tournamentId, "activity"] });
+      setToRemove(null);
+      toast({ title: "Entry removed", description: "The player is no longer registered for this tournament" });
     },
     onError: (error: any) => {
+      setToRemove(null);
       toast({
         title: "Error",
-        description: error.message || "Failed to eliminate player",
+        description: error.message || "Failed to remove the entry",
         variant: "destructive",
       });
     },
@@ -68,14 +81,15 @@ export function StandingsTable({
 
   const restorePlayerMutation = useMutation({
     mutationFn: async (registrationId: string) => {
+      // The server clears the elimination time and takes the knockout back off the eliminator.
       const response = await apiRequest("PUT", `/api/registrations/${registrationId}`, {
         isEliminated: false,
-        eliminationTime: null
       });
       return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tournaments", tournamentId, "registrations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tournaments", tournamentId, "activity"] });
       toast({
         title: "Success",
         description: "Player restored successfully",
@@ -108,13 +122,6 @@ export function StandingsTable({
       .substring(0, 2);
   };
 
-  const getPositionDisplay = (index: number, isEliminated: boolean) => {
-    if (isEliminated) {
-      return index + 1;
-    }
-    return index + 1;
-  };
-
   if (isLoading) {
     return (
       <Card>
@@ -135,8 +142,14 @@ export function StandingsTable({
     );
   }
 
-  // Sort registrations: active players first, then eliminated by elimination time (most recent first)
+  // Once finalized, players are in their finishing order: finalize places the players still in without
+  // eliminating them, so they would otherwise stay in registration order. Before that, active players
+  // first, then the eliminated, most recently eliminated first.
   const sortedRegistrations = [...registrations].sort((a, b) => {
+    if (a.finalPosition && b.finalPosition) return a.finalPosition - b.finalPosition;
+    if (a.finalPosition) return -1;
+    if (b.finalPosition) return 1;
+
     // Active players come first
     if (a.isEliminated && !b.isEliminated) return 1;
     if (!a.isEliminated && b.isEliminated) return -1;
@@ -155,8 +168,14 @@ export function StandingsTable({
   return (
     <Card>
       <CardHeader className="border-b border-border">
-        <CardTitle>Current Standings</CardTitle>
-        <p className="text-sm text-muted-foreground mt-1">Live player rankings and eliminations</p>
+        <CardTitle>{closed ? "Final Standings" : "Current Standings"}</CardTitle>
+        <p className="text-sm text-muted-foreground mt-1" data-testid="standings-note">
+          {completed && canManage
+            ? "This tournament is finalized: to change who finished where, use Correct Results."
+            : closed
+              ? "This tournament is closed."
+              : "Live player rankings and eliminations"}
+        </p>
       </CardHeader>
       <CardContent className="p-0">
         {registrations.length === 0 ? (
@@ -183,8 +202,8 @@ export function StandingsTable({
               </thead>
               <tbody className="divide-y divide-border">
                 {sortedRegistrations.map((registration, index) => {
-                  const position = getPositionDisplay(index, registration.isEliminated);
-                  const isFirst = index === 0 && !registration.isEliminated;
+                  const position = registration.finalPosition ?? index + 1;
+                  const isFirst = position === 1 && (registration.finalPosition != null || !registration.isEliminated);
                   
                   return (
                     <tr 
@@ -234,38 +253,53 @@ export function StandingsTable({
                       </td>
                       <td className="py-4 px-6">
                         <span className={`text-sm font-semibold ${registration.prizeAmount ? 'text-accent' : 'text-muted-foreground'}`}>
-                          {registration.prizeAmount ? `$${registration.prizeAmount}` : '-'}
+                          {registration.prizeAmount ? formatMoney(toCents(registration.prizeAmount)) : '-'}
                         </span>
                       </td>
                       <td className="py-4 px-6">
-                        <div className="flex items-center justify-end gap-2">
-                          <Button variant="ghost" size="sm" data-testid={`edit-player-${registration.id}`}>
-                            <Edit className="w-4 h-4 mr-1" />
-                            Edit
-                          </Button>
-                          {registration.isEliminated ? (
-                            <Button 
-                              variant="ghost" 
-                              size="sm"
-                              onClick={() => handleRestore(registration.id)}
-                              disabled={restorePlayerMutation.isPending}
-                              data-testid={`restore-player-${registration.id}`}
-                            >
-                              <RotateCcw className="w-4 h-4 mr-1" />
-                              Restore
+                        {canManage && !closed && (
+                          <div className="flex items-center justify-end gap-2">
+                            <Button variant="ghost" size="sm" data-testid={`edit-player-${registration.id}`}>
+                              <Edit className="w-4 h-4 mr-1" />
+                              Edit
                             </Button>
-                          ) : (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleEliminate(registration)}
-                              className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                              data-testid={`eliminate-player-${registration.id}`}
-                            >
-                              Eliminate
-                            </Button>
-                          )}
-                        </div>
+                            {registration.isEliminated ? (
+                              <Button 
+                                variant="ghost" 
+                                size="sm"
+                                onClick={() => handleRestore(registration.id)}
+                                disabled={restorePlayerMutation.isPending}
+                                data-testid={`restore-player-${registration.id}`}
+                              >
+                                <RotateCcw className="w-4 h-4 mr-1" />
+                                Restore
+                              </Button>
+                            ) : (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleEliminate(registration)}
+                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                data-testid={`eliminate-player-${registration.id}`}
+                              >
+                                Eliminate
+                              </Button>
+                            )}
+                            {/* An entry nothing has happened to yet: the server's own rule (CQ-P2-03). */}
+                            {registrationRemovalProblem(registration, registrations) === null && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setToRemove(registration)}
+                                disabled={removeRegistrationMutation.isPending}
+                                aria-label={`Remove ${registration.player?.name ?? "this player"}'s entry`}
+                                data-testid={`remove-registration-${registration.id}`}
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            )}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );
@@ -275,6 +309,16 @@ export function StandingsTable({
           </div>
         )}
       </CardContent>
+
+      <DeleteConfirmationDialog
+        open={toRemove !== null}
+        onOpenChange={(open) => !open && setToRemove(null)}
+        onConfirm={() => toRemove && removeRegistrationMutation.mutate(toRemove.id)}
+        title="Remove this entry?"
+        description="Use this for a sign-up that should not be here, such as the wrong player or someone who is not playing. Their requests waiting for confirmation are removed too."
+        itemName={toRemove?.player?.name}
+        isDeleting={removeRegistrationMutation.isPending}
+      />
 
       {selectedRegistration && (
         <EliminatePlayerModal

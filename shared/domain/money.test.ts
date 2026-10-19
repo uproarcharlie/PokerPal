@@ -17,7 +17,7 @@ function decimalString(cents: number): string {
   return `${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, "0")}`;
 }
 
-describe("parseAmount (today's parseFloat semantics)", () => {
+describe("parseAmount (the old parseFloat semantics)", () => {
   it.each([
     ["50.00", 50],
     ["5", 5],

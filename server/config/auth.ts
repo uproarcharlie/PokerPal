@@ -6,17 +6,26 @@ import type { Pool } from "pg";
 import { getPool } from "../db";
 import type { AppEnv } from "./env";
 
-const SESSION_COOKIE_NAME = "pokerpal.sid";
+export const SESSION_COOKIE_NAME = "pokerpal.sid";
+
+/** The Postgres table sessions live in. server/repositories/sessions.ts revokes rows in it directly. */
+export const SESSION_TABLE = "session";
 
 const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** Postgres-backed session store (table `session`, created on first use if missing). */
+/**
+ * Postgres-backed session store (table `session`, created on first use if missing).
+ *
+ * Touching is off: sessions are not rolling, so the browser's cookie expires 7 days after sign-in
+ * whatever the store says, and a touch would only rewrite the row's expiry on every request (CC-12).
+ */
 export function createPgSessionStore(pool: Pool = getPool()): connectPgSimple.PGStore {
   const PgStore = connectPgSimple(session);
   return new PgStore({
     pool,
-    tableName: "session",
+    tableName: SESSION_TABLE,
     createTableIfMissing: true,
+    disableTouch: true,
   });
 }
 
@@ -46,12 +55,24 @@ export function createSessionMiddleware(
   });
 }
 
+/**
+ * What a session stores. Only `userId` identifies the user: role and active status are read from the
+ * database on every request (server/http/authz.ts), never from here.
+ */
 declare module "express-session" {
   interface SessionData {
     userId: string;
-    role: string;
-    /** Set while an admin impersonates another user; restored by stop-impersonation. */
+    /** The admin who started an impersonation of `userId`; restored by stop-impersonation. */
     originalAdminId?: string;
+    /** When the impersonation started (ISO 8601). */
+    impersonationStartedAt?: string;
+    /**
+     * Written but never read, for one release (P2-PROD-03): the build before Phase 2 authorized admin
+     * routes from `role` and restored `originalAdminRole` after an impersonation, and shares the cookie
+     * and session table, so a rollback keeps sessions started after the deploy working. Remove once
+     * Phase 2 is the oldest build a rollback could go to.
+     */
+    role?: string;
     originalAdminRole?: string;
   }
 }

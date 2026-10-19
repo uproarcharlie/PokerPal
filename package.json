@@ -33,7 +33,6 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1152.0",
-    "@aws-sdk/lib-storage": "^3.1152.0",
     "@googlemaps/js-api-loader": "^2.0.1",
     "@hookform/resolvers": "^3.10.0",
     "@jridgewell/trace-mapping": "^0.3.25",

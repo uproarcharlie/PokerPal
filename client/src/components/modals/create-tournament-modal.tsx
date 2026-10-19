@@ -32,6 +32,9 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/auth-context";
 import { InfoIcon, Check, Save } from "lucide-react";
+import { PAYOUT_STRUCTURE_LABELS } from "@shared/domain/payouts";
+import { PAYOUT_STRUCTURE_KEYS } from "@shared/api/tournaments";
+import type { Viewer } from "@shared/api/common";
 
 const tournamentSchema = z.object({
   name: z.string().min(1, "Tournament name is required"),
@@ -54,7 +57,7 @@ const tournamentSchema = z.object({
   addonRakeAmount: z.string().regex(/^(\d+(\.\d{2})?)?$/, "Invalid amount format").optional(),
   rakeType: z.enum(["none", "percentage", "fixed"]),
   rakeAmount: z.string().regex(/^(\d+(\.\d{2})?)?$/, "Invalid amount format").optional(),
-  payoutStructure: z.enum(["standard", "top3", "top5", "top8", "top9", "custom"]),
+  payoutStructure: z.enum(PAYOUT_STRUCTURE_KEYS),
   enableHighHand: z.boolean().default(false),
   highHandAmount: z.string().regex(/^(\d+(\.\d{2})?)?$/, "Invalid amount format").optional(),
   highHandRakeType: z.enum(["none", "percentage", "fixed"]),
@@ -75,7 +78,7 @@ interface Club {
   name: string;
   address?: string;
   timezone?: string;
-  ownerId?: string | null;
+  viewer?: Viewer;
 }
 
 interface Season {
@@ -101,16 +104,14 @@ interface CreateTournamentModalProps {
 export function CreateTournamentModal({ open, onOpenChange }: CreateTournamentModalProps) {
   const [isDraft, setIsDraft] = useState(false);
   const { toast } = useToast();
-  const { user, isAdmin } = useAuth();
+  const { isAdmin } = useAuth();
 
   const { data: clubs = [] } = useQuery<Club[]>({
     queryKey: ["/api/clubs"],
   });
 
-  // Filter to only show clubs the user owns (or all clubs if admin)
-  const ownedClubs = isAdmin
-    ? clubs
-    : clubs.filter(club => club.ownerId === user?.id);
+  // Clubs the user may create tournaments for: owned or managed (every club for an admin).
+  const ownedClubs = clubs.filter(club => club.viewer?.canManage);
 
   const { data: seasons = [] } = useQuery<Season[]>({
     queryKey: ["/api/seasons"],
@@ -283,7 +284,7 @@ export function CreateTournamentModal({ open, onOpenChange }: CreateTournamentMo
                       <ImageUpload
                         onImageUpload={field.onChange}
                         currentImage={field.value}
-                        entityType="tournaments"
+                        kind="tournament_banner"
                         placeholder="Upload tournament banner or image"
                       />
                     </FormControl>
@@ -322,7 +323,7 @@ export function CreateTournamentModal({ open, onOpenChange }: CreateTournamentMo
                         <SelectContent>
                           {ownedClubs.length === 0 ? (
                             <SelectItem value="no-clubs" disabled>
-                              {isAdmin ? "No clubs available" : "You don't own any clubs"}
+                              {isAdmin ? "No clubs available" : "You don't run any clubs"}
                             </SelectItem>
                           ) : (
                             ownedClubs.map((club) => (
@@ -766,12 +767,11 @@ export function CreateTournamentModal({ open, onOpenChange }: CreateTournamentMo
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="standard">Standard (50/30/20)</SelectItem>
-                        <SelectItem value="top3">Top 3 (60/25/15)</SelectItem>
-                        <SelectItem value="top5">Top 5 (40/25/18/10/7)</SelectItem>
-                        <SelectItem value="top8">Top 8 (35/22/16/11/7/5/3/1)</SelectItem>
-                        <SelectItem value="top9">Top 9 (32/20/15/11/8/6/4/3/1)</SelectItem>
-                        <SelectItem value="custom">Custom Distribution</SelectItem>
+                        {PAYOUT_STRUCTURE_KEYS.map((key) => (
+                          <SelectItem key={key} value={key}>
+                            {PAYOUT_STRUCTURE_LABELS[key]}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                     <FormMessage />

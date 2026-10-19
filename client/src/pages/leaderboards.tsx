@@ -29,7 +29,6 @@ interface LeaderboardEntry {
   player: {
     id: string;
     name: string;
-    email?: string;
   };
   points: number;
   tournaments: number;
@@ -229,7 +228,6 @@ export default function Leaderboards() {
                             </div>
                             <p className="text-sm text-muted-foreground">
                               {entry.tournaments} tournament{entry.tournaments !== 1 ? 's' : ''}
-                              {entry.player.email && ` • ${entry.player.email}`}
                             </p>
                           </div>
 

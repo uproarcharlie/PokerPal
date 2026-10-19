@@ -21,7 +21,7 @@ RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
 
 COPY --from=builder /app/dist ./dist
 
-# Uploads fall back to local disk when cloud storage is not configured, so `node` must be able to write here.
+# Without R2, images go to local disk only with UPLOAD_DIR set (e.g. /app/uploads on a volume), so `node` must be able to write here.
 RUN mkdir -p uploads && chown node:node uploads
 
 USER node

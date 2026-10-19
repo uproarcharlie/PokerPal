@@ -7,6 +7,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Trophy, Calendar, Users, TrendingUp, Info, Globe } from "lucide-react";
 import { FaDiscord, FaTwitter, FaFacebook, FaInstagram } from "react-icons/fa";
 import type { Player } from "@shared/schema";
+import { RichTextContent } from "@/components/rich-text-content";
+import { safeHttpUrl } from "@shared/api/common";
 
 interface Club {
   id: string;
@@ -185,12 +187,15 @@ export default function PublicClubView() {
     queryKey: [`/api/clubs/slug/${slug}`],
   });
 
+  // Only this club's tournaments and seasons, not every club's.
   const { data: tournaments = [] } = useQuery<Tournament[]>({
-    queryKey: ["/api/tournaments"],
+    queryKey: [`/api/tournaments?clubId=${encodeURIComponent(club?.id ?? "")}`],
+    enabled: !!club?.id,
   });
 
   const { data: seasons = [] } = useQuery<Season[]>({
-    queryKey: ["/api/seasons"],
+    queryKey: [`/api/seasons?clubId=${encodeURIComponent(club?.id ?? "")}`],
+    enabled: !!club?.id,
   });
 
   const clubTournaments = tournaments.filter(t => t.clubId === club?.id);
@@ -264,6 +269,14 @@ export default function PublicClubView() {
     }
   };
 
+  const socialLinks = [
+    { href: safeHttpUrl(club.discordUrl), title: "Discord", Icon: FaDiscord, hover: "hover:text-[#5865F2]" },
+    { href: safeHttpUrl(club.twitterUrl), title: "Twitter/X", Icon: FaTwitter, hover: "hover:text-[#1DA1F2]" },
+    { href: safeHttpUrl(club.facebookUrl), title: "Facebook", Icon: FaFacebook, hover: "hover:text-[#1877F2]" },
+    { href: safeHttpUrl(club.instagramUrl), title: "Instagram", Icon: FaInstagram, hover: "hover:text-[#E4405F]" },
+    { href: safeHttpUrl(club.websiteUrl), title: "Website", Icon: Globe, hover: "hover:text-primary" },
+  ].filter((link): link is typeof link & { href: string } => link.href !== null);
+
   return (
     <div className="min-h-screen bg-background">
       {/* Header - Club Branding */}
@@ -284,64 +297,21 @@ export default function PublicClubView() {
             <div className="flex-1">
               <h1 className="text-2xl md:text-3xl font-bold text-primary">{club.name}</h1>
 
-              {/* Social Icons */}
-              {(club.discordUrl || club.twitterUrl || club.facebookUrl || club.instagramUrl || club.websiteUrl) && (
+              {/* Social Icons: only http(s) links, whatever an older row stored (P2REV0-SEC-05) */}
+              {socialLinks.length > 0 && (
                 <div className="flex items-center gap-3 mt-3">
-                  {club.discordUrl && (
+                  {socialLinks.map(({ href, title, Icon, hover }) => (
                     <a
-                      href={club.discordUrl}
+                      key={title}
+                      href={href}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-muted-foreground hover:text-[#5865F2] transition-colors"
-                      title="Discord"
+                      className={`text-muted-foreground ${hover} transition-colors`}
+                      title={title}
                     >
-                      <FaDiscord className="w-5 h-5" />
+                      <Icon className="w-5 h-5" />
                     </a>
-                  )}
-                  {club.twitterUrl && (
-                    <a
-                      href={club.twitterUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-muted-foreground hover:text-[#1DA1F2] transition-colors"
-                      title="Twitter/X"
-                    >
-                      <FaTwitter className="w-5 h-5" />
-                    </a>
-                  )}
-                  {club.facebookUrl && (
-                    <a
-                      href={club.facebookUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-muted-foreground hover:text-[#1877F2] transition-colors"
-                      title="Facebook"
-                    >
-                      <FaFacebook className="w-5 h-5" />
-                    </a>
-                  )}
-                  {club.instagramUrl && (
-                    <a
-                      href={club.instagramUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-muted-foreground hover:text-[#E4405F] transition-colors"
-                      title="Instagram"
-                    >
-                      <FaInstagram className="w-5 h-5" />
-                    </a>
-                  )}
-                  {club.websiteUrl && (
-                    <a
-                      href={club.websiteUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-muted-foreground hover:text-primary transition-colors"
-                      title="Website"
-                    >
-                      <Globe className="w-5 h-5" />
-                    </a>
-                  )}
+                  ))}
                 </div>
               )}
             </div>
@@ -369,10 +339,7 @@ export default function PublicClubView() {
               </CardHeader>
               <CardContent className="p-6">
                 {club.description ? (
-                  <div
-                    className="text-muted-foreground prose prose-sm max-w-none"
-                    dangerouslySetInnerHTML={{ __html: club.description }}
-                  />
+                  <RichTextContent className="text-muted-foreground prose prose-sm max-w-none" html={club.description} />
                 ) : (
                   <p className="text-muted-foreground italic">No description available</p>
                 )}

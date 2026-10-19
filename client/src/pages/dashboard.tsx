@@ -6,13 +6,8 @@ import { CreateTournamentModal } from "@/components/modals/create-tournament-mod
 import { PlayCircle, UsersRound, DollarSign, Users, Eye, Edit, Plus, Trophy, ChartLine } from "lucide-react";
 import { useState } from "react";
 import { Link } from "wouter";
-
-interface DashboardStats {
-  activeTournaments: number;
-  totalPlayers: number;
-  totalPrizePool: number;
-  activeClubs: number;
-}
+import { formatMoney } from "@shared/domain/money";
+import type { DashboardStatsDto } from "@shared/api/dashboard";
 
 interface Tournament {
   id: string;
@@ -22,7 +17,9 @@ interface Tournament {
   seasonId?: string;
   startDateTime: string;
   maxPlayers: number;
-  confirmedPlayerCount?: number;
+  /** Paid entries, for a club the viewer runs; null for any other club's tournament. */
+  confirmedPlayerCount?: number | null;
+  registeredCount?: number;
 }
 
 interface Club {
@@ -40,7 +37,7 @@ interface Season {
 export default function Dashboard() {
   const [showCreateTournament, setShowCreateTournament] = useState(false);
 
-  const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
+  const { data: stats, isLoading: statsLoading } = useQuery<DashboardStatsDto>({
     queryKey: ["/api/dashboard/stats"],
   });
 
@@ -54,11 +51,6 @@ export default function Dashboard() {
 
   const { data: seasons = [] } = useQuery<Season[]>({
     queryKey: ["/api/seasons"],
-  });
-
-  const { data: leaderboard = [] } = useQuery({
-    queryKey: ["/api/seasons/active/leaderboard"],
-    enabled: false, // Enable when we have active seasons
   });
 
   if (statsLoading || tournamentsLoading || clubsLoading) {
@@ -143,7 +135,7 @@ export default function Dashboard() {
                   <Badge className="bg-green-100 text-green-700 border-green-200 hidden md:inline-flex text-xs">+8%</Badge>
                 </div>
                 <h3 className="text-sm md:text-3xl font-bold text-emerald-600 font-display" data-testid="total-prize-pool">
-                  ${stats?.totalPrizePool?.toLocaleString() || '0'}
+                  {formatMoney((stats?.totalPrizePool ?? 0) * 100)}
                 </h3>
                 <p className="text-xs md:text-sm text-emerald-700/70 mt-1 font-medium">Prize Pool</p>
               </CardContent>
@@ -232,7 +224,7 @@ export default function Dashboard() {
                               </Badge>
                             </td>
                             <td className="py-4 px-6">
-                              <span className="text-sm font-medium text-foreground">{tournament.confirmedPlayerCount || 0}/{tournament.maxPlayers}</span>
+                              <span className="text-sm font-medium text-foreground">{tournament.confirmedPlayerCount ?? tournament.registeredCount ?? 0}/{tournament.maxPlayers}</span>
                             </td>
                             <td className="py-4 px-6">
                               <span className="text-sm text-muted-foreground">

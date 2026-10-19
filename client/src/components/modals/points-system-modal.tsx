@@ -86,29 +86,27 @@ export function PointsSystemModal({ open, onOpenChange, seasonId, seasonName }: 
   });
 
   const createPointsSystemMutation = useMutation({
+    // The system and its allocations are created together, in one transaction.
     mutationFn: async (data: PointsSystemFormData) => {
       const payload = {
-        ...data,
+        name: data.name,
+        description: data.description || null,
         participationPoints: data.participationPoints ? parseInt(data.participationPoints) : 0,
         knockoutPoints: data.knockoutPoints ? parseInt(data.knockoutPoints) : 0,
-      };
-
-      const response = await apiRequest("POST", "/api/points-systems", payload);
-      return response.json();
-    },
-    onSuccess: async (pointsSystem) => {
-      // Create allocations for the new points system
-      for (const allocation of allocations) {
-        await apiRequest("POST", "/api/points-allocations", {
-          pointsSystemId: pointsSystem.id,
+        allocations: allocations.map((allocation) => ({
           position: allocation.position,
           positionEnd: allocation.positionEnd || null,
           points: allocation.points,
           description: allocation.description || null,
-        });
-      }
+        })),
+      };
 
+      const response = await apiRequest("POST", `/api/seasons/${seasonId}/points-systems`, payload);
+      return response.json();
+    },
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/seasons", seasonId, "points-systems"] });
+      queryClient.invalidateQueries({ queryKey: [`/api/seasons/${seasonId}/points-systems`] });
       toast({
         title: "Success",
         description: "Points system created successfully!",

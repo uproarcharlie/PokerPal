@@ -111,6 +111,7 @@ jobs:
           docker run --detach --name pokerpal --network host \
             --env DATABASE_URL=postgres://postgres:postgres@localhost:5432/pokerpal_docker \
             --env SESSION_SECRET=ci --env PORT=3000 \
+            --env UPLOAD_DIR=/app/uploads \
             pokerpal:ci
           for attempt in $(seq 1 60); do
             if curl -fsS http://localhost:3000/api/health > health.json; then
@@ -123,6 +124,7 @@ jobs:
           done
           echo "::error::The image never passed its healthcheck"
           exit 1
+      # No R2 here, so the image keeps photos on local disk only because UPLOAD_DIR names it (as on a volume).
       - name: Store an uploaded photo (sharp, and uploads/ written by the node user)
         run: |
           # A 1x1 PNG.
@@ -130,7 +132,7 @@ jobs:
           image_url=$(curl -fsS --form 'image=@photo.png;type=image/png' http://localhost:3000/api/upload/public | jq -er .imageUrl)
           echo "Stored $image_url"
           curl -fsS --output /dev/null --write-out '%{content_type}\n' "http://localhost:3000$image_url" | grep -x image/webp
-          docker exec pokerpal sh -c 'test "$(id -un)" = node && ls -ln uploads/players'
+          docker exec pokerpal sh -c 'test "$(id -un)" = node && ls -lnR uploads/player_avatar'
       - name: Server logs
         if: always()
         run: docker logs pokerpal || true

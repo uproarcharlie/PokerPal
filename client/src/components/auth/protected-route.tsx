@@ -1,5 +1,5 @@
 import { ReactNode } from "react";
-import { useLocation } from "wouter";
+import { Redirect } from "wouter";
 import { useAuth } from "@/contexts/auth-context";
 import { Loader2 } from "lucide-react";
 
@@ -9,8 +9,7 @@ interface ProtectedRouteProps {
 }
 
 export function ProtectedRoute({ children, requireAdmin = false }: ProtectedRouteProps) {
-  const [, setLocation] = useLocation();
-  const { user, loading, isAuthenticated, isAdmin } = useAuth();
+  const { loading, isAuthenticated, isAdmin } = useAuth();
 
   // Show loading spinner while checking auth
   if (loading) {
@@ -21,16 +20,14 @@ export function ProtectedRoute({ children, requireAdmin = false }: ProtectedRout
     );
   }
 
-  // Redirect to login if not authenticated
+  // Signed out, or the session just ended (the auth context forgets the user on a 401).
   if (!isAuthenticated) {
-    setLocation("/login");
-    return null;
+    return <Redirect to="/login" />;
   }
 
   // Check admin requirement - redirect to public home page
   if (requireAdmin && !isAdmin) {
-    setLocation("/home");
-    return null;
+    return <Redirect to="/home" />;
   }
 
   return <>{children}</>;

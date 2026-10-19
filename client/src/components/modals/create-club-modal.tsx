@@ -129,7 +129,7 @@ export function CreateClubModal({ open, onOpenChange }: CreateClubModalProps) {
                     <ImageUpload
                       onImageUpload={field.onChange}
                       currentImage={field.value}
-                      entityType="clubs"
+                      kind="club_logo"
                       placeholder="Upload club logo or image"
                     />
                   </FormControl>

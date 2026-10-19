@@ -3,6 +3,7 @@ import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Trophy, Calendar, Users } from "lucide-react";
+import { richTextExcerpt } from "@/lib/rich-text";
 
 interface Club {
   id: string;
@@ -21,19 +22,19 @@ interface Tournament {
   maxPlayers: number;
 }
 
+/** How many clubs the home page lists (oldest first), and how many upcoming tournaments (soonest first). */
+const HOME_CLUBS = 24;
+const HOME_TOURNAMENTS = 6;
+
 export default function PublicHome() {
   const { data: clubs = [] } = useQuery<Club[]>({
-    queryKey: ["/api/clubs"],
+    queryKey: [`/api/clubs?limit=${HOME_CLUBS}`],
   });
 
-  const { data: tournaments = [] } = useQuery<Tournament[]>({
-    queryKey: ["/api/tournaments"],
+  // Scheduled or open for registration, soonest start first: the server sorts and cuts the list.
+  const { data: upcomingTournaments = [] } = useQuery<Tournament[]>({
+    queryKey: [`/api/tournaments?upcoming=true&limit=${HOME_TOURNAMENTS}`],
   });
-
-  const upcomingTournaments = tournaments
-    .filter(t => t.status === 'scheduled' || t.status === 'registration')
-    .sort((a, b) => new Date(a.startDateTime).getTime() - new Date(b.startDateTime).getTime())
-    .slice(0, 6);
 
   return (
     <div className="min-h-screen bg-background">
@@ -129,9 +130,9 @@ export default function PublicHome() {
                     </CardHeader>
                     <CardContent>
                       {club.description && (
-                        <p className="text-sm text-muted-foreground line-clamp-2"
-                           dangerouslySetInnerHTML={{ __html: club.description.substring(0, 100) + '...' }}
-                        />
+                        <p className="text-sm text-muted-foreground line-clamp-2">
+                          {richTextExcerpt(club.description, 100)}
+                        </p>
                       )}
                       <Button className="w-full mt-4" size="sm" variant="outline">
                         View Club

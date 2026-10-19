@@ -1,9 +1,8 @@
 /**
  * Payout structures and how a prize pool is split between places. PURE: no runtime imports.
  *
- * Shares are integer basis points (10000 = 100%). `allocatePayouts` is the v2 split that finalize
- * moves to from Phase 2 onwards. `legacyPayouts` reproduces the split that finalize and both tournament
- * pages compute today, for parity checks and for showing tournaments finalized before v2.
+ * Shares are integer basis points (10000 = 100%). `allocatePayouts` is the v2 split that finalize, the
+ * preview and every screen use from Phase 2 onwards.
  */
 import type { Cents } from "./money";
 
@@ -27,6 +26,15 @@ export const PAYOUT_STRUCTURES: Readonly<Record<StandardPayoutKey, readonly numb
   top8: Object.freeze([3500, 2200, 1500, 1200, 800, 400, 200, 200]),
   top9: Object.freeze([3000, 2000, 1500, 1200, 900, 600, 400, 200, 200]),
 });
+
+/**
+ * Every structure a tournament may use, in menu order: the tables above, then custom. Built from the
+ * tables, so a structure added there is accepted by the API and offered by the create form at once.
+ */
+export const PAYOUT_STRUCTURE_KEYS = [
+  ...(Object.keys(PAYOUT_STRUCTURES) as StandardPayoutKey[]),
+  "custom",
+] as PayoutStructureKey[] as [PayoutStructureKey, ...PayoutStructureKey[]];
 
 function percentList(basisPoints: readonly number[]): string {
   return basisPoints.map((bp) => String(bp / 100)).join("/");
@@ -101,7 +109,7 @@ export interface ResolvedPayoutStructure {
 
 /**
  * The shares a tournament pays. A valid custom list is honoured; an invalid one, or an unknown key,
- * pays Standard and says why. (Today "custom" always pays Standard: see `legacyPayouts`.)
+ * pays Standard and says why. (Before Phase 2, "custom" always paid Standard.)
  */
 export function resolvePayoutStructure(
   structure: string | null | undefined,
@@ -168,32 +176,9 @@ function assertShares(basisPoints: readonly number[]): void {
   }
 }
 
-/** A place as today's code shows it: `amount` is whole dollars. */
-export interface LegacyPayout {
-  position: number;
-  percentage: number;
-  amount: number;
-}
-
-/**
- * Today's split, as finalize (server/routes.ts:886-897), the admin page (tournament-details.tsx:318-336)
- * and the public page (public-tournament-view.tsx:238-256) compute it at dddf8ad: each place is
- * Math.round(pool × share) whole dollars, so the places can add up to more or less than the pool.
- * "custom" and unknown structures pay Standard. A pool of zero or less pays nothing.
- */
-export function legacyPayouts(pool: number, structure: string | null | undefined): LegacyPayout[] {
-  if (!(pool > 0)) return [];
-  const basisPoints = isStandardKey(structure) ? PAYOUT_STRUCTURES[structure] : PAYOUT_STRUCTURES.standard;
-  return basisPoints.map((bp, i) => {
-    // bp / 10000 is the same double as the literal in today's tables (0.35 for 3500).
-    const fraction = bp / FULL_POOL_BP;
-    return { position: i + 1, percentage: fraction * 100, amount: Math.round(pool * fraction) };
-  });
-}
-
 /**
  * What no one is paid when fewer players entered than there are paid places. Finalize only pays
- * positions up to the number of entrants, as it does today.
+ * positions up to the number of entrants, as it always has.
  */
 export function undistributedCents(payouts: readonly Payout[], entrants: number): Cents {
   return payouts.filter((p) => p.position > entrants).reduce((sum, p) => sum + p.amountCents, 0);

@@ -2,18 +2,15 @@
  * Prize pool, AP (rake) and payout maths for one tournament: the single source of truth for the client
  * and the server. PURE: no I/O, no Date, and no runtime imports outside shared/domain.
  *
- * `computePrizePool` returns two sets of figures:
- * - the top-level ones are exact integer cents. Payouts, stored amounts and totals come from these.
- * - `legacy` repeats today's float arithmetic, with the same expressions in the same order as the code
- *   at dddf8ad, so the gross, AP and net that today's screens show are reproduced bit for bit. It is for
- *   parity checks and for showing tournaments finalized before v2. Never pay from it.
+ * Every figure is exact integer cents: payouts, stored amounts and totals all come from these. (The
+ * float arithmetic the app ran before Phase 2 lives only in the parity tests' helper,
+ * test/helpers/legacy-money.ts.)
  *
  * Precedence: a manual prize pool beats the manual AP total (`rakeOverride`), which beats the AP the
  * club's rates give. High-hand money is a separate pot and is never part of the AP override.
  */
 import {
   isAmountSet,
-  parseAmount,
   percentOfCents,
   toBasisPoints,
   toCents,
@@ -22,10 +19,9 @@ import {
 } from "./money";
 import {
   allocatePayouts,
-  legacyPayouts,
   PAYOUT_ALGORITHM,
   resolvePayoutStructure,
-  type LegacyPayout,
+  undistributedCents,
   type Payout,
   type PayoutAlgorithm,
   type ResolvedPayoutStructure,
@@ -100,25 +96,8 @@ export interface HighHandBreakdown {
   gross: Cents;
   rake: Cents;
   net: Cents;
+  /** How many prizes the pot is split into; what each winner gets is nextHighHandAward's. */
   winners: number;
-  /** The suggested award per winner: net split evenly, rounded down to the cent (0 when net <= 0). */
-  perWinner: Cents;
-  /** The cents an even split leaves over. */
-  remainder: Cents;
-}
-
-/** Today's figures as float dollars. */
-export interface LegacyFigures {
-  gross: ComponentAmounts;
-  rake: ComponentAmounts;
-  /** gross.total - rake.total: what finalize and the public page pay from today. */
-  calculatedNet: number;
-  /** The admin page's pool: the manual prize pool if set, else calculatedNet. (No AP override today.) */
-  net: number;
-  /** legacyPayouts(net, payoutStructure) */
-  payouts: LegacyPayout[];
-  /** The admin page's high-hand figures: any non-percentage rake type deducts the amount as a flat fee. */
-  highHand: { gross: number; rake: number; net: number; perWinner: number };
 }
 
 export interface PrizePoolBreakdown {
@@ -127,8 +106,6 @@ export interface PrizePoolBreakdown {
   /** In cents. */
   gross: ComponentAmounts;
   rake: RakeBreakdown;
-  /** gross.total - rake.calculated */
-  netFromRates: Cents;
   /** gross.total - rake.applied */
   netAfterAp: Cents;
   manualPrizePool: Cents | null;
@@ -141,7 +118,6 @@ export interface PrizePoolBreakdown {
   /** allocatePayouts(net, structure): they add up to `net` exactly. Empty when net <= 0. */
   payouts: Payout[];
   highHand: HighHandBreakdown;
-  legacy: LegacyFigures;
 }
 
 /**
@@ -176,7 +152,6 @@ export function computePrizePool(tournament: PrizePoolInput, entries: readonly E
     counts,
     gross,
     rake: { buyIn: buyInRake, rebuy: rebuyRake, addon: addonRake, calculated, override, applied },
-    netFromRates: gross.total - calculated,
     netAfterAp,
     manualPrizePool,
     net,
@@ -185,7 +160,6 @@ export function computePrizePool(tournament: PrizePoolInput, entries: readonly E
     structure,
     payouts: allocatePayouts(net, structure.basisPoints),
     highHand: highHandCents(tournament, counts.highHandEntrants),
-    legacy: legacyFigures(tournament, counts),
   };
 }
 
@@ -200,10 +174,85 @@ function countEntries(entries: readonly EntryInput[]): EntryCounts {
   return counts;
 }
 
+/**
+ * What one registration owes (or paid): every buy-in, re-buy and add-on at the tournament's prices,
+ * plus the high-hand entry when it entered the high hand (money-18). An entry counts in the high hand
+ * exactly when the pot counts it (`enteringHighHands`), so the payment desk asks for what the pot holds.
+ */
+export function amountDueCents(
+  tournament: Pick<PrizePoolInput, "buyInAmount" | "rebuyAmount" | "addonAmount" | "highHandAmount">,
+  entry: EntryInput,
+): Cents {
+  return (
+    toCents(tournament.buyInAmount) * (entry.buyIns ?? 0) +
+    toCents(tournament.rebuyAmount) * (entry.rebuys ?? 0) +
+    toCents(tournament.addonAmount) * (entry.addons ?? 0) +
+    (entry.enteringHighHands ? toCents(tournament.highHandAmount) : 0)
+  );
+}
+
 function rakeCents(type: string | null | undefined, amount: MoneyInput, count: number, subtotal: Cents): Cents {
   if (type === "percentage") return percentOfCents(subtotal, toBasisPoints(amount));
   if (type === "fixed") return count * toCents(amount);
   return 0;
+}
+
+/**
+ * The most high-hand prizes a tournament can have, ties included: one rule for what may be set and
+ * what a tie may add, so a stored count is always one the API accepts back (CQ-P2-04).
+ */
+export const HIGH_HAND_PRIZES_MAX = 20;
+
+/**
+ * A tie for a high hand (TN2-04): a new winner shares the prize an earlier winner was awarded. The new
+ * winner gets half, rounded down to the cent; the earlier winner keeps the rest (any odd cent), so the
+ * two still add up to the original award. The one copy of the rule for the award dialog and the server.
+ */
+export function splitHighHandAward(awardedCents: Cents): { shareCents: Cents; keepCents: Cents } {
+  const shareCents = Math.floor(Math.max(awardedCents, 0) / 2);
+  return { shareCents, keepCents: awardedCents - shareCents };
+}
+
+/**
+ * The next high-hand award (MONEY-36): what is left of the pot after the awards already made, split
+ * over the winners still to come and rounded down to the cent, the last winner taking everything left.
+ * So however the pot grew between awards, the awards add up to the pot exactly. Null once every
+ * prize has been awarded; 0 when nothing is left.
+ */
+export function nextHighHandAward(highHand: Pick<HighHandBreakdown, "net" | "winners">, awardedCents: readonly Cents[]): Cents | null {
+  const winnersLeft = highHand.winners - awardedCents.length;
+  if (winnersLeft <= 0) return null;
+  const left = highHand.net - awardedCents.reduce((sum, amount) => sum + amount, 0);
+  if (left <= 0) return 0;
+  return winnersLeft === 1 ? left : Math.floor(left / winnersLeft);
+}
+
+export type HighHandAwardsProblem = {
+  /** HIGH_HAND_OVER_POOL: more awarded than the pot holds; HIGH_HAND_AWARDED: every prize is awarded, so the pot is spoken for. */
+  code: "HIGH_HAND_OVER_POOL" | "HIGH_HAND_AWARDED";
+  awardedCents: Cents;
+  potCents: Cents;
+};
+
+/**
+ * Whether the high-hand awards already made still fit the pot after a change to it (an entry ticked
+ * or unticked, the fee, its rake or the number of prizes): the awards may never add up to more than
+ * the pot, there may never be more winners than prizes, and once every prize is awarded the awards
+ * must add up to the pot exactly, so no money is left that nobody can win (MONEY-P2REV-05). Null when
+ * they fit, or when nothing has been awarded yet.
+ */
+export function highHandAwardsProblem(
+  highHand: Pick<HighHandBreakdown, "net" | "winners">,
+  awardedCents: readonly Cents[],
+): HighHandAwardsProblem | null {
+  if (awardedCents.length === 0) return null;
+  const awarded = awardedCents.reduce((sum, amount) => sum + amount, 0);
+  const pot = Math.max(highHand.net, 0);
+  if (awarded > pot) return { code: "HIGH_HAND_OVER_POOL", awardedCents: awarded, potCents: pot };
+  if (awardedCents.length > highHand.winners || (awardedCents.length === highHand.winners && awarded !== pot)) {
+    return { code: "HIGH_HAND_AWARDED", awardedCents: awarded, potCents: pot };
+  }
+  return null;
 }
 
 function highHandCents(tournament: PrizePoolInput, entrants: number): HighHandBreakdown {
@@ -216,51 +265,7 @@ function highHandCents(tournament: PrizePoolInput, entrants: number): HighHandBr
   }
   const net = gross - rake;
   const winners = tournament.highHandPayouts && tournament.highHandPayouts > 0 ? tournament.highHandPayouts : 1;
-  const perWinner = net > 0 ? Math.floor(net / winners) : 0;
-  return { entrants, gross, rake, net, winners, perWinner, remainder: net > 0 ? net - perWinner * winners : 0 };
-}
-
-/**
- * Today's float arithmetic. The expressions and their order match finalize (server/routes.ts:843-875),
- * the admin page (tournament-details.tsx:278-315 and 881-889), the public page
- * (public-tournament-view.tsx:200-232) and the calculator (prize-pool-calculator.tsx:56-63) at dddf8ad.
- * Do not reorder or simplify them: the parity tests compare them bit for bit.
- */
-function legacyFigures(t: PrizePoolInput, counts: EntryCounts): LegacyFigures {
-  const buyInTotal = counts.buyIns * parseAmount(t.buyInAmount);
-  const rebuyTotal = counts.rebuys * parseAmount(t.rebuyAmount);
-  const addonTotal = counts.addons * parseAmount(t.addonAmount);
-  const grossTotal = buyInTotal + rebuyTotal + addonTotal;
-
-  const buyInRake = legacyRake(t.rakeType, t.rakeAmount, counts.buyIns, buyInTotal);
-  const rebuyRake = legacyRake(t.rebuyRakeType, t.rebuyRakeAmount, counts.rebuys, rebuyTotal);
-  const addonRake = legacyRake(t.addonRakeType, t.addonRakeAmount, counts.addons, addonTotal);
-  const rake = buyInRake + rebuyRake + addonRake;
-  const calculatedNet = grossTotal - rake;
-  const net = isAmountSet(t.manualPrizePool) ? parseAmount(t.manualPrizePool) : calculatedNet;
-
-  const highHandGross = counts.highHandEntrants * parseAmount(t.highHandAmount);
-  const highHandRake =
-    t.highHandRakeType === "percentage"
-      ? highHandGross * (parseAmount(t.highHandRakeAmount) / 100)
-      : parseAmount(t.highHandRakeAmount);
-  const highHandNet = highHandGross - highHandRake;
-  const perWinner = t.highHandPayouts && t.highHandPayouts > 0 ? highHandNet / t.highHandPayouts : highHandNet;
-
-  return {
-    gross: { buyIn: buyInTotal, rebuy: rebuyTotal, addon: addonTotal, total: grossTotal },
-    rake: { buyIn: buyInRake, rebuy: rebuyRake, addon: addonRake, total: rake },
-    calculatedNet,
-    net,
-    payouts: legacyPayouts(net, t.payoutStructure),
-    highHand: { gross: highHandGross, rake: highHandRake, net: highHandNet, perWinner },
-  };
-}
-
-function legacyRake(type: string | null | undefined, amount: MoneyInput, count: number, subtotal: number): number {
-  if (type === "percentage") return subtotal * (parseAmount(amount) / 100);
-  if (type === "fixed") return count * parseAmount(amount);
-  return 0;
+  return { entrants, gross, rake, net, winners };
 }
 
 /* ---------- what to show as a tournament's payouts ---------- */
@@ -272,12 +277,31 @@ export interface StoredResultInput {
   prizeAmount?: MoneyInput;
 }
 
+/** The part of a finalize snapshot (shared/domain/finalize.ts) the displays read. */
+export interface PaidSnapshotInput {
+  pool: { netCents: Cents };
+  paid: ReadonlyArray<{ position: number; registrationId: string; basisPoints: number; amountCents: Cents }>;
+}
+
+/** The tournament fields `payoutsForDisplay` reads. A `Tournament` row fits as it is. */
+export interface PayoutDisplayTournament {
+  status?: string | null;
+  prizePoolSnapshot?: PaidSnapshotInput | null;
+}
+
 /**
- * - "stored": a completed tournament's prizes as finalize recorded them, never recomputed (spec D20).
- *   A completed tournament with no recorded prize shows none.
- * - "live": any other tournament: the v2 payouts of the current pool.
+ * - "snapshot": a completed tournament's payouts as finalize froze them (spec D20).
+ * - "stored": a completed tournament finalized before snapshots: its prizes as finalize recorded
+ *   them, never recomputed.
+ * - "unrecorded": a completed tournament with no snapshot and no stored prize although its pool had
+ *   money in it: its results were entered by hand before Phase 2, so what was paid is not known.
+ *   Screens say the prizes were not recorded rather than showing $0 (P2-PRODDATA-01).
+ * - "cancelled": a cancelled tournament pays nothing (finalize refuses it, the dashboard counts it as
+ *   $0), so screens say so and show no places (P2REV1-MONEY-04).
+ * - "live": any other tournament: what finalize would pay now, the v2 payouts of the current pool for
+ *   as many places as there are entrants (places beyond them are not paid: legacy D28).
  */
-export type PayoutDisplaySource = "stored" | "live";
+export type PayoutDisplaySource = "snapshot" | "stored" | "unrecorded" | "cancelled" | "live";
 
 export interface PayoutDisplayRow {
   position: number;
@@ -290,15 +314,46 @@ export interface PayoutDisplayRow {
 export interface PayoutDisplay {
   source: PayoutDisplaySource;
   rows: PayoutDisplayRow[];
+  /** What the rows pay, together. */
   totalCents: Cents;
+  /**
+   * The part of the pool nobody is paid: places beyond the number of entrants (live), or what the
+   * snapshot's pool left unpaid. 0 for stored prizes, whose pool was not recorded.
+   */
+  undistributedCents: Cents;
+}
+
+/** The share of the pool the rows pay together, in percent (100 unless places go unpaid); null for stored prizes. */
+export function paidPercentage(rows: readonly PayoutDisplayRow[]): number | null {
+  let basisPoints = 0;
+  for (const row of rows) {
+    if (row.percentage === null) return null;
+    basisPoints += Math.round(row.percentage * 100);
+  }
+  return basisPoints / 100;
 }
 
 export function payoutsForDisplay(
-  tournament: { status?: string | null },
+  tournament: PayoutDisplayTournament,
   prizePool: PrizePoolBreakdown,
   registrations: readonly StoredResultInput[],
 ): PayoutDisplay {
+  if (tournament.status === "cancelled") return { source: "cancelled", rows: [], totalCents: 0, undistributedCents: 0 };
   if (tournament.status === "completed") {
+    const snapshot = tournament.prizePoolSnapshot;
+    if (snapshot) {
+      const rows = snapshot.paid
+        .filter((place) => place.amountCents > 0)
+        .map((place) => ({
+          position: place.position,
+          amountCents: place.amountCents,
+          percentage: place.basisPoints / 100,
+          registrationId: place.registrationId,
+        }))
+        .sort((a, b) => a.position - b.position);
+      const totalCents = sumAmounts(rows);
+      return { source: "snapshot", rows, totalCents, undistributedCents: Math.max(0, snapshot.pool.netCents - totalCents) };
+    }
     const stored: PayoutDisplayRow[] = [];
     for (const registration of registrations) {
       const amountCents = toCents(registration.prizeAmount);
@@ -312,18 +367,41 @@ export function payoutsForDisplay(
       }
     }
     stored.sort((a, b) => a.position - b.position);
-    return { source: "stored", rows: stored, totalCents: sumAmounts(stored) };
+    if (stored.length === 0 && prizePool.net > 0) return { source: "unrecorded", rows: [], totalCents: 0, undistributedCents: 0 };
+    return { source: "stored", rows: stored, totalCents: sumAmounts(stored), undistributedCents: 0 };
   }
-  const rows = prizePool.payouts.map((p) => ({
-    position: p.position,
-    amountCents: p.amountCents,
-    percentage: p.percentage,
-  }));
-  return { source: "live", rows, totalCents: sumAmounts(rows) };
+  const entrants = prizePool.counts.registrations;
+  const rows = prizePool.payouts
+    .filter((p) => p.position <= entrants)
+    .map((p) => ({ position: p.position, amountCents: p.amountCents, percentage: p.percentage }));
+  return { source: "live", rows, totalCents: sumAmounts(rows), undistributedCents: undistributedCents(prizePool.payouts, entrants) };
 }
 
 function sumAmounts(rows: readonly { amountCents: Cents }[]): Cents {
   return rows.reduce((sum, row) => sum + row.amountCents, 0);
+}
+
+/**
+ * What one tournament adds to a total of prize money, such as the dashboard's (spec §5.6):
+ * - cancelled: nothing;
+ * - completed: what it paid: its snapshot, else `storedPrizesCents` (the sum of the prizes finalize
+ *   recorded), else, when no prize was recorded at all ("unrecorded"), its calculated pool, as the
+ *   dashboard counted it before Phase 2;
+ * - anything else: its current pool, never below zero.
+ * `entries` may be per registration, or one row of totals: only the sums matter.
+ */
+export function prizeMoneyCents(
+  tournament: PrizePoolInput & PayoutDisplayTournament,
+  entries: readonly EntryInput[],
+  storedPrizesCents: Cents,
+): Cents {
+  if (tournament.status === "cancelled") return 0;
+  if (tournament.status === "completed") {
+    const snapshot = tournament.prizePoolSnapshot;
+    if (snapshot) return snapshot.paid.reduce((sum, place) => sum + place.amountCents, 0);
+    if (storedPrizesCents > 0) return storedPrizesCents;
+  }
+  return Math.max(0, computePrizePool(tournament, entries).net);
 }
 
 /** The club's name for rake, e.g. "AP". Null or blank shows "Rake". Display only; never used in maths. */

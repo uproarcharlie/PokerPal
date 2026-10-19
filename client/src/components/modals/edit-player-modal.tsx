@@ -31,9 +31,9 @@ type PlayerFormData = z.infer<typeof playerSchema>;
 interface Player {
   id: string;
   name: string;
-  email?: string;
-  phone?: string;
-  imageUrl?: string;
+  email?: string | null;
+  phone?: string | null;
+  imageUrl?: string | null;
 }
 
 interface EditPlayerModalProps {
@@ -70,11 +70,12 @@ export function EditPlayerModal({ open, onOpenChange, player }: EditPlayerModalP
 
   const updatePlayerMutation = useMutation({
     mutationFn: async (data: PlayerFormData) => {
+      // A cleared field is sent as null, so a removed photo, email or phone really is removed.
       const payload = {
         ...data,
-        email: data.email || undefined,
-        phone: data.phone || undefined,
-        imageUrl: data.imageUrl || undefined,
+        email: data.email || null,
+        phone: data.phone || null,
+        imageUrl: data.imageUrl || null,
       };
 
       const response = await apiRequest("PUT", `/api/players/${player?.id}`, payload);
@@ -141,7 +142,7 @@ export function EditPlayerModal({ open, onOpenChange, player }: EditPlayerModalP
                   <ImageUpload
                     onImageUpload={field.onChange}
                     currentImage={field.value}
-                    entityType="players"
+                    kind="player_avatar"
                     placeholder="Upload player photo or avatar"
                     onUploadingChange={setIsImageUploading}
                   />

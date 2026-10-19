@@ -2,16 +2,32 @@ import fc from "fast-check";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { Tournament, TournamentRegistration } from "../schema";
 import { roundToCents, toBasisPoints } from "./money";
-import { PAYOUT_STRUCTURES, legacyPayouts } from "./payouts";
+import { legacyFigures, legacyPayouts } from "@test/helpers/legacy-money";
+import { PAYOUT_STRUCTURES } from "./payouts";
 import {
+  amountDueCents,
   computePrizePool,
   DEFAULT_RAKE_LABEL,
+  highHandAwardsProblem,
+  nextHighHandAward,
+  paidPercentage,
   payoutsForDisplay,
+  prizeMoneyCents,
   rakeLabel,
+  splitHighHandAward,
   type EntryInput,
+  type PrizePoolBreakdown,
   type PrizePoolInput,
   type StoredResultInput,
 } from "./prize-pool";
+
+/** The pool the club's rates alone would give (gross less the calculated AP): what the legacy screens worked out. */
+const netFromRates = (pool: Pick<PrizePoolBreakdown, "gross" | "rake">) => pool.gross.total - pool.rake.calculated;
+
+/** computePrizePool with the old float figures beside it (test/helpers/legacy-money.ts), for the parity checks. */
+function poolAndLegacy(settings: PrizePoolInput, entries: readonly EntryInput[]) {
+  return { ...computePrizePool(settings, entries), legacy: legacyFigures(settings, entries) };
+}
 
 /* ------------------------------------------------------------------------------------------------
  * Today's money code, copied from commit dddf8ad as reference implementations. Only the function
@@ -372,7 +388,7 @@ describe("computePrizePool: the AP for each rake type on each component", () => 
     ["addon", "percentage", "2.5", 188, 1.875], // 187.5 cents: halves round up
     ["addon", "fixed", "5.00", 1_500, 15],
   ] as const)("%s, %s %s → %d cents", (component, type, amount, expectedCents, expectedFloat) => {
-    const pool = computePrizePool(withRake(component, type, amount), FIELD);
+    const pool = poolAndLegacy(withRake(component, type, amount), FIELD);
 
     expect(pool.gross).toEqual(FIELD_GROSS);
     expect(pool.rake[component]).toBe(expectedCents);
@@ -382,7 +398,7 @@ describe("computePrizePool: the AP for each rake type on each component", () => 
     expect(pool.rake.calculated).toBe(expectedCents);
     expect(pool.rake.applied).toBe(expectedCents);
     expect(pool.rake.override).toBeNull();
-    expect(pool.netFromRates).toBe(73_500 - expectedCents);
+    expect(netFromRates(pool)).toBe(73_500 - expectedCents);
     expect(pool.net).toBe(73_500 - expectedCents);
     expect(pool.netSource).toBe("calculated");
     expect(pool.impliedRake).toBe(expectedCents);
@@ -427,7 +443,7 @@ describe("computePrizePool: the AP override and the manual prize pool", () => {
   it("replaces the calculated AP with the manual AP total", () => {
     const pool = computePrizePool(tournament({ ...rated, rakeOverride: "20.00" }), FIELD);
     expect(pool.rake).toEqual({ buyIn: 5_000, rebuy: 0, addon: 0, calculated: 5_000, override: 2_000, applied: 2_000 });
-    expect(pool.netFromRates).toBe(68_500);
+    expect(netFromRates(pool)).toBe(68_500);
     expect(pool.netAfterAp).toBe(71_500);
     expect(pool.net).toBe(71_500);
     expect(pool.netSource).toBe("ap_override");
@@ -465,7 +481,7 @@ describe("computePrizePool: the AP override and the manual prize pool", () => {
   });
 
   it("puts a manual prize pool ahead of the override", () => {
-    const pool = computePrizePool(tournament({ ...rated, rakeOverride: "20.00", manualPrizePool: "600.00" }), FIELD);
+    const pool = poolAndLegacy(tournament({ ...rated, rakeOverride: "20.00", manualPrizePool: "600.00" }), FIELD);
     expect(pool.manualPrizePool).toBe(60_000);
     expect(pool.net).toBe(60_000);
     expect(pool.netSource).toBe("manual_pool");
@@ -534,27 +550,34 @@ describe("computePrizePool: the high-hand pot", () => {
     [null, "5.00", 0, 5],
     ["none", "0.00", 0, 0],
   ] as const)("%s %s takes %d cents of a $60 pot", (type, amount, rakeCents, legacyRake) => {
-    const pool = computePrizePool(tournament({ highHandRakeType: type, highHandRakeAmount: amount }), FIELD);
+    const pool = poolAndLegacy(tournament({ highHandRakeType: type, highHandRakeAmount: amount }), FIELD);
     expect(pool.highHand).toMatchObject({ entrants: 6, gross: 6_000, rake: rakeCents, net: 6_000 - rakeCents });
     expect(pool.legacy.highHand.rake).toBeCloseTo(legacyRake, 10);
   });
 
   it.each([
-    [4, 4, 1_500, 0],
-    [7, 7, 857, 1],
-    [1, 1, 6_000, 0],
-    [0, 1, 6_000, 0],
-    [null, 1, 6_000, 0],
-  ] as const)("splits the pot between %j winners", (highHandPayouts, winners, perWinner, remainder) => {
+    [4, 4, 1_500, 1_500],
+    [7, 7, 857, 858],
+    [1, 1, 6_000, 6_000],
+    [0, 1, 6_000, 6_000],
+    [null, 1, 6_000, 6_000],
+  ] as const)("splits the pot between %j winners, the last taking the remainder", (highHandPayouts, winners, first, last) => {
     const pool = computePrizePool(tournament({ highHandPayouts }), FIELD);
-    expect(pool.highHand).toMatchObject({ winners, perWinner, remainder });
+    expect(pool.highHand.winners).toBe(winners);
+    const awards: number[] = [];
+    for (let i = 0; i < winners; i++) awards.push(nextHighHandAward(pool.highHand, awards) ?? -1);
+    expect(awards[0]).toBe(first);
+    expect(awards.at(-1)).toBe(last);
+    expect(awards.reduce((sum, award) => sum + award, 0)).toBe(pool.highHand.net);
   });
 
-  it("suggests no award when the pot is empty or the rake exceeds it", () => {
+  it("awards nothing when the pot is empty or the rake exceeds it", () => {
     const pool = computePrizePool(tournament({ highHandRakeType: "fixed", highHandRakeAmount: "100.00" }), FIELD);
-    expect(pool.highHand).toMatchObject({ net: -4_000, perWinner: 0, remainder: 0 });
+    expect(pool.highHand).toMatchObject({ net: -4_000 });
+    expect(nextHighHandAward(pool.highHand, [])).toBe(0);
     const empty = computePrizePool(tournament({ highHandAmount: null }), FIELD);
-    expect(empty.highHand).toMatchObject({ gross: 0, net: 0, perWinner: 0 });
+    expect(empty.highHand).toMatchObject({ gross: 0, net: 0 });
+    expect(nextHighHandAward(empty.highHand, [])).toBe(0);
   });
 
   it("stays out of the main pool", () => {
@@ -577,7 +600,7 @@ describe("computePrizePool: entries and payouts", () => {
   });
 
   it("pays nothing before anyone has entered", () => {
-    const pool = computePrizePool(tournament(), []);
+    const pool = poolAndLegacy(tournament(), []);
     expect(pool.gross.total).toBe(0);
     expect(pool.net).toBe(0);
     expect(pool.payouts).toEqual([]);
@@ -586,7 +609,7 @@ describe("computePrizePool: entries and payouts", () => {
 
   it("pays a $475 pool exactly, where today's code pays $476", () => {
     const field = Array.from({ length: 19 }, () => ({ buyIns: 1 }));
-    const pool = computePrizePool(tournament({ buyInAmount: "25.00" }), field);
+    const pool = poolAndLegacy(tournament({ buyInAmount: "25.00" }), field);
     expect(pool.net).toBe(47_500);
     expect(pool.algorithm).toBe("v2-floor-remainder-first");
     expect(pool.payouts.map((p) => p.amountCents)).toEqual([23_800, 14_200, 9_500]);
@@ -595,7 +618,7 @@ describe("computePrizePool: entries and payouts", () => {
   });
 
   it("honours a valid custom structure; today's figures still pay Standard", () => {
-    const pool = computePrizePool(tournament({ payoutStructure: "custom", customPayouts: "[60,40]" }), FIELD);
+    const pool = poolAndLegacy(tournament({ payoutStructure: "custom", customPayouts: "[60,40]" }), FIELD);
     expect(pool.structure).toEqual({ requested: "custom", used: "custom", basisPoints: [6_000, 4_000] });
     expect(pool.payouts.map((p) => p.amountCents)).toEqual([44_100, 29_400]);
     expect(pool.legacy.payouts.map((p) => p.amount)).toEqual([368, 221, 147]);
@@ -618,7 +641,6 @@ describe("computePrizePool: entries and payouts", () => {
       counts: { registrations: 10, buyIns: 10, rebuys: 4, addons: 3, highHandEntrants: 6 },
       gross: { buyIn: 50_000, rebuy: 16_000, addon: 7_500, total: 73_500 },
       rake: { buyIn: 5_000, rebuy: 0, addon: 0, calculated: 5_000, override: null, applied: 5_000 },
-      netFromRates: 68_500,
       netAfterAp: 68_500,
       manualPrizePool: null,
       net: 68_500,
@@ -632,21 +654,7 @@ describe("computePrizePool: entries and payouts", () => {
         { position: 4, basisPoints: 1_000, percentage: 10, amountCents: 6_800 },
         { position: 5, basisPoints: 500, percentage: 5, amountCents: 3_400 },
       ],
-      highHand: { entrants: 6, gross: 6_000, rake: 0, net: 6_000, winners: 2, perWinner: 3_000, remainder: 0 },
-      legacy: {
-        gross: { buyIn: 500, rebuy: 160, addon: 75, total: 735 },
-        rake: { buyIn: 50, rebuy: 0, addon: 0, total: 50 },
-        calculatedNet: 685,
-        net: 685,
-        payouts: [
-          { position: 1, percentage: 40, amount: 274 },
-          { position: 2, percentage: 25, amount: 171 },
-          { position: 3, percentage: 20, amount: 137 },
-          { position: 4, percentage: 10, amount: 69 },
-          { position: 5, percentage: 5, amount: 34 },
-        ],
-        highHand: { gross: 60, rake: 0, net: 60, perWinner: 30 },
-      },
+      highHand: { entrants: 6, gross: 6_000, rake: 0, net: 6_000, winners: 2 },
     });
   });
 
@@ -700,7 +708,7 @@ describe("parity with today's code at dddf8ad (pool.legacy, bit for bit)", () =>
   it("matches finalize: gross, AP, net and the prize written for each position", () => {
     fc.assert(
       fc.property(legacyTournaments, registrationLists(), (settings, registrations) => {
-        const pool = computePrizePool(settings, registrations);
+        const pool = poolAndLegacy(settings, registrations);
         const today = referenceFinalize(settings, registrations);
         expect(pool.legacy.gross.total).toBe(today.grossTotal);
         expect(pool.legacy.rake.total).toBe(today.rake);
@@ -719,7 +727,7 @@ describe("parity with today's code at dddf8ad (pool.legacy, bit for bit)", () =>
   it("matches the admin page: every figure and the payout table, manual pool included", () => {
     fc.assert(
       fc.property(legacyTournaments, registrationLists(), (settings, registrations) => {
-        const pool = computePrizePool(settings, registrations);
+        const pool = poolAndLegacy(settings, registrations);
         const today = referenceAdminPage(settings, registrations);
         expect(pool.counts.registrations).toBe(today.totalPlayers);
         expect(pool.counts.buyIns).toBe(today.totalBuyIns);
@@ -746,7 +754,7 @@ describe("parity with today's code at dddf8ad (pool.legacy, bit for bit)", () =>
   it("matches the public page: gross, AP, net and the payout table", () => {
     fc.assert(
       fc.property(legacyTournaments, registrationLists(), (settings, registrations) => {
-        const pool = computePrizePool(settings, registrations);
+        const pool = poolAndLegacy(settings, registrations);
         const today = referencePublicPage(settings, registrations);
         expect(pool.legacy.gross.total).toBe(today.grossTotal);
         expect(pool.legacy.rake.total).toBe(today.rake);
@@ -760,7 +768,7 @@ describe("parity with today's code at dddf8ad (pool.legacy, bit for bit)", () =>
   it("matches the high-hand calculator and the Award High Hand default", () => {
     fc.assert(
       fc.property(legacyTournaments, registrationLists(), (settings, registrations) => {
-        const pool = computePrizePool(settings, registrations);
+        const pool = poolAndLegacy(settings, registrations);
         const today = referenceHighHand(settings, registrations);
         expect(pool.counts.highHandEntrants).toBe(registrations.filter((r) => r.enteringHighHands).length);
         expect(pool.legacy.highHand).toEqual({
@@ -782,7 +790,7 @@ describe("parity with today's code at dddf8ad (pool.legacy, bit for bit)", () =>
       fc.assert(
         fc.property(legacyTournaments, registrationLists(), (settings, registrations) => {
           const plain = { ...settings, ...noRake };
-          expect(roundToCents(referenceDashboardNet(plain, registrations))).toBe(computePrizePool(plain, registrations).netFromRates);
+          expect(roundToCents(referenceDashboardNet(plain, registrations))).toBe(netFromRates(computePrizePool(plain, registrations)));
         }),
         PARITY_RUNS,
       );
@@ -793,7 +801,7 @@ describe("parity with today's code at dddf8ad (pool.legacy, bit for bit)", () =>
         fc.property(legacyTournaments, registrationLists({ rebuys: 0, addons: 0 }), percent, (settings, registrations, rate) => {
           const plain = { ...settings, ...noRake, rakeType: "percentage", rakeAmount: rate };
           const today = roundToCents(referenceDashboardNet(plain, registrations));
-          expect(Math.abs(today - computePrizePool(plain, registrations).netFromRates)).toBeLessThanOrEqual(1);
+          expect(Math.abs(today - netFromRates(computePrizePool(plain, registrations)))).toBeLessThanOrEqual(1);
         }),
         PARITY_RUNS,
       );
@@ -807,7 +815,7 @@ describe("parity with today's code at dddf8ad (pool.legacy, bit for bit)", () =>
     ] as const)("today it %s", (_, overrides, dashboardCents, sharedCents) => {
       const settings = tournament(overrides);
       expect(roundToCents(referenceDashboardNet(settings, FIELD))).toBe(dashboardCents);
-      expect(computePrizePool(settings, FIELD).netFromRates).toBe(sharedCents);
+      expect(netFromRates(computePrizePool(settings, FIELD))).toBe(sharedCents);
       expect(roundToCents(referenceFinalize(settings, FIELD).netPrizePool)).toBe(sharedCents);
     });
   });
@@ -817,7 +825,7 @@ describe("exact cents against today's floats", () => {
   it("gives the same gross and per-component AP to the cent, and a net within 2 cents (equal unless AP has a half cent)", () => {
     fc.assert(
       fc.property(legacyTournaments, registrationLists(), (settings, registrations) => {
-        const pool = computePrizePool(settings, registrations);
+        const pool = poolAndLegacy(settings, registrations);
         for (const key of ["buyIn", "rebuy", "addon", "total"] as const) {
           expect(pool.gross[key]).toBe(roundToCents(pool.legacy.gross[key]));
         }
@@ -825,12 +833,12 @@ describe("exact cents against today's floats", () => {
           expect(pool.rake[key]).toBe(roundToCents(pool.legacy.rake[key]));
         }
         const floatNet = roundToCents(pool.legacy.calculatedNet);
-        expect(Math.abs(pool.netFromRates - floatNet)).toBeLessThanOrEqual(2);
+        expect(Math.abs(netFromRates(pool) - floatNet)).toBeLessThanOrEqual(2);
         const wholeCents =
           isWholeCents(settings.rakeType, settings.rakeAmount, pool.gross.buyIn) &&
           isWholeCents(settings.rebuyRakeType, settings.rebuyRakeAmount, pool.gross.rebuy) &&
           isWholeCents(settings.addonRakeType, settings.addonRakeAmount, pool.gross.addon);
-        if (wholeCents) expect(pool.netFromRates).toBe(floatNet);
+        if (wholeCents) expect(netFromRates(pool)).toBe(floatNet);
         if (settings.manualPrizePool !== null) {
           expect(pool.manualPrizePool).toBe(roundToCents(pool.legacy.net));
         }
@@ -850,16 +858,16 @@ describe("exact cents against today's floats", () => {
       rebuyRakeType: "percentage",
       rebuyRakeAmount: "2.5",
     });
-    const pool = computePrizePool(settings, [{ buyIns: 1, rebuys: 1 }]);
+    const pool = poolAndLegacy(settings, [{ buyIns: 1, rebuys: 1 }]);
     expect(pool.rake.calculated).toBe(106);
-    expect(pool.netFromRates).toBe(4_094);
+    expect(netFromRates(pool)).toBe(4_094);
     expect(roundToCents(pool.legacy.calculatedNet)).toBe(4_095);
   });
 
   it("agrees with the high-hand figures to the cent for percentage and fixed rake", () => {
     fc.assert(
       fc.property(legacyTournaments, registrationLists(), rakeType, (settings, registrations, type) => {
-        const pool = computePrizePool({ ...settings, highHandRakeType: type }, registrations);
+        const pool = poolAndLegacy({ ...settings, highHandRakeType: type }, registrations);
         expect(pool.highHand.gross).toBe(roundToCents(pool.legacy.highHand.gross));
         if (type !== "none") expect(pool.highHand.rake).toBe(roundToCents(pool.legacy.highHand.rake));
       }),
@@ -889,21 +897,62 @@ describe("payoutsForDisplay", () => {
         { position: 3, amountCents: 9_500, percentage: null, registrationId: "c" },
       ],
       totalCents: 47_600,
+      undistributedCents: 0,
     });
   });
 
-  it("shows a completed tournament with no stored prize as paying nothing, rather than recomputing one", () => {
+  it("says a completed tournament's prizes were not recorded when it had a pool but no prize is stored (P2-PRODDATA-01)", () => {
+    // Prod's hand-entered results: positions set, no prizeAmount, a $360 pool. Never "$0.00 paid".
     const unpaid: StoredResultInput[] = [
       { id: "a", finalPosition: null },
       { id: "b", finalPosition: 1, prizeAmount: null },
       { id: "c", finalPosition: 2, prizeAmount: "0.00" },
     ];
 
-    expect(payoutsForDisplay({ status: "completed" }, pool475, unpaid)).toEqual({ source: "stored", rows: [], totalCents: 0 });
-    expect(payoutsForDisplay({ status: "completed" }, pool475, [])).toEqual({ source: "stored", rows: [], totalCents: 0 });
+    const unrecorded = { source: "unrecorded", rows: [], totalCents: 0, undistributedCents: 0 };
+    expect(payoutsForDisplay({ status: "completed" }, pool475, unpaid)).toEqual(unrecorded);
+    expect(payoutsForDisplay({ status: "completed" }, pool475, [])).toEqual(unrecorded);
   });
 
-  it.each(["in_progress", "registration", "scheduled", "cancelled", null, undefined])(
+  it("shows a completed tournament with nothing in its pool as paying nothing (a free game), never recomputing", () => {
+    const free = computePrizePool(tournament({ buyInAmount: "0.00" }), nineteen);
+    const nothing = { source: "stored", rows: [], totalCents: 0, undistributedCents: 0 };
+    expect(payoutsForDisplay({ status: "completed" }, free, [{ id: "a", finalPosition: 1, prizeAmount: null }])).toEqual(nothing);
+  });
+
+  it("shows a completed tournament's snapshot ahead of the stored prizes, leaving out places paid nothing", () => {
+    const snapshot = {
+      pool: { netCents: 40_000 },
+      paid: [
+        { position: 2, registrationId: "a", basisPoints: 3000, amountCents: 14_200 },
+        { position: 1, registrationId: "b", basisPoints: 5000, amountCents: 23_800 },
+        { position: 3, registrationId: "c", basisPoints: 2000, amountCents: 0 },
+      ],
+    };
+    const stored: StoredResultInput[] = [{ id: "b", finalPosition: 1, prizeAmount: "999.00" }];
+
+    expect(payoutsForDisplay({ status: "completed", prizePoolSnapshot: snapshot }, pool475, stored)).toEqual({
+      source: "snapshot",
+      rows: [
+        { position: 1, amountCents: 23_800, percentage: 50, registrationId: "b" },
+        { position: 2, amountCents: 14_200, percentage: 30, registrationId: "a" },
+      ],
+      totalCents: 38_000,
+      undistributedCents: 2_000,
+    });
+    expect(payoutsForDisplay({ status: "completed", prizePoolSnapshot: null }, pool475, stored).source).toBe("stored");
+    expect(payoutsForDisplay({ status: "in_progress", prizePoolSnapshot: snapshot }, pool475, stored).source).toBe("live");
+  });
+
+  it("shows no prizes for a cancelled tournament, which finalize refuses and the dashboard counts as $0 (P2REV1-MONEY-04)", () => {
+    const snapshot = { pool: { netCents: 47_500 }, paid: [{ position: 1, registrationId: "a", basisPoints: 10_000, amountCents: 47_500 }] };
+    const cancelled = { source: "cancelled", rows: [], totalCents: 0, undistributedCents: 0 };
+    expect(payoutsForDisplay({ status: "cancelled" }, pool475, [{ id: "b", finalPosition: 1, prizeAmount: "999.00" }])).toEqual(cancelled);
+    expect(payoutsForDisplay({ status: "cancelled", prizePoolSnapshot: snapshot }, pool475, [])).toEqual(cancelled);
+    expect(prizeMoneyCents({ ...tournament(), status: "cancelled" }, [{ buyIns: 19 }], 0)).toBe(0);
+  });
+
+  it.each(["in_progress", "registration", "scheduled", null, undefined])(
     "shows the live v2 payouts for a %s tournament",
     (status) => {
       expect(payoutsForDisplay({ status }, pool475, [{ id: "b", finalPosition: 1, prizeAmount: "999.00" }])).toEqual({
@@ -914,9 +963,173 @@ describe("payoutsForDisplay", () => {
           { position: 3, amountCents: 9_500, percentage: 20 },
         ],
         totalCents: 47_500,
+        undistributedCents: 0,
       });
     },
   );
+
+  it("shows only the places finalize would pay while there are fewer entrants than places (MONEY-REV-01)", () => {
+    // Top 9 with 8 players at $100: the 9th place's $16 has nobody to go to.
+    const eight = Array.from({ length: 8 }, () => ({ buyIns: 1 }));
+    const pool = computePrizePool(tournament({ buyInAmount: "100.00", payoutStructure: "top9" }), eight);
+    const display = payoutsForDisplay({ status: "in_progress" }, pool, []);
+
+    expect(display.rows.map((row) => row.position)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(display.totalCents).toBe(78_400);
+    expect(display.undistributedCents).toBe(1_600);
+    expect(display.totalCents + display.undistributedCents).toBe(pool.net);
+    expect(paidPercentage(display.rows)).toBe(98);
+  });
+
+  it("pays every place once there are as many entrants as places", () => {
+    const pool = computePrizePool(tournament({ buyInAmount: "20.00" }), [{ buyIns: 1 }, { buyIns: 1 }]);
+    const display = payoutsForDisplay({ status: "registration" }, pool, []);
+
+    expect(display.rows.map((row) => row.position)).toEqual([1, 2]);
+    expect(display.undistributedCents).toBe(800);
+    expect(paidPercentage(display.rows)).toBe(80);
+    expect(paidPercentage(payoutsForDisplay({ status: "registration" }, pool475, []).rows)).toBe(100);
+  });
+});
+
+describe("splitHighHandAward (CQ-P2-02)", () => {
+  it("gives the new winner half, the earlier winner keeping any odd cent, and the two still add up", () => {
+    expect(splitHighHandAward(5_000)).toEqual({ shareCents: 2_500, keepCents: 2_500 });
+    expect(splitHighHandAward(5_001)).toEqual({ shareCents: 2_500, keepCents: 2_501 });
+    expect(splitHighHandAward(1)).toEqual({ shareCents: 0, keepCents: 1 });
+    expect(splitHighHandAward(0)).toEqual({ shareCents: 0, keepCents: 0 });
+    fc.assert(
+      fc.property(fc.integer({ min: 0, max: 10_000_000 }), (awarded) => {
+        const { shareCents, keepCents } = splitHighHandAward(awarded);
+        expect(shareCents + keepCents).toBe(awarded);
+        expect(keepCents - shareCents).toBeGreaterThanOrEqual(0);
+        expect(keepCents - shareCents).toBeLessThanOrEqual(1);
+      }),
+    );
+  });
+});
+
+describe("nextHighHandAward (MONEY-36)", () => {
+  it("splits what is left over the winners still to come, the last taking the remainder", () => {
+    const pot = { net: 10_001, winners: 2 };
+
+    expect(nextHighHandAward(pot, [])).toBe(5_000);
+    expect(nextHighHandAward(pot, [5_000])).toBe(5_001);
+    expect(nextHighHandAward(pot, [5_000, 5_001])).toBeNull();
+  });
+
+  it("keeps the awards adding up to the pot when it grew between them", () => {
+    // $100 when the first winner is paid, $160 by the second award.
+    expect(nextHighHandAward({ net: 10_000, winners: 2 }, [])).toBe(5_000);
+    expect(nextHighHandAward({ net: 16_000, winners: 2 }, [5_000])).toBe(11_000);
+  });
+
+  it("awards nothing once the pot is used up, and the whole pot to a single winner", () => {
+    expect(nextHighHandAward({ net: 0, winners: 1 }, [])).toBe(0);
+    expect(nextHighHandAward({ net: 5_000, winners: 3 }, [6_000])).toBe(0);
+    expect(nextHighHandAward({ net: 7_777, winners: 1 }, [])).toBe(7_777);
+  });
+
+  it("never pays more than the pot, however the winners are split", () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 0, max: 1_000_000 }), fc.integer({ min: 1, max: 4 }), (net, winners) => {
+        const awards: number[] = [];
+        for (let i = 0; i < winners; i++) awards.push(nextHighHandAward({ net, winners }, awards) as number);
+        expect(nextHighHandAward({ net, winners }, awards)).toBeNull();
+        expect(awards.reduce((sum, amount) => sum + amount, 0)).toBe(net);
+      }),
+    );
+  });
+});
+
+describe("highHandAwardsProblem (MONEY-P2REV-05)", () => {
+  it("lets anything through before the first award", () => {
+    expect(highHandAwardsProblem({ net: 0, winners: 1 }, [])).toBeNull();
+  });
+
+  it("refuses a pot smaller than what was already awarded", () => {
+    // 10 entrants × $10, one $100 award, then an entry is unticked: $90 left against $100 paid.
+    expect(highHandAwardsProblem({ net: 9_000, winners: 2 }, [10_000])).toEqual({
+      code: "HIGH_HAND_OVER_POOL",
+      awardedCents: 10_000,
+      potCents: 9_000,
+    });
+  });
+
+  it("refuses a pot that changes once every prize is awarded, so no money is left that nobody can win", () => {
+    expect(highHandAwardsProblem({ net: 13_000, winners: 1 }, [10_000])).toMatchObject({ code: "HIGH_HAND_AWARDED" });
+    expect(highHandAwardsProblem({ net: 10_000, winners: 1 }, [10_000])).toBeNull();
+  });
+
+  it("refuses fewer prizes than winners, and lets a pot grow while prizes are still to come", () => {
+    expect(highHandAwardsProblem({ net: 20_000, winners: 1 }, [10_000, 10_000])).toMatchObject({ code: "HIGH_HAND_AWARDED" });
+    expect(highHandAwardsProblem({ net: 16_000, winners: 2 }, [5_000])).toBeNull();
+  });
+});
+
+describe("amountDueCents (money-18)", () => {
+  const prices = { buyInAmount: "50.00", rebuyAmount: "40.00", addonAmount: "25.50", highHandAmount: "20.00" };
+  const entry = { buyIns: 1, rebuys: 0, addons: 0, enteringHighHands: false };
+
+  it("counts every buy-in, re-buy and add-on at the tournament's prices", () => {
+    expect(amountDueCents(prices, entry)).toBe(5000);
+    expect(amountDueCents(prices, { ...entry, buyIns: 2, rebuys: 3, addons: 1 })).toBe(2 * 5000 + 3 * 4000 + 2550);
+  });
+
+  it("adds the high-hand entry exactly when the pot counts it: when the player entered (P2REV4-CQ-08)", () => {
+    expect(amountDueCents(prices, { ...entry, enteringHighHands: true })).toBe(7000);
+    const highHand = tournament({ highHandAmount: "20.00" });
+    const entrants = [{ buyIns: 1, enteringHighHands: true }, { buyIns: 1, enteringHighHands: false }];
+    const owed = entrants.reduce((sum, e) => sum + amountDueCents(highHand, e) - amountDueCents(highHand, { ...e, enteringHighHands: false }), 0);
+    expect(owed).toBe(computePrizePool(highHand, entrants).highHand.gross);
+  });
+
+  it("treats unset prices and null counts as zero, as the prize pool does", () => {
+    const bare = { buyInAmount: "30.00", rebuyAmount: null, addonAmount: null, highHandAmount: null };
+    expect(amountDueCents(bare, { buyIns: 1, rebuys: 4, addons: 2, enteringHighHands: true })).toBe(3000);
+    expect(amountDueCents(prices, { buyIns: null, rebuys: null, addons: null, enteringHighHands: null })).toBe(0);
+  });
+
+  it("is exact in cents where float dollars are not", () => {
+    expect(amountDueCents({ ...prices, buyInAmount: "0.10", addonAmount: "0.20" }, { ...entry, addons: 1 })).toBe(30);
+  });
+});
+
+describe("prizeMoneyCents: one tournament's share of a total such as the dashboard's", () => {
+  const entries = [{ buyIns: 2 }, { buyIns: 1, rebuys: 2 }, { buyIns: 1, addons: 1 }, { buyIns: 1 }];
+  const open = tournament({ buyInAmount: "50.00", rebuyAmount: "25.00", addonAmount: "20.00", rakeType: "percentage", rakeAmount: "10.00" });
+
+  it("counts an open tournament's current pool, with each pot's own rake", () => {
+    // 5 buy-ins $250 less 10%, plus $50 of re-buys and a $20 add-on with no rake of their own.
+    expect(prizeMoneyCents({ ...open, status: "registration" }, entries, 0)).toBe(29_500);
+  });
+
+  it("gives the same answer for one row of totals as for the registrations", () => {
+    expect(prizeMoneyCents({ ...open, status: "in_progress" }, [{ buyIns: 5, rebuys: 2, addons: 1 }], 0)).toBe(
+      prizeMoneyCents({ ...open, status: "in_progress" }, entries, 0),
+    );
+  });
+
+  it("never counts an open pool below zero", () => {
+    expect(prizeMoneyCents({ ...tournament({ rakeType: "fixed", rakeAmount: "60.00" }), status: "scheduled" }, [{ buyIns: 1 }], 0)).toBe(0);
+  });
+
+  it("counts what a completed tournament paid: its snapshot, else its stored prizes, never its rates", () => {
+    const snapshot = { pool: { netCents: 12_345 }, paid: [{ position: 1, registrationId: "a", basisPoints: 10_000, amountCents: 12_345 }] };
+
+    expect(prizeMoneyCents({ ...open, status: "completed", prizePoolSnapshot: snapshot }, entries, 99_900)).toBe(12_345);
+    expect(prizeMoneyCents({ ...open, status: "completed" }, entries, 15_000)).toBe(15_000);
+  });
+
+  it("counts a completed tournament whose prizes were never recorded by its calculated pool, as before Phase 2 (P2-PRODDATA-01)", () => {
+    expect(prizeMoneyCents({ ...open, status: "completed" }, entries, 0)).toBe(29_500);
+    const free = tournament({ buyInAmount: "0.00", rebuyAmount: null, addonAmount: null });
+    expect(prizeMoneyCents({ ...free, status: "completed" }, entries, 0)).toBe(0);
+  });
+
+  it("leaves cancelled tournaments out", () => {
+    expect(prizeMoneyCents({ ...open, status: "cancelled" }, entries, 15_000)).toBe(0);
+  });
 });
 
 describe("rakeLabel", () => {

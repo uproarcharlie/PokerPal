@@ -93,7 +93,8 @@ npm run start
 **What it does:**
 - Exactly what the server does every time it starts, before it listens: checks every file
   with the destructive-SQL guard (`server/db/migration-guard.ts`), takes an advisory lock and
-  runs each new or edited file in its own transaction
+  runs each new or edited file in its own transaction, then runs the boot data seeds
+  (`server/db/seeds.ts`; not on a dry run)
 - Prints the target as host:port/database, never the credentials
 - Refuses a database that is not on localhost unless given `--yes`
 

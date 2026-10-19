@@ -2,66 +2,50 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { CreatePlayerModal } from "@/components/modals/create-player-modal";
 import { EditPlayerModal } from "@/components/modals/edit-player-modal";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, UsersRound, ArrowLeft, Eye, Edit, Mail, Phone, Filter, Download, Info } from "lucide-react";
 import { Link } from "wouter";
 import { useAuth } from "@/contexts/auth-context";
+import { apiJson } from "@/lib/queryClient";
+import type { Viewer } from "@shared/api/common";
 
 interface Player {
   id: string;
   name: string;
-  email?: string;
-  phone?: string;
+  email?: string | null;
+  phone?: string | null;
   imageUrl?: string;
   createdAt: string;
-}
-
-interface Tournament {
-  id: string;
-  clubId: string;
-}
-
-interface TournamentRegistration {
-  id: string;
-  playerId: string;
-  tournamentId: string;
+  /** The viewer runs the player's home club (or is an admin): contact details and edits are theirs. */
+  canEdit: boolean;
 }
 
 interface Club {
   id: string;
   name: string;
-  ownerId?: string | null;
+  viewer?: Viewer;
 }
 
 export default function Players() {
-  const { isAdmin, user } = useAuth();
-  const [showCreatePlayer, setShowCreatePlayer] = useState(false);
+  const { isAdmin } = useAuth();
   const [editingPlayer, setEditingPlayer] = useState<Player | null>(null);
   const [selectedClubId, setSelectedClubId] = useState<string>("");
-
-  const { data: players = [], isLoading } = useQuery<Player[]>({
-    queryKey: ["/api/players"],
-  });
-
-  const { data: tournaments = [] } = useQuery<Tournament[]>({
-    queryKey: ["/api/tournaments"],
-  });
-
-  const { data: registrations = [] } = useQuery<TournamentRegistration[]>({
-    queryKey: ["/api/registrations"],
-  });
 
   const { data: clubs = [] } = useQuery<Club[]>({
     queryKey: ["/api/clubs"],
   });
 
-  // Filter clubs to only show owned clubs for non-admins
-  const ownedClubs = isAdmin
-    ? clubs
-    : clubs.filter(club => club.ownerId === user?.id);
+  // Clubs the user runs (owned or managed); an admin sees every player without choosing one.
+  const ownedClubs = clubs.filter(club => club.viewer?.canManage);
+
+  // GET /api/players is scoped by the server: a club's players are those who registered for its tournaments.
+  const { data: players = [], isLoading } = useQuery<Player[]>({
+    queryKey: ["/api/players", { clubId: isAdmin ? null : selectedClubId }],
+    queryFn: () =>
+      apiJson<Player[]>("GET", isAdmin ? "/api/players" : `/api/players?clubId=${encodeURIComponent(selectedClubId)}`),
+    enabled: isAdmin || !!selectedClubId,
+  });
 
   if (isLoading) {
     return (
@@ -90,34 +74,7 @@ export default function Players() {
       .substring(0, 2);
   };
 
-  const getPlayerStats = (playerId: string) => {
-    const playerRegistrations = registrations.filter(r => r.playerId === playerId);
-    const tournamentIds = playerRegistrations.map(r => r.tournamentId);
-    const playerTournaments = tournaments.filter(t => tournamentIds.includes(t.id));
-
-    const uniqueClubIds = new Set<string>();
-    playerTournaments.forEach(t => uniqueClubIds.add(t.clubId));
-
-    const clubNames = Array.from(uniqueClubIds)
-      .map(clubId => clubs.find(c => c.id === clubId)?.name)
-      .filter(Boolean);
-
-    return {
-      tournamentsCount: playerTournaments.length,
-      clubNames: clubNames,
-      clubIds: Array.from(uniqueClubIds)
-    };
-  };
-
-  // Filter players based on selected club (for non-admins)
-  const filteredPlayers = isAdmin
-    ? players
-    : selectedClubId
-      ? players.filter(player => {
-          const stats = getPlayerStats(player.id);
-          return stats.clubIds.includes(selectedClubId);
-        })
-      : [];
+  const filteredPlayers = isAdmin || selectedClubId ? players : [];
 
   return (
     <>
@@ -172,7 +129,7 @@ export default function Players() {
                   </Select>
                 ) : (
                   <div className="flex items-center gap-2">
-                    <span className="text-sm text-muted-foreground">You don't own any clubs yet</span>
+                    <span className="text-sm text-muted-foreground">You don't run any clubs yet</span>
                     <Link href="/clubs">
                       <Button size="sm" variant="outline">
                         <Plus className="w-4 h-4 mr-1" />
@@ -248,15 +205,12 @@ export default function Players() {
                       <tr className="border-b border-border bg-muted/30">
                         <th className="text-left py-3 px-6 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Player</th>
                         <th className="text-left py-3 px-6 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Contact</th>
-                        <th className="text-left py-3 px-6 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Tournaments</th>
-                        <th className="text-left py-3 px-6 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Clubs</th>
                         <th className="text-left py-3 px-6 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Join Date</th>
                         <th className="text-right py-3 px-6 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
                       {filteredPlayers.map((player) => {
-                        const stats = getPlayerStats(player.id);
                         return (
                           <tr key={player.id} className="hover:bg-muted/20 transition-colors" data-testid={`player-row-${player.id}`}>
                             <td className="py-4 px-6">
@@ -292,29 +246,10 @@ export default function Players() {
                                     <span className="text-sm text-foreground">{player.phone}</span>
                                   </div>
                                 )}
-                                {!player.email && !player.phone && (
-                                  <span className="text-sm text-muted-foreground">No contact info</span>
-                                )}
-                              </div>
-                            </td>
-                            <td className="py-4 px-6">
-                              <div>
-                                <p className="text-sm font-semibold text-foreground">{stats.tournamentsCount}</p>
-                                <p className="text-xs text-muted-foreground">tournaments played</p>
-                              </div>
-                            </td>
-                            <td className="py-4 px-6">
-                              <div>
-                                {stats.clubNames.length > 0 ? (
-                                  <div className="flex flex-wrap gap-1">
-                                    {stats.clubNames.map((clubName, idx) => (
-                                      <Badge key={idx} variant="secondary" className="text-xs">
-                                        {clubName}
-                                      </Badge>
-                                    ))}
-                                  </div>
+                                {!player.canEdit ? (
+                                  <span className="text-sm text-muted-foreground">Visiting from another club</span>
                                 ) : (
-                                  <span className="text-sm text-muted-foreground">No clubs</span>
+                                  !player.email && !player.phone && <span className="text-sm text-muted-foreground">No contact info</span>
                                 )}
                               </div>
                             </td>
@@ -329,15 +264,17 @@ export default function Players() {
                                   <Eye className="w-4 h-4 mr-1" />
                                   View
                                 </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => setEditingPlayer(player)}
-                                  data-testid={`edit-player-${player.id}`}
-                                >
-                                  <Edit className="w-4 h-4 mr-1" />
-                                  Edit
-                                </Button>
+                                {player.canEdit && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setEditingPlayer(player)}
+                                    data-testid={`edit-player-${player.id}`}
+                                  >
+                                    <Edit className="w-4 h-4 mr-1" />
+                                    Edit
+                                  </Button>
+                                )}
                               </div>
                             </td>
                           </tr>

@@ -1,5 +1,6 @@
 import { tournamentRegistrations, tournaments, type Tournament, type TournamentRegistration } from "@shared/schema";
 import { getDb, type Database } from "../../server/db";
+import { claimHomeClubFromFirstRegistration } from "../../server/repositories/players";
 import { uniqueSuffix } from "./sequence";
 
 export type NewTournament = typeof tournaments.$inferInsert;
@@ -42,10 +43,16 @@ export function buildRegistration(
   };
 }
 
+/**
+ * Inserts a registration and records the player's home club if they have none yet, with the app's
+ * own rule (the club of their first surviving registration: claimHomeClubFromFirstRegistration), so
+ * a test's players belong where production's would (P2REV4-CQ2-07).
+ */
 export async function createRegistration(
   overrides: Partial<NewRegistration> & Pick<NewRegistration, "tournamentId" | "playerId">,
   db: Database = getDb(),
 ): Promise<TournamentRegistration> {
   const [registration] = await db.insert(tournamentRegistrations).values(buildRegistration(overrides)).returning();
+  await claimHomeClubFromFirstRegistration(db, registration.playerId);
   return registration;
 }

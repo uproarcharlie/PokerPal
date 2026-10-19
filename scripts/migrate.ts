@@ -1,7 +1,8 @@
 /**
  * Apply migrations/*.sql to DATABASE_URL (from the environment or .env) exactly
  * as the server does at boot: destructive-SQL guard, advisory lock, one
- * transaction per file. Prints the target (never credentials) first.
+ * transaction per file, then the boot data seeds (never on a dry run). Prints
+ * the target (never credentials) first.
  *
  *   npm run db:migrate                 # a local database
  *   npm run db:migrate -- --dry-run    # guard check + plan only; executes nothing
@@ -13,6 +14,7 @@ import { parseArgs } from "node:util";
 import { Pool } from "pg";
 import { loadEnv } from "../server/config/env";
 import { applyMigrations, describeDatabaseTarget, MigrationError } from "../server/db/migrate";
+import { runBootSeeds } from "../server/db/seeds";
 
 const USAGE = `Usage: npm run db:migrate -- [--dry-run] [--yes]
   --dry-run  check every file against the guard and show what would run; executes nothing
@@ -48,6 +50,8 @@ async function main(): Promise<number> {
       logger: console,
       dryRun,
     });
+    // As the boot does: a database migrated by hand gets the same data fixes (P2REV3-PROD-03).
+    if (!dryRun) await runBootSeeds(pool);
     return 0;
   } finally {
     await pool.end();

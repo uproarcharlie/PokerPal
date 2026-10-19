@@ -2,8 +2,7 @@
  * Money primitives shared by the client and the server. PURE: no imports, no I/O.
  *
  * Exact amounts are integer cents (`Cents`), so sums never drift. Postgres decimal(10,2) columns arrive
- * as strings such as "50.00" and are parsed digit by digit, never through a float. `parseAmount` keeps
- * today's `parseFloat` behaviour, for the legacy-parity figures in prize-pool.ts.
+ * as strings such as "50.00" and are parsed digit by digit, never through a float.
  */
 
 /** A whole number of cents. */
@@ -17,8 +16,9 @@ const DECIMAL = /^\s*([+-]?)(\d*)(?:\.(\d*))?\s*$/;
 const MAX_WHOLE_DIGITS = 13;
 
 /**
- * Today's parse, `parseFloat(value || "0")` (server/routes.ts:847-871 at dddf8ad), except that input
- * parseFloat cannot read gives 0 instead of NaN.
+ * The old parse, `parseFloat(value || "0")` (server/routes.ts:847-871 at dddf8ad), except that input
+ * parseFloat cannot read gives 0 instead of NaN. toCents falls back on it for a number, or for text
+ * that is not a plain decimal, so odd input reads as it always has.
  */
 export function parseAmount(value: MoneyInput): number {
   if (value === null || value === undefined || value === "") return 0;

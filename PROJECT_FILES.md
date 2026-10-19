@@ -56,8 +56,9 @@ pokerpro-tournament-manager/
 │
 ├── server/                  # Backend Express application
 │   ├── index.ts             # Server entry point
-│   ├── routes.ts            # API routes
-│   ├── storage.ts           # Database operations
+│   ├── app.ts               # Express app (middleware + routes)
+│   ├── routes/              # API routes, one module per domain
+│   ├── repositories/        # Database operations, one module per domain
 │   └── vite.ts              # Vite middleware setup
 │
 └── shared/                  # Shared types and schemas
@@ -93,30 +94,7 @@ npm start              # Start production server
 
 ## 🌐 API Endpoints
 
-### Tournaments
-- `GET /api/tournaments` - List tournaments with confirmed player counts
-- `GET /api/tournaments/:id` - Get tournament details
-- `POST /api/tournaments` - Create tournament
-- `PUT /api/tournaments/:id` - Update tournament
-
-### Registrations
-- `GET /api/tournaments/:id/pending-registrations` - Pending payments
-- `GET /api/tournaments/:id/confirmed-registrations` - Confirmed players
-- `POST /api/tournaments/:id/register` - Register player
-- `PATCH /api/registrations/:id/confirm-payment` - Confirm payment
-
-### Players
-- `GET /api/players` - List all players
-- `POST /api/players` - Create player
-- `GET /api/players/:id` - Get player details
-
-### Dashboard
-- `GET /api/dashboard/stats` - Dashboard statistics
-
-### Clubs
-- `GET /api/clubs` - List clubs
-- `POST /api/clubs` - Create club
-- `GET /api/clubs/:id` - Get club details
+The full list, with who may call each endpoint, is in [README.md, "API Endpoints"](README.md#api-endpoints).
 
 ## 🔐 Environment Variables
 

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams, useLocation, Link } from "wouter";
+import { useParams, Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -8,22 +8,40 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest, queryClient } from "@/lib/queryClient";
-import { CheckCircle2, UserPlus, Users, Trophy, ArrowLeft, User } from "lucide-react";
-import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
+import { apiJson, isApiRequestError } from "@/lib/queryClient";
+import { CheckCircle2, UserPlus, Users, Trophy, ArrowLeft, Lock } from "lucide-react";
 import { ImageUpload } from "@/components/ui/image-upload";
-import type { Tournament, Player } from "@shared/schema";
+import { PlayerSearch } from "@/components/player/player-search";
+import { formatMoney, toCents } from "@shared/domain/money";
+import { amountDueCents } from "@shared/domain/prize-pool";
+import { CLOSED_STATUSES, type TournamentStatus } from "@shared/api/tournaments";
+import type { Viewer } from "@shared/api/common";
+import type { ErrorCode } from "@shared/api/errors";
+import type { CreatePlayerResponse } from "@shared/api/players";
+import type { PublicPlayer, PublicRegistration } from "@shared/api/public";
 
 interface Club {
   id: string;
   name: string;
   slug: string;
-  imageUrl?: string;
-  description?: string;
+  imageUrl?: string | null;
+}
+
+interface Tournament {
+  id: string;
+  name: string;
+  clubId: string;
+  status: TournamentStatus;
+  buyInAmount: string;
+  enableHighHand: boolean | null;
+  highHandAmount: string | null;
+  prizePoolLocked: boolean | null;
+  maxPlayers: number;
+  viewer?: Viewer;
 }
 
 const newPlayerSchema = z.object({
@@ -32,18 +50,66 @@ const newPlayerSchema = z.object({
   imageUrl: z.string().optional(),
 });
 
+type NewPlayerForm = z.infer<typeof newPlayerSchema>;
+
+/** What a player sees when the server refuses a sign-up (POST /api/tournaments/:id/registrations). */
+const REGISTRATION_PROBLEMS: Partial<Record<ErrorCode, string>> = {
+  ALREADY_REGISTERED: "You're already registered for this tournament. See you at the table!",
+  TOURNAMENT_FULL: "Sorry, this tournament is full. Please speak to the tournament director, who can seat extra players.",
+  HIGH_HAND_AWARDED: 'Every high-hand prize has already been won tonight. Choose "No thanks" and try again.',
+  TOURNAMENT_CLOSED: "Registration for this tournament has closed.",
+  PRIZE_POOL_LOCKED: "Registration has closed: the prize pool is locked. Please speak to the tournament director.",
+  HIGH_HAND_NOT_AVAILABLE: 'High hands isn\'t available for this tournament. Choose "No thanks" and try again.',
+  PLAYER_NOT_FOUND: "We couldn't find that player. Go back and search again, or register as a new player.",
+};
+
+function registrationProblem(error: unknown): string {
+  const known = isApiRequestError(error) && error.code ? REGISTRATION_PROBLEMS[error.code] : undefined;
+  if (known) return known;
+  return error instanceof Error && error.message ? error.message : "Please try again or contact the tournament director.";
+}
+
+/** Buy-in plus the high-hands entry, to the cent, as the payment desk will ask for it (the same rule: amountDueCents). */
+function amountDue(tournament: Tournament, enteringHighHands: boolean): string {
+  const entry = { buyIns: 1, rebuys: 0, addons: 0, enteringHighHands: enteringHighHands && tournament.enableHighHand === true };
+  return formatMoney(amountDueCents(tournament, entry), { forceCents: true });
+}
+
+function ClubBadge({ club }: { club: Club }) {
+  return (
+    <Link href={`/club/${club.slug}`}>
+      <div className="flex items-center justify-center gap-3 hover:opacity-80 transition-opacity cursor-pointer">
+        {club.imageUrl ? (
+          <img src={club.imageUrl} alt={club.name} className="w-16 h-16 rounded-lg object-cover border-2 border-primary/20" />
+        ) : (
+          <div className="w-16 h-16 bg-gradient-to-br from-primary to-accent rounded-lg flex items-center justify-center text-white text-xl font-bold border-2 border-primary/20">
+            {club.name.substring(0, 2).toUpperCase()}
+          </div>
+        )}
+        <div className="text-left">
+          <p className="text-2xl font-bold text-primary">{club.name}</p>
+          <p className="text-xs text-muted-foreground">Poker Club</p>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
 export function PublicRegisterPage() {
   const { tournamentId } = useParams<{ tournamentId: string }>();
-  const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [step, setStep] = useState(1);
   const [playerType, setPlayerType] = useState<"new" | "existing" | null>(null);
-  const [selectedPlayer, setSelectedPlayer] = useState<string>("");
+  const [selectedPlayer, setSelectedPlayer] = useState<PublicPlayer | null>(null);
+  // POST /api/players's proof that this visitor typed the player's details in, for signing up a player
+  // who has not played at this club before (P2REV0-02).
+  const [signUpToken, setSignUpToken] = useState<string | undefined>(undefined);
   const [enteringHighHands, setEnteringHighHands] = useState(false);
   const [registrationComplete, setRegistrationComplete] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
   const [isImageUploading, setIsImageUploading] = useState(false);
 
-  const form = useForm({
+  const form = useForm<NewPlayerForm>({
     resolver: zodResolver(newPlayerSchema),
     defaultValues: {
       name: "",
@@ -56,69 +122,43 @@ export function PublicRegisterPage() {
     queryKey: ["/api/tournaments", tournamentId],
   });
 
-  const { data: club, isLoading: clubLoading } = useQuery<Club>({
+  const { data: club } = useQuery<Club>({
     queryKey: [`/api/clubs/${tournament?.clubId}`],
     enabled: !!tournament?.clubId,
   });
 
-  const { data: players = [] } = useQuery<Player[]>({
-    queryKey: ["/api/players"],
+  // Who is already in, so a full tournament says so before anyone types their details or uploads a photo.
+  const { data: signedUp } = useQuery<PublicRegistration[]>({
+    queryKey: ["/api/tournaments", tournamentId, "registrations"],
   });
 
   const createPlayerMutation = useMutation({
-    mutationFn: async (data: { name: string; phone: string; imageUrl?: string }) => {
-      const payload = {
+    mutationFn: (data: NewPlayerForm) =>
+      apiJson<CreatePlayerResponse>("POST", "/api/players", {
         name: data.name,
         phone: data.phone,
         imageUrl: data.imageUrl || undefined,
-      };
-      const response = await apiRequest("POST", "/api/players", payload);
-      const result = await response.json();
-      
-      if (response.status === 409) {
-        throw new Error(result.message || "Phone number already registered");
-      }
-      
-      if (!response.ok) {
-        throw new Error(result.error || "Failed to create player");
-      }
-      
-      return result;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/players"] });
-    },
+        // This tournament's club becomes a new player's home club, even if the sign-up stops here.
+        tournamentId,
+      }),
   });
 
   const registerMutation = useMutation({
-    mutationFn: async (data: { playerId: string; tournamentId: string; enteringHighHands: boolean }) => {
-      const response = await apiRequest("POST", `/api/tournaments/${data.tournamentId}/registrations`, {
+    mutationFn: (data: { playerId: string; tournamentId: string; enteringHighHands: boolean; signUpToken?: string }) =>
+      apiJson<PublicRegistration>("POST", `/api/tournaments/${data.tournamentId}/registrations`, {
         playerId: data.playerId,
         enteringHighHands: data.enteringHighHands,
-      });
-      const result = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(result.error || "Failed to register for tournament");
-      }
-      
-      return result;
-    },
+        ...(data.signUpToken ? { signUpToken: data.signUpToken } : {}),
+      }),
     onSuccess: () => {
+      setProblem(null);
       setRegistrationComplete(true);
       toast({
         title: "Registration Successful!",
         description: "Please proceed to payment confirmation.",
       });
     },
-    onError: (error) => {
-      const errorMessage = error instanceof Error ? error.message : "Please try again or contact support.";
-      toast({
-        title: "Registration Failed",
-        description: errorMessage,
-        variant: "destructive",
-      });
-    },
+    onError: (error) => setProblem(registrationProblem(error)),
   });
 
   const handleStep1Next = () => {
@@ -133,23 +173,42 @@ export function PublicRegisterPage() {
     setStep(2);
   };
 
+  /** Shows a refused sign-up next to the field it is about, when it is about one. */
+  const showCreatePlayerError = (error: unknown) => {
+    if (isApiRequestError(error) && error.code === "PHONE_TAKEN") {
+      form.setError("phone", { message: error.message });
+      return;
+    }
+    if (isApiRequestError(error) && error.code === "VALIDATION" && Array.isArray(error.details)) {
+      const issue = error.details[0] as { path?: unknown[]; message?: unknown } | undefined;
+      const field = issue?.path?.[0];
+      if ((field === "name" || field === "phone") && typeof issue?.message === "string") {
+        form.setError(field, { message: issue.message });
+        return;
+      }
+    }
+    toast({
+      title: "Unable to Create Player",
+      description: error instanceof Error ? error.message : "Failed to create player. Please try again.",
+      variant: "destructive",
+    });
+  };
+
   const handleStep2Next = async () => {
     if (playerType === "new") {
       const isValid = await form.trigger();
       if (!isValid) return;
 
-      const formData = form.getValues();
       try {
-        const newPlayer = await createPlayerMutation.mutateAsync(formData);
-        setSelectedPlayer(newPlayer.id);
+        const player = await createPlayerMutation.mutateAsync(form.getValues());
+        if (player.existing) {
+          toast({ title: "Welcome back!", description: `We found your player profile, ${player.name}.` });
+        }
+        setSelectedPlayer({ id: player.id, name: player.name, imageUrl: player.imageUrl });
+        setSignUpToken(player.signUpToken);
         setStep(3);
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : "Failed to create player. Please try again.";
-        toast({
-          title: "Unable to Create Player",
-          description: errorMessage,
-          variant: "destructive",
-        });
+        showCreatePlayerError(error);
       }
     } else {
       if (!selectedPlayer) {
@@ -168,18 +227,21 @@ export function PublicRegisterPage() {
     if (!selectedPlayer || !tournamentId) return;
 
     registerMutation.mutate({
-      playerId: selectedPlayer,
+      playerId: selectedPlayer.id,
       tournamentId,
       enteringHighHands,
+      signUpToken: playerType === "new" ? signUpToken : undefined,
     });
   };
 
   const handleStartOver = () => {
     setStep(1);
     setPlayerType(null);
-    setSelectedPlayer("");
+    setSelectedPlayer(null);
+    setSignUpToken(undefined);
     setEnteringHighHands(false);
     setRegistrationComplete(false);
+    setProblem(null);
     form.reset();
   };
 
@@ -207,32 +269,49 @@ export function PublicRegisterPage() {
     );
   }
 
+  // The tournament's staff can still seat a player at a full table (the server does not hold them to maxPlayers).
+  const full = tournament.viewer?.canManage !== true && (signedUp?.length ?? 0) >= tournament.maxPlayers;
+  const closedMessage = CLOSED_STATUSES.includes(tournament.status)
+    ? "Registration for this tournament has closed."
+    : tournament.prizePoolLocked
+      ? "Registration has closed: the prize pool is locked. Please speak to the tournament director."
+      : full
+        ? REGISTRATION_PROBLEMS.TOURNAMENT_FULL
+        : null;
+
+  if (closedMessage && !registrationComplete) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+        <Card className="w-full max-w-md">
+          <CardHeader className="space-y-4 text-center">
+            {club && <ClubBadge club={club} />}
+            <div className="pt-4">
+              <Lock className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+              <CardTitle className="text-xl">{tournament.name}</CardTitle>
+              <CardDescription className="mt-2" data-testid="registration-closed">
+                {closedMessage}
+              </CardDescription>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <Link href={`/tournament/${tournamentId}`}>
+              <Button variant="outline" className="w-full" size="lg">
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Back to Tournament
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   if (registrationComplete) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background p-4">
         <Card className="w-full max-w-md">
           <CardHeader className="space-y-4 text-center">
-            {club && (
-              <Link href={`/club/${club.slug}`}>
-                <div className="flex items-center justify-center gap-3 hover:opacity-80 transition-opacity cursor-pointer">
-                  {club.imageUrl ? (
-                    <img
-                      src={club.imageUrl}
-                      alt={club.name}
-                      className="w-16 h-16 rounded-lg object-cover border-2 border-primary/20"
-                    />
-                  ) : (
-                    <div className="w-16 h-16 bg-gradient-to-br from-primary to-accent rounded-lg flex items-center justify-center text-white text-xl font-bold border-2 border-primary/20">
-                      {club.name.substring(0, 2).toUpperCase()}
-                    </div>
-                  )}
-                  <div className="text-left">
-                    <p className="text-2xl font-bold text-primary">{club.name}</p>
-                    <p className="text-xs text-muted-foreground">Poker Club</p>
-                  </div>
-                </div>
-              </Link>
-            )}
+            {club && <ClubBadge club={club} />}
             <div className="pt-4">
               <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto mb-4" />
               <CardTitle className="text-2xl">Registration Complete!</CardTitle>
@@ -244,19 +323,13 @@ export function PublicRegisterPage() {
           <CardContent className="space-y-4">
             <div className="bg-muted p-4 rounded-lg space-y-2">
               <p className="text-sm font-medium">Please proceed to the payment desk</p>
-              <p className="text-3xl font-bold text-primary">
-                $
-                {(
-                  parseFloat(tournament.buyInAmount) +
-                  (enteringHighHands && tournament.enableHighHand
-                    ? parseFloat(tournament.highHandAmount || "0")
-                    : 0)
-                ).toFixed(2)}
+              <p className="text-3xl font-bold text-primary" data-testid="amount-due">
+                {amountDue(tournament, enteringHighHands)}
               </p>
               <p className="text-xs text-muted-foreground">
-                Buy-in: ${parseFloat(tournament.buyInAmount).toFixed(2)}
+                Buy-in: {formatMoney(toCents(tournament.buyInAmount), { forceCents: true })}
                 {enteringHighHands && tournament.enableHighHand && (
-                  <> + High Hands: ${parseFloat(tournament.highHandAmount || "0").toFixed(2)}</>
+                  <> + High Hands: {formatMoney(toCents(tournament.highHandAmount), { forceCents: true })}</>
                 )}
               </p>
             </div>
@@ -281,27 +354,7 @@ export function PublicRegisterPage() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-4">
-          {club && (
-            <Link href={`/club/${club.slug}`}>
-              <div className="flex items-center justify-center gap-3 hover:opacity-80 transition-opacity cursor-pointer">
-                {club.imageUrl ? (
-                  <img
-                    src={club.imageUrl}
-                    alt={club.name}
-                    className="w-16 h-16 rounded-lg object-cover border-2 border-primary/20"
-                  />
-                ) : (
-                  <div className="w-16 h-16 bg-gradient-to-br from-primary to-accent rounded-lg flex items-center justify-center text-white text-xl font-bold border-2 border-primary/20">
-                    {club.name.substring(0, 2).toUpperCase()}
-                  </div>
-                )}
-                <div className="text-left">
-                  <p className="text-2xl font-bold text-primary">{club.name}</p>
-                  <p className="text-xs text-muted-foreground">Poker Club</p>
-                </div>
-              </div>
-            </Link>
-          )}
+          {club && <ClubBadge club={club} />}
           <div className="text-center pt-2">
             <CardTitle className="text-xl">{tournament.name}</CardTitle>
             <CardDescription className="mt-1">Tournament Registration</CardDescription>
@@ -371,10 +424,9 @@ export function PublicRegisterPage() {
                             <ImageUpload
                               onImageUpload={field.onChange}
                               currentImage={field.value}
-                              entityType="players"
+                              kind="player_avatar"
                               placeholder="Take a photo or upload one"
                               onUploadingChange={setIsImageUploading}
-                              uploadUrl="/api/upload/public"
                             />
                           </FormControl>
                           <FormMessage />
@@ -411,27 +463,8 @@ export function PublicRegisterPage() {
                 </Form>
               ) : (
                 <div className="space-y-2">
-                  <Label>Select Your Name</Label>
-                  <Select value={selectedPlayer} onValueChange={setSelectedPlayer}>
-                    <SelectTrigger data-testid="player-select">
-                      <SelectValue placeholder="Choose your name" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {players.map((player) => (
-                        <SelectItem key={player.id} value={player.id} className="py-2">
-                          <div className="flex items-center gap-2">
-                            <Avatar className="w-6 h-6">
-                              <AvatarImage src={player.imageUrl ?? undefined} alt={player.name} />
-                              <AvatarFallback>
-                                <User className="w-3 h-3" />
-                              </AvatarFallback>
-                            </Avatar>
-                            <span>{player.name}</span>
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Label>Find Your Name</Label>
+                  <PlayerSearch tournamentId={tournament.id} selected={selectedPlayer} onSelect={setSelectedPlayer} />
                 </div>
               )}
               <div className="flex space-x-2">
@@ -452,11 +485,17 @@ export function PublicRegisterPage() {
 
           {step === 3 && (
             <div className="space-y-4">
+              {selectedPlayer && (
+                <p className="text-sm text-muted-foreground text-center" data-testid="registering-as">
+                  Registering <span className="font-semibold text-foreground">{selectedPlayer.name}</span>
+                </p>
+              )}
+
               {tournament.enableHighHand && (
                 <div className="space-y-4">
                   <Label className="text-base font-semibold">High Hands Entry</Label>
                   <p className="text-sm text-muted-foreground">
-                    Enter the high hands competition for an additional ${parseFloat(tournament.highHandAmount || "0").toFixed(2)}
+                    Enter the high hands competition for an additional {formatMoney(toCents(tournament.highHandAmount), { forceCents: true })}
                   </p>
                   <RadioGroup
                     value={enteringHighHands ? "yes" : "no"}
@@ -499,19 +538,25 @@ export function PublicRegisterPage() {
 
               <div className="bg-muted p-4 rounded-lg">
                 <p className="text-sm font-medium mb-2">Total Amount</p>
-                <p className="text-3xl font-bold">
-                  $
-                  {(
-                    parseFloat(tournament.buyInAmount) +
-                    (enteringHighHands && tournament.enableHighHand
-                      ? parseFloat(tournament.highHandAmount || "0")
-                      : 0)
-                  ).toFixed(2)}
-                </p>
+                <p className="text-3xl font-bold">{amountDue(tournament, enteringHighHands)}</p>
               </div>
 
+              {problem && (
+                <Alert variant="destructive" data-testid="registration-problem">
+                  <AlertDescription>{problem}</AlertDescription>
+                </Alert>
+              )}
+
               <div className="flex space-x-2">
-                <Button onClick={() => setStep(2)} variant="outline" className="flex-1" data-testid="step3-back">
+                <Button
+                  onClick={() => {
+                    setProblem(null);
+                    setStep(2);
+                  }}
+                  variant="outline"
+                  className="flex-1"
+                  data-testid="step3-back"
+                >
                   Back
                 </Button>
                 <Button

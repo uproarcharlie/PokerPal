@@ -29,6 +29,8 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Check, Plus, Trash2 } from "lucide-react";
 import type { PointsSystem as PointsSystemRow } from "@shared/schema";
+import type { Viewer } from "@shared/api/common";
+import { AccessDenied } from "@/components/auth/access-denied";
 
 const seasonSchema = z.object({
   name: z.string().min(1, "Season name is required"),
@@ -66,6 +68,7 @@ interface Season {
 interface Club {
   id: string;
   name: string;
+  viewer?: Viewer;
 }
 
 // createdAt is left out: it arrives as a JSON string, not the schema's Date.
@@ -92,7 +95,7 @@ export default function SeasonSettings() {
     queryKey: [`/api/seasons/${id}`],
   });
 
-  const { data: clubs = [] } = useQuery<Club[]>({
+  const { data: clubs = [], isLoading: clubsLoading } = useQuery<Club[]>({
     queryKey: ["/api/clubs"],
   });
 
@@ -187,29 +190,23 @@ export default function SeasonSettings() {
 
   const createPointsSystemMutation = useMutation({
     mutationFn: async (data: PointsSystemFormData) => {
+      // The system and its allocations are created together, in one transaction: a refused
+      // allocation (e.g. overlapping positions) leaves no half-built system behind.
       const payload = {
         name: data.name,
         description: data.description || null,
         participationPoints: data.participationPoints ? parseInt(data.participationPoints) : 0,
         knockoutPoints: data.knockoutPoints ? parseInt(data.knockoutPoints) : 0,
+        allocations: allocations.map((allocation) => ({
+          position: parseInt(allocation.position),
+          positionEnd: allocation.positionEnd ? parseInt(allocation.positionEnd) : null,
+          points: parseInt(allocation.points),
+          description: allocation.description || null,
+        })),
       };
 
       const response = await apiRequest("POST", `/api/seasons/${id}/points-systems`, payload);
-      const pointsSystem = await response.json();
-
-      // Create allocations if any
-      if (allocations.length > 0) {
-        for (const allocation of allocations) {
-          await apiRequest("POST", `/api/points-systems/${pointsSystem.id}/allocations`, {
-            position: parseInt(allocation.position),
-            positionEnd: allocation.positionEnd ? parseInt(allocation.positionEnd) : null,
-            points: parseInt(allocation.points),
-            description: allocation.description || null,
-          });
-        }
-      }
-
-      return pointsSystem;
+      return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/seasons/${id}/points-systems`] });
@@ -271,7 +268,7 @@ export default function SeasonSettings() {
     setAllocations(updated);
   };
 
-  if (seasonLoading) {
+  if (seasonLoading || clubsLoading) {
     return (
       <div className="min-h-screen">
         <header className="bg-card border-b border-border">
@@ -300,6 +297,16 @@ export default function SeasonSettings() {
           </Link>
         </div>
       </div>
+    );
+  }
+
+  if (!clubs.find((club) => club.id === season.clubId)?.viewer?.canManage) {
+    return (
+      <AccessDenied
+        message="Only this club's owner, its managers and admins can change its seasons."
+        backHref="/seasons"
+        backLabel="Back to Seasons"
+      />
     );
   }
 

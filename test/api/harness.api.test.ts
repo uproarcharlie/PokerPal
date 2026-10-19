@@ -3,12 +3,11 @@
  * loginAs signs in through the real auth endpoints, resetDb empties the
  * worker database between tests, and a run holds its database name.
  */
-import { count } from "drizzle-orm";
-import request from "supertest";
+import { count, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, inject, it } from "vitest";
-import { clubs, tournamentRegistrations, users } from "@shared/schema";
-import { createTournamentScenario, createUser } from "../factories";
-import { getApp, loginAs, resetDb, testDb } from "../helpers";
+import { clubs, playerHomeClubs, tournamentRegistrations, users } from "@shared/schema";
+import { createClub, createPlayer, createRegistration, createTournament, createTournamentScenario, createUser } from "../factories";
+import { loginAs, resetDb, testDb } from "../helpers";
 import { assertSafeTestDbUrl } from "../setup/db-guard";
 import { claimTestDatabaseName, TestRunConflictError } from "../setup/run-lock";
 
@@ -26,7 +25,9 @@ describe("createTournamentScenario", () => {
       eliminations: [3, { player: 2, by: 0 }],
     });
 
-    const response = await request(await getApp()).get(`/api/tournaments/${scenario.tournament.id}/registrations`);
+    // As the club's admin: only staff are told who has paid.
+    const { agent } = await loginAs("admin");
+    const response = await agent.get(`/api/tournaments/${scenario.tournament.id}/registrations`);
 
     expect(response.status).toBe(200);
     const byPlayer = new Map(
@@ -46,6 +47,26 @@ describe("createTournamentScenario", () => {
 
     const [{ clubCount }] = await testDb().select({ clubCount: count() }).from(clubs);
     expect(clubCount).toBe(0);
+  });
+});
+
+describe("createRegistration", () => {
+  it("records the home club by the app's own rule: the club of the player's first surviving registration (P2REV4-CQ2-07)", async () => {
+    const first = await createClub();
+    const later = await createClub();
+    const earlier = await createTournament({ clubId: first.id });
+    const now = await createTournament({ clubId: later.id });
+    const player = await createPlayer();
+    // A registration an older build wrote, with no home club recorded for it.
+    await testDb()
+      .insert(tournamentRegistrations)
+      .values({ tournamentId: earlier.id, playerId: player.id, registrationTime: new Date("2026-01-01T19:00:00Z") });
+
+    await createRegistration({ tournamentId: now.id, playerId: player.id });
+
+    expect(await testDb().select({ clubId: playerHomeClubs.clubId }).from(playerHomeClubs).where(eq(playerHomeClubs.playerId, player.id))).toEqual([
+      { clubId: first.id },
+    ]);
   });
 });
 

@@ -1,8 +1,80 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Activity, UserPlus, UserX, DollarSign, PlusCircle, PlayCircle, Square, CheckCircle, RotateCcw, Trophy, Lock } from "lucide-react";
+import type { ReactNode } from "react";
+import {
+  Activity,
+  UserPlus,
+  UserMinus,
+  UserX,
+  DollarSign,
+  PlusCircle,
+  PlayCircle,
+  CheckCircle,
+  RotateCcw,
+  Trophy,
+  Lock,
+  Calculator,
+  Percent,
+  ListOrdered,
+  Swords,
+} from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+import { ACTIVITY_EVENT_TYPES, type ActivityEventType } from "@shared/api/tournaments";
+
+interface EventStyle {
+  icon: ReactNode;
+  color: string;
+  label: string;
+}
+
+/** How every event the server writes is shown; a Record, so a new event type cannot be left out (P2REV4-CQ-07). */
+const EVENT_STYLES: Readonly<Record<ActivityEventType, EventStyle>> = {
+  registration: { icon: <UserPlus className="w-4 h-4 text-blue-600" />, color: "bg-blue-100 text-blue-800 border-blue-200", label: "Registration" },
+  registration_removed: {
+    icon: <UserMinus className="w-4 h-4 text-slate-600" />,
+    color: "bg-slate-100 text-slate-800 border-slate-200",
+    label: "Entry Removed",
+  },
+  elimination: { icon: <UserX className="w-4 h-4 text-red-600" />, color: "bg-red-100 text-red-800 border-red-200", label: "Elimination" },
+  knockout_credited: { icon: <Swords className="w-4 h-4 text-red-600" />, color: "bg-red-50 text-red-800 border-red-200", label: "Knockout" },
+  player_restored: { icon: <RotateCcw className="w-4 h-4 text-cyan-600" />, color: "bg-cyan-100 text-cyan-800 border-cyan-200", label: "Restored" },
+  rebuy: { icon: <DollarSign className="w-4 h-4 text-green-600" />, color: "bg-green-100 text-green-800 border-green-200", label: "Re-buy" },
+  addon: { icon: <PlusCircle className="w-4 h-4 text-purple-600" />, color: "bg-purple-100 text-purple-800 border-purple-200", label: "Add-on" },
+  reentry: { icon: <RotateCcw className="w-4 h-4 text-cyan-600" />, color: "bg-cyan-100 text-cyan-800 border-cyan-200", label: "Re-entry" },
+  payment_confirmed: {
+    icon: <CheckCircle className="w-4 h-4 text-emerald-600" />,
+    color: "bg-emerald-100 text-emerald-800 border-emerald-200",
+    label: "Payment",
+  },
+  high_hand: { icon: <Trophy className="w-4 h-4 text-amber-600" />, color: "bg-amber-100 text-amber-800 border-amber-200", label: "High Hand" },
+  status_change: {
+    icon: <PlayCircle className="w-4 h-4 text-orange-600" />,
+    color: "bg-orange-100 text-orange-800 border-orange-200",
+    label: "Status Change",
+  },
+  prize_pool_locked: { icon: <Lock className="w-4 h-4 text-indigo-600" />, color: "bg-indigo-100 text-indigo-800 border-indigo-200", label: "Pool Locked" },
+  prize_pool_adjusted: {
+    icon: <Calculator className="w-4 h-4 text-teal-600" />,
+    color: "bg-teal-100 text-teal-800 border-teal-200",
+    label: "Prize Pool",
+  },
+  rake_rates_changed: { icon: <Percent className="w-4 h-4 text-teal-600" />, color: "bg-teal-100 text-teal-800 border-teal-200", label: "Rates" },
+  tournament_refinalized: {
+    icon: <ListOrdered className="w-4 h-4 text-orange-600" />,
+    color: "bg-orange-100 text-orange-800 border-orange-200",
+    label: "Results Corrected",
+  },
+};
+
+/** Rows written before Phase 2 may hold an event type the app no longer writes. */
+const OTHER_EVENT: EventStyle = { icon: <Activity className="w-4 h-4 text-gray-600" />, color: "bg-gray-100 text-gray-800 border-gray-200", label: "Event" };
+
+const KNOWN_EVENT_TYPES: ReadonlySet<string> = new Set(ACTIVITY_EVENT_TYPES);
+
+function eventStyle(eventType: string): EventStyle {
+  return KNOWN_EVENT_TYPES.has(eventType) ? EVENT_STYLES[eventType as ActivityEventType] : OTHER_EVENT;
+}
 
 interface ActivityLog {
   id: string;
@@ -27,81 +99,6 @@ export function ActivityFeed({ tournamentId }: ActivityFeedProps) {
     queryKey: ["/api/tournaments", tournamentId, "activity"],
     refetchInterval: 5000, // Refresh every 5 seconds for real-time updates
   });
-
-  const getEventIcon = (eventType: string) => {
-    switch (eventType) {
-      case 'registration':
-        return <UserPlus className="w-4 h-4 text-blue-600" />;
-      case 'elimination':
-        return <UserX className="w-4 h-4 text-red-600" />;
-      case 'rebuy':
-        return <DollarSign className="w-4 h-4 text-green-600" />;
-      case 'addon':
-        return <PlusCircle className="w-4 h-4 text-purple-600" />;
-      case 'status_change':
-        return <PlayCircle className="w-4 h-4 text-orange-600" />;
-      case 'payment_confirmed':
-        return <CheckCircle className="w-4 h-4 text-emerald-600" />;
-      case 'player_restored':
-        return <RotateCcw className="w-4 h-4 text-cyan-600" />;
-      case 'high_hand':
-        return <Trophy className="w-4 h-4 text-amber-600" />;
-      case 'prize_pool_locked':
-        return <Lock className="w-4 h-4 text-indigo-600" />;
-      default:
-        return <Activity className="w-4 h-4 text-gray-600" />;
-    }
-  };
-
-  const getEventColor = (eventType: string) => {
-    switch (eventType) {
-      case 'registration':
-        return 'bg-blue-100 text-blue-800 border-blue-200';
-      case 'elimination':
-        return 'bg-red-100 text-red-800 border-red-200';
-      case 'rebuy':
-        return 'bg-green-100 text-green-800 border-green-200';
-      case 'addon':
-        return 'bg-purple-100 text-purple-800 border-purple-200';
-      case 'status_change':
-        return 'bg-orange-100 text-orange-800 border-orange-200';
-      case 'payment_confirmed':
-        return 'bg-emerald-100 text-emerald-800 border-emerald-200';
-      case 'player_restored':
-        return 'bg-cyan-100 text-cyan-800 border-cyan-200';
-      case 'high_hand':
-        return 'bg-amber-100 text-amber-800 border-amber-200';
-      case 'prize_pool_locked':
-        return 'bg-indigo-100 text-indigo-800 border-indigo-200';
-      default:
-        return 'bg-gray-100 text-gray-800 border-gray-200';
-    }
-  };
-
-  const getEventLabel = (eventType: string) => {
-    switch (eventType) {
-      case 'registration':
-        return 'Registration';
-      case 'elimination':
-        return 'Elimination';
-      case 'rebuy':
-        return 'Re-buy';
-      case 'addon':
-        return 'Add-on';
-      case 'status_change':
-        return 'Status Change';
-      case 'payment_confirmed':
-        return 'Payment';
-      case 'player_restored':
-        return 'Restored';
-      case 'high_hand':
-        return 'High Hand';
-      case 'prize_pool_locked':
-        return 'Pool Locked';
-      default:
-        return 'Event';
-    }
-  };
 
   if (isLoading) {
     return (
@@ -153,12 +150,12 @@ export function ActivityFeed({ tournamentId }: ActivityFeedProps) {
                 className="flex items-start gap-3 pb-4 border-b border-border last:border-0 last:pb-0"
               >
                 <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center shrink-0">
-                  {getEventIcon(activity.eventType)}
+                  {eventStyle(activity.eventType).icon}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1 flex-wrap">
-                    <Badge className={`${getEventColor(activity.eventType)} text-xs`}>
-                      {getEventLabel(activity.eventType)}
+                    <Badge className={`${eventStyle(activity.eventType).color} text-xs`}>
+                      {eventStyle(activity.eventType).label}
                     </Badge>
                     <span className="text-xs text-muted-foreground">
                       {formatDistanceToNow(new Date(activity.timestamp), { addSuffix: true })}

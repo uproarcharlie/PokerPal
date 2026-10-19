@@ -7,6 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ActivityFeed } from "@/components/tournament/activity-feed";
 import { Trophy, Users, DollarSign, Calendar, UserPlus, Lock, Target, ChartLine } from "lucide-react";
+import { LIVE_REFRESH_MS } from "@/lib/live-refresh";
+import { tournamentMoney } from "@/lib/prize-pool";
+import { formatMoney, toCents } from "@shared/domain/money";
+import { allocationFor, pointsForFinish } from "@shared/domain/points";
+import type { PrizePoolSnapshot } from "@shared/api/finalize";
 
 interface Tournament {
   id: string;
@@ -24,6 +29,10 @@ interface Tournament {
   enableHighHand: boolean;
   highHandAmount?: string;
   payoutStructure: string;
+  customPayouts?: string | null;
+  manualPrizePool?: string | null;
+  rakeOverride?: string | null;
+  prizePoolSnapshot?: PrizePoolSnapshot | null;
   rakeType?: string;
   rakeAmount?: string;
   rebuyRakeType?: string;
@@ -98,8 +107,11 @@ export default function PublicTournamentView() {
   const { id } = useParams();
   const [activeTab, setActiveTab] = useState("details");
 
+  // Polled like the registrations: the pool settings, the lock and the status change during the night,
+  // and the payouts below are worked out from both (MONEY-P2REV-02).
   const { data: tournament, isLoading: tournamentLoading } = useQuery<Tournament>({
     queryKey: ["/api/tournaments", id],
+    refetchInterval: LIVE_REFRESH_MS,
   });
 
   const { data: club } = useQuery<Club>({
@@ -125,7 +137,7 @@ export default function PublicTournamentView() {
   const { data: registrations = [] } = useQuery<TournamentRegistration[]>({
     queryKey: ["/api/tournaments", id, "registrations"],
     enabled: !!id,
-    refetchInterval: 5000, // Refresh every 5 seconds
+    refetchInterval: LIVE_REFRESH_MS,
   });
 
   const { data: leaderboard = [] } = useQuery<LeaderboardEntry[]>({
@@ -197,66 +209,19 @@ export default function PublicTournamentView() {
     return 0;
   });
 
-  // Calculate prize pool
-  const totalBuyIns = registrations.reduce((sum, reg) => sum + reg.buyIns, 0);
-  const totalRebuys = registrations.reduce((sum, reg) => sum + reg.rebuys, 0);
-  const totalAddons = registrations.reduce((sum, reg) => sum + reg.addons, 0);
+  // The same shared functions finalize pays with, so this page shows what the TD sees and what is paid.
+  const { display, poolCents } = tournamentMoney(tournament, registrations);
+  const prizePayouts = display.rows;
 
-  const buyInTotal = totalBuyIns * parseFloat(tournament.buyInAmount);
-  const rebuyTotal = totalRebuys * parseFloat(tournament.rebuyAmount || '0');
-  const addonTotal = totalAddons * parseFloat(tournament.addonAmount || '0');
-  const grossTotal = buyInTotal + rebuyTotal + addonTotal;
-
-  // Calculate rake
-  let buyInRake = 0;
-  if (tournament.rakeType === 'percentage') {
-    buyInRake = buyInTotal * (parseFloat(tournament.rakeAmount || '0') / 100);
-  } else if (tournament.rakeType === 'fixed') {
-    buyInRake = totalBuyIns * parseFloat(tournament.rakeAmount || '0');
-  }
-
-  let rebuyRake = 0;
-  if (tournament.rebuyRakeType === 'percentage') {
-    rebuyRake = rebuyTotal * (parseFloat(tournament.rebuyRakeAmount || '0') / 100);
-  } else if (tournament.rebuyRakeType === 'fixed') {
-    rebuyRake = totalRebuys * parseFloat(tournament.rebuyRakeAmount || '0');
-  }
-
-  let addonRake = 0;
-  if (tournament.addonRakeType === 'percentage') {
-    addonRake = addonTotal * (parseFloat(tournament.addonRakeAmount || '0') / 100);
-  } else if (tournament.addonRakeType === 'fixed') {
-    addonRake = totalAddons * parseFloat(tournament.addonRakeAmount || '0');
-  }
-
-  const rake = buyInRake + rebuyRake + addonRake;
-  const netPrizePool = grossTotal - rake;
-
-  // Prizes are shown once the pool is manually locked
-  const isPrizePoolLocked = tournament.prizePoolLocked;
-
-  // Calculate prize payouts
-  const getPrizePayouts = () => {
-    if (netPrizePool <= 0) return [];
-
-    const payoutStructures: Record<string, number[]> = {
-      'standard': [0.50, 0.30, 0.20],
-      'top3': [0.50, 0.30, 0.20],
-      'top5': [0.40, 0.25, 0.20, 0.10, 0.05],
-      'top8': [0.35, 0.22, 0.15, 0.12, 0.08, 0.04, 0.02, 0.02],
-      'top9': [0.30, 0.20, 0.15, 0.12, 0.09, 0.06, 0.04, 0.02, 0.02],
-    };
-
-    const percentages = payoutStructures[tournament.payoutStructure] || payoutStructures['standard'];
-
-    return percentages.map((percentage, index) => ({
-      position: index + 1,
-      percentage: percentage * 100,
-      amount: Math.round(netPrizePool * percentage),
-    }));
-  };
-
-  const prizePayouts = getPrizePayouts();
+  // Prizes are shown once the pool is locked, and always once they have been paid.
+  const isPrizePoolLocked = tournament.prizePoolLocked || display.source !== "live";
+  // A tournament whose results were entered by hand before Phase 2 has no record of what was paid.
+  const prizesUnrecorded = display.source === "unrecorded";
+  // A cancelled tournament pays nothing, as finalize and the dashboard treat it (P2REV1-MONEY-04).
+  const cancelled = display.source === "cancelled";
+  // The points finalize awards for a place, with no knockouts: the same rule (shared/domain/points).
+  const pointsRules = { trackPoints: tournament.trackPoints, pointsSystem: pointsSystem ?? null, allocations: pointsAllocations };
+  const placePoints = (position: number) => pointsForFinish(pointsRules, position, 0) ?? 0;
 
   // Get finished players for results display
   const finishedPlayers = registrations.filter(r => r.finalPosition).sort((a, b) =>
@@ -288,6 +253,8 @@ export default function PublicTournamentView() {
         return 'Scheduled';
       case 'completed':
         return 'Completed';
+      case 'cancelled':
+        return 'Cancelled';
       default:
         return status;
     }
@@ -486,7 +453,7 @@ export default function PublicTournamentView() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="p-6">
-                    <p className="text-3xl font-bold text-accent">${parseFloat(tournament.highHandAmount).toLocaleString()}</p>
+                    <p className="text-3xl font-bold text-accent">{formatMoney(toCents(tournament.highHandAmount))}</p>
                     <p className="text-sm text-muted-foreground mt-1">Additional prize for highest hand</p>
                   </CardContent>
                 </Card>
@@ -502,7 +469,7 @@ export default function PublicTournamentView() {
                     <Trophy className="w-5 h-5 text-accent" />
                     Prize Pool Structure
                   </div>
-                  {isPrizePoolLocked && (
+                  {isPrizePoolLocked && !cancelled && (
                     <Badge variant="outline" className="text-xs">
                       <Lock className="w-3 h-3 mr-1" />
                       Locked
@@ -510,8 +477,12 @@ export default function PublicTournamentView() {
                   )}
                 </CardTitle>
                 <p className="text-sm text-muted-foreground mt-1">
-                  {isPrizePoolLocked ? (
-                    `Total prize pool: $${Math.round(netPrizePool).toLocaleString()}`
+                  {prizesUnrecorded ? (
+                    <span data-testid="prizes-unrecorded">Prizes were not recorded for this tournament</span>
+                  ) : cancelled ? (
+                    <span data-testid="prizes-cancelled">Cancelled: no prizes are paid</span>
+                  ) : isPrizePoolLocked ? (
+                    `Total prize pool: ${formatMoney(poolCents)}`
                   ) : (
                     <span className="inline-flex items-center gap-1 text-orange-600">
                       <Lock className="w-4 h-4" />
@@ -541,20 +512,15 @@ export default function PublicTournamentView() {
 
                         const rows = [];
 
-                        // Create rows for all individual positions
+                        // A row for every place that is paid, has an allocation, or gets participation points
                         for (let position = 1; position <= maxPosition; position++) {
                           const payout = prizePayouts.find(p => p.position === position);
-                          const pointsAllocation = pointsAllocations.find(
-                            pa => pa.positionEnd
-                              ? (position >= pa.position && position <= pa.positionEnd)
-                              : position === pa.position
-                          );
+                          const points = placePoints(position);
 
                           // Find player at this position
                           const playerAtPosition = registrations.find(r => r.finalPosition === position);
 
-                          // Skip if no prize and no points for this position
-                          if (!payout && !pointsAllocation) continue;
+                          if (!payout && !allocationFor(position, pointsAllocations) && points === 0) continue;
 
                           rows.push(
                             <tr key={position} className="hover:bg-muted/20">
@@ -593,7 +559,7 @@ export default function PublicTournamentView() {
                               <td className="py-3 px-3 text-right">
                                 {payout ? (
                                   <span className="font-bold text-foreground">
-                                    {isPrizePoolLocked ? `$${payout.amount.toLocaleString()}` : 'TBD'}
+                                    {isPrizePoolLocked ? formatMoney(payout.amountCents) : 'TBD'}
                                   </span>
                                 ) : (
                                   <span className="text-muted-foreground">-</span>
@@ -601,8 +567,8 @@ export default function PublicTournamentView() {
                               </td>
                               {tournament.trackPoints && (
                                 <td className="py-3 px-3 text-right">
-                                  <Badge variant="outline" className="font-semibold">
-                                    {pointsAllocation?.points || 0} pts
+                                  <Badge variant="outline" className="font-semibold" data-testid={`points-${position}`}>
+                                    {points} pts
                                   </Badge>
                                 </td>
                               )}
@@ -610,7 +576,7 @@ export default function PublicTournamentView() {
                           );
                         }
 
-                        // Add participation points row if applicable
+                        // Every place after the last one listed gets the participation points, as finalize awards them
                         if (tournament.trackPoints && pointsSystem?.participationPoints && pointsSystem.participationPoints > 0) {
                           const startPosition = maxPosition + 1;
 
@@ -631,8 +597,8 @@ export default function PublicTournamentView() {
                                 </td>
                                 {tournament.trackPoints && (
                                   <td className="py-3 px-3 text-right">
-                                    <Badge variant="secondary" className="font-semibold">
-                                      {pointsSystem.participationPoints} pts
+                                    <Badge variant="secondary" className="font-semibold" data-testid="points-others">
+                                      {placePoints(startPosition)} pts
                                     </Badge>
                                   </td>
                                 )}
@@ -646,6 +612,13 @@ export default function PublicTournamentView() {
                     </tbody>
                   </table>
                 </div>
+                {isPrizePoolLocked && display.undistributedCents > 0 && (
+                  <p className="mt-4 text-sm text-muted-foreground" data-testid="undistributed">
+                    {display.source === "live"
+                      ? `Only ${registrations.length} ${registrations.length === 1 ? "player" : "players"}: ${formatMoney(display.undistributedCents)} of the pool is not paid out unless more players enter.`
+                      : `${formatMoney(display.undistributedCents)} of the pool was not paid out: there were fewer players than paid places.`}
+                  </p>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -703,7 +676,7 @@ export default function PublicTournamentView() {
                                   </td>
                                   <td className="py-4 px-4 text-right">
                                     {winner.highHandAmount && (
-                                      <span className="text-xl font-bold text-accent">${parseFloat(winner.highHandAmount).toLocaleString()}</span>
+                                      <span className="text-xl font-bold text-accent">{formatMoney(toCents(winner.highHandAmount))}</span>
                                     )}
                                   </td>
                                 </tr>
@@ -784,8 +757,8 @@ export default function PublicTournamentView() {
                           </td>
                         )}
                         <td className="py-4 px-4 text-right">
-                          {reg.prizeAmount && parseFloat(reg.prizeAmount) > 0 ? (
-                            <span className="font-bold text-accent">${parseFloat(reg.prizeAmount).toLocaleString()}</span>
+                          {toCents(reg.prizeAmount) > 0 ? (
+                            <span className="font-bold text-accent">{formatMoney(toCents(reg.prizeAmount))}</span>
                           ) : (
                             <span className="text-muted-foreground">-</span>
                           )}

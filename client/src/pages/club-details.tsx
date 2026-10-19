@@ -5,7 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ArrowLeft, Users, Trophy, Calendar, Settings as SettingsIcon, ChartLine, ExternalLink, Copy, Check } from "lucide-react";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { useAuth } from "@/contexts/auth-context";
+import { RichTextContent } from "@/components/rich-text-content";
+import type { Viewer } from "@shared/api/common";
 
 interface Club {
   id: string;
@@ -13,6 +14,7 @@ interface Club {
   slug: string;
   description?: string;
   createdAt: string;
+  viewer?: Viewer;
 }
 
 interface Tournament {
@@ -36,7 +38,6 @@ interface Season {
 export default function ClubDetails() {
   const { id } = useParams();
   const { toast } = useToast();
-  const { isAdmin } = useAuth();
   const [copied, setCopied] = useState(false);
 
   const { data: club, isLoading: clubLoading } = useQuery<Club>({
@@ -130,7 +131,7 @@ export default function ClubDetails() {
                 </p>
               </div>
             </div>
-            {isAdmin && (
+            {club.viewer?.canManage && (
               <div className="flex gap-3">
                 <Link href={`/tournaments?clubId=${club.id}`}>
                   <Button variant="outline">
@@ -199,10 +200,10 @@ export default function ClubDetails() {
         {club.description && (
           <Card className="mb-6">
             <CardContent className="pt-6">
-              <div
+              <RichTextContent
                 className="text-muted-foreground prose prose-sm max-w-none"
                 data-testid="club-description"
-                dangerouslySetInnerHTML={{ __html: club.description }}
+                html={club.description}
               />
             </CardContent>
           </Card>
@@ -276,7 +277,7 @@ export default function ClubDetails() {
               ) : (
                 <div className="space-y-3">
                   {clubTournaments.slice(0, 5).map((tournament) => (
-                    <Link key={tournament.id} href={`/tournaments/${tournament.id}`}>
+                    <Link key={tournament.id} href={`/admin/tournaments/${tournament.id}`}>
                       <div className="p-3 rounded-lg border border-border hover:border-accent/40 transition-colors cursor-pointer">
                         <p className="font-semibold text-foreground">{tournament.name}</p>
                         <p className="text-sm text-muted-foreground">

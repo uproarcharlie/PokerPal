@@ -4,6 +4,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/contexts/auth-context";
+import { ImpersonationBanner } from "@/components/auth/impersonation-banner";
 import { ProtectedRoute } from "@/components/auth/protected-route";
 import { Sidebar } from "@/components/layout/sidebar";
 import Dashboard from "@/pages/dashboard";
@@ -29,6 +30,7 @@ import UserManagement from "@/pages/user-management";
 import RegisterPage from "@/pages/register";
 import LoginPage from "@/pages/login";
 import SettingsPage from "@/pages/settings";
+import StaffInvitePage from "@/pages/staff-invite";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -37,6 +39,8 @@ function Router() {
       {/* Auth routes without sidebar */}
       <Route path="/login" component={LoginPage} />
       <Route path="/register" component={RegisterPage} />
+      {/* Open to anyone: it asks the visitor to sign in before accepting (SEC-P2REV-03). */}
+      <Route path="/staff-invite" component={StaffInvitePage} />
 
       {/* Public routes without sidebar */}
       <Route path="/" component={LandingPage} />
@@ -123,6 +127,7 @@ function App() {
         <TooltipProvider>
           <Toaster />
           <Router />
+          <ImpersonationBanner />
         </TooltipProvider>
       </AuthProvider>
     </QueryClientProvider>

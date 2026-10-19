@@ -56,59 +56,33 @@ For public image access:
 
 ### Step 6: Configure Railway Environment Variables
 
-Add these to your Railway project:
+Add these to your Railway project. Production always uses R2 when they are set; set **all five or none**. With only some set, the server refuses to start and names what is missing, and the healthcheck keeps the previous deployment serving.
 
 ```env
-# Enable cloud storage in production
-USE_CLOUD_STORAGE=true
-
-# Cloudflare R2 credentials
 R2_ACCOUNT_ID=your_cloudflare_account_id_here
 R2_ACCESS_KEY_ID=your_r2_access_key_id_here
 R2_SECRET_ACCESS_KEY=your_r2_secret_access_key_here
 R2_BUCKET_NAME=pokerpal-images
 
-# Public URL (if using custom domain, otherwise leave out)
-R2_PUBLIC_URL=https://your-custom-domain.com
+# Where browsers load images from: the bucket's public r2.dev URL (Step 3) or a custom domain.
+R2_PUBLIC_URL=https://pub-xxxxxxxx.r2.dev
 ```
 
-**If you don't set a custom domain**, images will be accessible at:
-```
-https://[bucket-name].[account-id].r2.cloudflarestorage.com/[image-path]
-```
+`R2_PUBLIC_URL` is required. It must be the bucket's public address, never the `https://<account-id>.r2.cloudflarestorage.com` API host: that host only answers signed requests, so no browser can load an image from it, and the server refuses to start with it.
+
+Images are stored as WebP at several sizes under `<kind>/<random id>/<width>.webp` and cached for a year (each upload gets a new address, so nothing stale is ever served).
 
 ### Step 7: Deploy
 
-Push your code and Railway will automatically redeploy with cloud storage enabled!
+Push your code and Railway will redeploy with cloud storage. The deploy log should show `Image storage: Cloudflare R2 bucket "…", served from https://…`.
 
-## Alternative: AWS S3
+## Without R2: local disk
 
-You can also use AWS S3 or any S3-compatible storage. Just update the endpoint in `server/services/storage.ts`:
+In development and tests, images are saved under `UPLOAD_DIR` (default `./uploads`) and served at `/uploads`.
 
-```typescript
-endpoint: process.env.S3_ENDPOINT || `https://s3.${process.env.AWS_REGION}.amazonaws.com`
-```
+In production, images go to local disk only when `UPLOAD_DIR` names a directory explicitly, and it must be a persistent volume: a container's own disk is wiped by every redeploy. `docker-compose.yml` mounts `./uploads` at `/app/uploads` and sets `UPLOAD_DIR=/app/uploads`. With neither R2 nor `UPLOAD_DIR`, production answers image uploads with 503 instead of saving images that would vanish.
 
-And use these environment variables instead:
-- `AWS_REGION`
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
-- `S3_BUCKET_NAME`
-
-## Testing Locally
-
-To test cloud storage in development:
-
-```bash
-# In your .env file
-USE_CLOUD_STORAGE=true
-R2_ACCOUNT_ID=...
-R2_ACCESS_KEY_ID=...
-R2_SECRET_ACCESS_KEY=...
-R2_BUCKET_NAME=...
-```
-
-Otherwise, images will be saved to the local `uploads/` folder (development mode).
+To use R2 in development, set `USE_CLOUD_STORAGE=true` and all five `R2_*` variables in your `.env`.
 
 ## Troubleshooting
 

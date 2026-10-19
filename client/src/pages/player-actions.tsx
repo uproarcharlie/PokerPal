@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { knockoutTargetsFor, offersAddons, offersRebuys, requestersFor, type PlayerActionType } from "@shared/domain/player-actions";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { ShoppingCart, RefreshCw, Skull, CheckCircle2, ArrowLeft, User, Trophy } from "lucide-react";
@@ -51,13 +52,15 @@ interface TournamentRegistration {
   addons: number;
   isEliminated: boolean;
   eliminationTime?: string;
+  /** Who knocked them out, when recorded. */
+  eliminatedBy?: string | null;
   player: Player;
 }
 
 export default function PlayerActions() {
   const { tournamentId } = useParams();
   const { toast } = useToast();
-  const [actionType, setActionType] = useState<"rebuy" | "addon" | "knockout" | null>(null);
+  const [actionType, setActionType] = useState<PlayerActionType | null>(null);
   const [selectedPlayerId, setSelectedPlayerId] = useState<string>("");
   const [knockoutTargetId, setKnockoutTargetId] = useState<string>("");
   const [actionComplete, setActionComplete] = useState(false);
@@ -71,10 +74,16 @@ export default function PlayerActions() {
     enabled: !!tournament?.clubId,
   });
 
-  const { data: registrations = [] } = useQuery<TournamentRegistration[]>({
+  const { data: registrations = [], refetch: refetchRegistrations } = useQuery<TournamentRegistration[]>({
     queryKey: [`/api/tournaments/${tournamentId}/registrations`],
     enabled: !!tournamentId,
   });
+
+  // The table moves on while a phone sits in a pocket: check who is in again before each request.
+  const chooseAction = (type: "rebuy" | "addon" | "knockout") => {
+    setActionType(type);
+    void refetchRegistrations();
+  };
 
   const createActionMutation = useMutation({
     mutationFn: async () => {
@@ -112,7 +121,8 @@ export default function PlayerActions() {
     setActionComplete(false);
   };
 
-  const activePlayers = registrations.filter(r => !r.isEliminated);
+  const requesters = tournament ? requestersFor(actionType, registrations, tournament) : [];
+  const knockoutTargets = knockoutTargetsFor(registrations, selectedPlayerId);
   const selectedPlayerReg = registrations.find(r => r.playerId === selectedPlayerId);
 
   if (tournamentLoading) {
@@ -231,11 +241,11 @@ export default function PlayerActions() {
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            {tournament.rebuyAmount && (
+            {offersRebuys(tournament) && (
               <Button
                 variant="outline"
                 className="w-full h-auto py-6 flex flex-col items-center gap-2"
-                onClick={() => setActionType("rebuy")}
+                onClick={() => chooseAction("rebuy")}
               >
                 <RefreshCw className="w-8 h-8" />
                 <div>
@@ -245,11 +255,11 @@ export default function PlayerActions() {
               </Button>
             )}
 
-            {tournament.addonAmount && (
+            {offersAddons(tournament) && (
               <Button
                 variant="outline"
                 className="w-full h-auto py-6 flex flex-col items-center gap-2"
-                onClick={() => setActionType("addon")}
+                onClick={() => chooseAction("addon")}
               >
                 <ShoppingCart className="w-8 h-8" />
                 <div>
@@ -262,7 +272,7 @@ export default function PlayerActions() {
             <Button
               variant="outline"
               className="w-full h-auto py-6 flex flex-col items-center gap-2"
-              onClick={() => setActionType("knockout")}
+              onClick={() => chooseAction("knockout")}
             >
               <Skull className="w-8 h-8" />
               <div>
@@ -333,7 +343,7 @@ export default function PlayerActions() {
                 <SelectValue placeholder="Choose a player..." />
               </SelectTrigger>
               <SelectContent>
-                {activePlayers.map((reg) => (
+                {requesters.map((reg) => (
                   <SelectItem key={reg.id} value={reg.playerId} className="py-4">
                     <div className="flex items-center gap-2">
                       <Avatar className="w-6 h-6">
@@ -344,7 +354,7 @@ export default function PlayerActions() {
                       </Avatar>
                       <span>
                         {reg.player.name}
-                        {actionType === "rebuy" && ` (${reg.rebuys || 0} rebuys)`}
+                        {actionType === "rebuy" && (reg.isEliminated ? " (out: buy back in)" : ` (${reg.rebuys || 0} rebuys)`)}
                         {actionType === "addon" && ` (${reg.addons || 0} addons)`}
                       </span>
                     </div>
@@ -362,8 +372,7 @@ export default function PlayerActions() {
                   <SelectValue placeholder="Choose a player..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {activePlayers
-                    .filter(r => r.playerId !== selectedPlayerId)
+                  {knockoutTargets
                     .map((reg) => (
                       <SelectItem key={reg.id} value={reg.playerId} className="py-4">
                         <div className="flex items-center gap-2">

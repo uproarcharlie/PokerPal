@@ -5,6 +5,8 @@ import { performance } from "node:perf_hooks";
 import { Pool, type PoolClient } from "pg";
 import type { AppEnv } from "../config/env";
 import { createIndexStatements, findGuardViolations, splitSqlStatements, type SqlStatement } from "./migration-guard";
+import { assertSchemaCurrent, SchemaBehindError } from "./schema-check";
+import { runBootSeeds } from "./seeds";
 
 /**
  * Boot-time migration runner. `migrations/NNNN_name.sql` files are applied, in
@@ -663,18 +665,40 @@ export async function retryWhileUnreachable<T>(
  * `MIGRATE_ON_BOOT=false`). While the database cannot be reached it retries
  * for up to BOOT_DATABASE_WAIT_MS; any other failure (a guard refusal, a SQL
  * error, the lock never freeing) rejects at once, so the process exits non-zero
- * before it listens.
+ * before it listens. Either way the database must then have every table and
+ * column this build declares (./schema-check), or the boot is refused the same
+ * way: with MIGRATE_ON_BOOT=false left set, a deploy whose code needs a new
+ * migration never takes traffic behind a green healthcheck (P2REV3-PRODSAFE-01).
+ * Then it runs the boot data seeds (./seeds), also when the migrations are
+ * skipped: they change only data, skip any seed whose tables do not exist yet,
+ * log their own failures and never stop the boot (P2REV3-PROD-03).
  */
 export async function runBootMigrations(env: AppEnv): Promise<void> {
-  if (!env.MIGRATE_ON_BOOT) {
-    bootLogger.warn("MIGRATE_ON_BOOT=false: not applying migrations; the schema must already be current");
-    bootStatus = { skipped: true };
-    return;
-  }
-
   // Its own pool, not the app's: the boot needs a connect timeout, which the app pool deliberately does not have.
   const pool = new Pool({ connectionString: env.DATABASE_URL, max: 1, connectionTimeoutMillis: BOOT_CONNECT_TIMEOUT_MS });
   pool.on("error", (error) => bootLogger.warn(`Idle migration connection lost: ${describeError(error)}`));
+
+  if (!env.MIGRATE_ON_BOOT) {
+    bootLogger.warn("MIGRATE_ON_BOOT=false: not applying migrations; checking the database already has the schema this build needs");
+    try {
+      await retryWhileUnreachable(() => assertSchemaCurrent(pool), { waitMs: BOOT_DATABASE_WAIT_MS, logger: bootLogger });
+      bootStatus = { skipped: true };
+      await runBootSeeds(pool);
+    } catch (error) {
+      if (error instanceof SchemaBehindError) {
+        bootLogger.error(
+          `SCHEMA BEHIND THIS BUILD: refusing to start with MIGRATE_ON_BOOT=false. ${error.message}. ` +
+            "During a deploy the previous deployment keeps serving. Remove MIGRATE_ON_BOOT=false so the migrations " +
+            'run, or fix the failing one (see DEPLOYMENT.md, "When a boot migration fails").',
+        );
+      }
+      throw error;
+    } finally {
+      await pool.end().catch((error: unknown) => bootLogger.warn(`Could not close the migration pool: ${describeError(error)}`));
+    }
+    return;
+  }
+
   try {
     const dir = resolveMigrationsDir();
     bootLogger.info(`Target database ${describeDatabaseTarget(env.DATABASE_URL).label}`);
@@ -682,7 +706,10 @@ export async function runBootMigrations(env: AppEnv): Promise<void> {
       waitMs: BOOT_DATABASE_WAIT_MS,
       logger: bootLogger,
     });
+    // The migrations must have built what this build queries; a gap is a release mistake, caught here, not by 500s.
+    await assertSchemaCurrent(pool);
     bootStatus = { files: report.files.length, lastFile: report.files.at(-1)?.name ?? null };
+    await runBootSeeds(pool);
   } catch (error) {
     bootLogger.error(
       "MIGRATIONS FAILED: refusing to start. During a deploy the previous deployment keeps serving; " +

@@ -1,6 +1,5 @@
 import { useParams } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -9,6 +8,8 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { CheckCircle2, Clock, Trophy, QrCode, Check } from "lucide-react";
 import type { Tournament } from "@shared/schema";
+import type { Viewer } from "@shared/api/common";
+import { AccessDenied } from "@/components/auth/access-denied";
 
 interface PendingRegistration {
   id: string;
@@ -17,10 +18,12 @@ interface PendingRegistration {
   registrationTime: string;
   enteringHighHands: boolean;
   paymentConfirmed: boolean;
+  /** ClubPlayer: the phone only for players whose home club this is (`canEdit`). */
   player: {
     id: string;
     name: string;
-    phone?: string;
+    phone?: string | null;
+    canEdit: boolean;
   } | null;
   amountOwed: number;
 }
@@ -32,10 +35,12 @@ interface ConfirmedRegistration {
   registrationTime: string;
   enteringHighHands: boolean;
   paymentConfirmed: boolean;
+  /** ClubPlayer: the phone only for players whose home club this is (`canEdit`). */
   player: {
     id: string;
     name: string;
-    phone?: string;
+    phone?: string | null;
+    canEdit: boolean;
   } | null;
   amountPaid: number;
 }
@@ -44,18 +49,22 @@ export function AdminRegistrationsPage() {
   const { tournamentId } = useParams<{ tournamentId: string }>();
   const { toast } = useToast();
 
-  const { data: tournament, isLoading: tournamentLoading } = useQuery<Tournament>({
+  const { data: tournament, isLoading: tournamentLoading } = useQuery<Tournament & { viewer?: Viewer }>({
     queryKey: ["/api/tournaments", tournamentId],
   });
+  const canManage = tournament?.viewer?.canManage === true;
 
-  const { data: pendingRegistrations = [], refetch } = useQuery<PendingRegistration[]>({
+  // Staff-only lists (403 for anyone else), polled while the page is open.
+  const { data: pendingRegistrations = [] } = useQuery<PendingRegistration[]>({
     queryKey: [`/api/tournaments/${tournamentId}/pending-registrations`],
     refetchInterval: 3000,
+    enabled: canManage,
   });
 
-  const { data: confirmedRegistrations = [], refetch: refetchConfirmed } = useQuery<ConfirmedRegistration[]>({
+  const { data: confirmedRegistrations = [] } = useQuery<ConfirmedRegistration[]>({
     queryKey: [`/api/tournaments/${tournamentId}/confirmed-registrations`],
     refetchInterval: 3000,
+    enabled: canManage,
   });
 
   const confirmPaymentMutation = useMutation({
@@ -71,23 +80,14 @@ export function AdminRegistrationsPage() {
         description: "Registration payment has been confirmed.",
       });
     },
-    onError: () => {
+    onError: (error: Error) => {
       toast({
         title: "Error",
-        description: "Failed to confirm payment. Please try again.",
+        description: error.message || "Failed to confirm payment. Please try again.",
         variant: "destructive",
       });
     },
   });
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      refetch();
-      refetchConfirmed();
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, [refetch, refetchConfirmed]);
 
   if (tournamentLoading) {
     return (
@@ -110,6 +110,16 @@ export function AdminRegistrationsPage() {
           </CardContent>
         </Card>
       </div>
+    );
+  }
+
+  if (!canManage) {
+    return (
+      <AccessDenied
+        message="Only this club's owner, its managers and admins can manage registrations and payments."
+        backHref="/tournaments"
+        backLabel="Back to Tournaments"
+      />
     );
   }
 
@@ -190,7 +200,7 @@ export function AdminRegistrationsPage() {
                             {registration.player?.name || "Unknown Player"}
                           </TableCell>
                           <TableCell className="text-muted-foreground">
-                            {registration.player?.phone || "N/A"}
+                            {registration.player?.canEdit === false ? "Other club" : registration.player?.phone || "N/A"}
                           </TableCell>
                           <TableCell>
                             {registration.enteringHighHands ? (
@@ -237,7 +247,7 @@ export function AdminRegistrationsPage() {
                                 {registration.player?.name || "Unknown Player"}
                               </p>
                               <p className="text-xs text-muted-foreground">
-                                {registration.player?.phone || "N/A"}
+                                {registration.player?.canEdit === false ? "Other club" : registration.player?.phone || "N/A"}
                               </p>
                             </div>
                             <span className="text-xs text-muted-foreground">
@@ -332,7 +342,7 @@ export function AdminRegistrationsPage() {
                         {registration.player?.name || "Unknown Player"}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
-                        {registration.player?.phone || "N/A"}
+                        {registration.player?.canEdit === false ? "Other club" : registration.player?.phone || "N/A"}
                       </TableCell>
                       <TableCell>
                         {registration.enteringHighHands ? (

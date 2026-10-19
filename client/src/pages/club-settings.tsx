@@ -23,7 +23,11 @@ import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-di
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/auth-context";
-import { ArrowLeft, Check, Trash2, ShieldAlert } from "lucide-react";
+import { AccessDenied } from "@/components/auth/access-denied";
+import { ClubStaffCard, clubStaffQueryKey } from "@/components/club/club-staff-card";
+import { ArrowLeft, Check, Trash2 } from "lucide-react";
+import type { Viewer } from "@shared/api/common";
+import type { ClubStaffDto } from "@shared/api/clubs";
 
 const clubSchema = z.object({
   name: z.string().min(1, "Club name is required"),
@@ -56,22 +60,30 @@ interface Club {
   facebookUrl?: string;
   instagramUrl?: string;
   websiteUrl?: string;
-  ownerId?: string | null;
+  viewer?: Viewer;
 }
 
 export default function ClubSettings() {
   const { id } = useParams();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
-  const { user, isAdmin } = useAuth();
+  const { isAdmin } = useAuth();
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
   const { data: club, isLoading } = useQuery<Club>({
     queryKey: [`/api/clubs/${id}`],
   });
 
-  // Check if user is owner or admin
-  const canEdit = isAdmin || (club?.ownerId === user?.id);
+  // Computed by the server: admins, the club's owner and its managers.
+  const canEdit = club?.viewer?.canManage === true;
+
+  // The staff list is answered only for the owner and admins, the same people who may delete the club
+  // or change its staff; managers get a 403 and see neither.
+  const { data: staff } = useQuery<ClubStaffDto>({
+    queryKey: clubStaffQueryKey(id ?? ""),
+    enabled: !!id && canEdit,
+  });
+  const canChangeStaff = staff !== undefined;
 
   const form = useForm<ClubFormData>({
     resolver: zodResolver(clubSchema),
@@ -190,25 +202,13 @@ export default function ClubSettings() {
     );
   }
 
-  // Access denied for non-owners
   if (!canEdit) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Card className="max-w-md">
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <ShieldAlert className="mx-auto h-12 w-12 text-red-500 mb-4" />
-              <h2 className="text-2xl font-bold mb-2">Access Denied</h2>
-              <p className="text-muted-foreground mb-6">
-                You don't have permission to edit this club's settings. Only the club owner can modify these settings.
-              </p>
-              <Link href="/clubs">
-                <Button>Back to Clubs</Button>
-              </Link>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <AccessDenied
+        message="You don't have permission to edit this club's settings. Only the club's owner, its managers and admins can."
+        backHref="/clubs"
+        backLabel="Back to Clubs"
+      />
     );
   }
 
@@ -228,22 +228,25 @@ export default function ClubSettings() {
                 <p className="text-sm text-muted-foreground mt-1">Manage club settings and preferences</p>
               </div>
             </div>
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => setShowDeleteDialog(true)}
-            >
-              <Trash2 className="w-4 h-4 mr-2" />
-              Delete Club
-            </Button>
+            {canChangeStaff && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => setShowDeleteDialog(true)}
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete Club
+              </Button>
+            )}
           </div>
         </div>
       </header>
 
       <div className="p-8 max-w-4xl mx-auto">
         <Tabs defaultValue="profile" className="w-full">
-          <TabsList className="grid w-full grid-cols-1 mb-6">
+          <TabsList className={`grid w-full mb-6 ${canChangeStaff ? "grid-cols-2" : "grid-cols-1"}`}>
             <TabsTrigger value="profile">Edit Profile</TabsTrigger>
+            {canChangeStaff && <TabsTrigger value="staff">Managers</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="profile">
@@ -261,7 +264,7 @@ export default function ClubSettings() {
                             <ImageUpload
                               onImageUpload={field.onChange}
                               currentImage={field.value}
-                              entityType="clubs"
+                              kind="club_logo"
                               placeholder="Upload club logo or image"
                             />
                           </FormControl>
@@ -443,6 +446,12 @@ export default function ClubSettings() {
               </CardContent>
             </Card>
           </TabsContent>
+
+          {staff && (
+            <TabsContent value="staff">
+              <ClubStaffCard clubId={club.id} staff={staff} canInviteOwner={isAdmin} />
+            </TabsContent>
+          )}
         </Tabs>
       </div>
 

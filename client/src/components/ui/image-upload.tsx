@@ -1,20 +1,40 @@
 import { useState, useRef, useEffect } from "react";
 import { Upload, X, ImageIcon, Camera, SwitchCamera } from "lucide-react";
 import { Button } from "./button";
+import { throwIfResNotOk } from "@/lib/queryClient";
+import type { ImageUploadResponse } from "@shared/api/images";
+import {
+  HEIC_IMAGE_TYPES,
+  HEIC_MESSAGE,
+  MAX_IMAGE_UPLOAD_BYTES,
+  UNSUPPORTED_TYPE_MESSAGE,
+  type ImageKind,
+} from "@shared/domain/images";
 
 interface ImageUploadProps {
   onImageUpload: (url: string) => void;
   currentImage?: string | null;
-  entityType: "clubs" | "players" | "tournaments";
+  /** What the image is for: decides how the server crops and sizes it. Only player_avatar may be uploaded signed out. */
+  kind: ImageKind;
   placeholder?: string;
   onUploadingChange?: (uploading: boolean) => void;
-  /** Upload endpoint. Defaults to the authenticated /api/upload; the public
-   *  registration flow passes /api/upload/public. */
-  uploadUrl?: string;
 }
 
-export function ImageUpload({ onImageUpload, currentImage, entityType, placeholder, onUploadingChange, uploadUrl = "/api/upload" }: ImageUploadProps) {
+const HEIC_TYPES: ReadonlySet<string> = new Set(HEIC_IMAGE_TYPES);
+
+/** POST /api/images/:kind; the stored URL, or an ApiRequestError carrying the server's sentence (413, 415, 429...). */
+async function uploadImage(kind: ImageKind, file: File): Promise<string> {
+  const formData = new FormData();
+  formData.append("image", file);
+  const response = await fetch(`/api/images/${kind}`, { method: "POST", body: formData, credentials: "include" });
+  await throwIfResNotOk(response);
+  const body = (await response.json()) as ImageUploadResponse;
+  return body.url;
+}
+
+export function ImageUpload({ onImageUpload, currentImage, kind, placeholder, onUploadingChange }: ImageUploadProps) {
   const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(currentImage || null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -24,6 +44,8 @@ export function ImageUpload({ onImageUpload, currentImage, entityType, placehold
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
   const [streamReady, setStreamReady] = useState(false);
+  // The first frame has arrived: until then there is nothing to capture (videoWidth is 0).
+  const [videoReady, setVideoReady] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
@@ -33,6 +55,7 @@ export function ImageUpload({ onImageUpload, currentImage, entityType, placehold
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     setStreamReady(false);
+    setVideoReady(false);
   };
 
   const startCamera = async (mode: "user" | "environment") => {
@@ -118,16 +141,19 @@ export function ImageUpload({ onImageUpload, currentImage, entityType, placehold
 
   const handleFile = async (file: File | undefined) => {
     if (!file) return;
+    setError(null);
 
-    // Validate file type
-    if (!file.type.startsWith('image/')) {
-      alert('Please select an image file');
+    // The server decides by the file's bytes; these only save a pointless upload.
+    if (HEIC_TYPES.has(file.type.toLowerCase())) {
+      setError(HEIC_MESSAGE);
       return;
     }
-
-    // Validate file size (5MB max)
-    if (file.size > 5 * 1024 * 1024) {
-      alert('File size must be less than 5MB');
+    if (!file.type.startsWith('image/')) {
+      setError(UNSUPPORTED_TYPE_MESSAGE);
+      return;
+    }
+    if (file.size > MAX_IMAGE_UPLOAD_BYTES) {
+      setError('File size must be less than 5MB');
       return;
     }
 
@@ -142,24 +168,9 @@ export function ImageUpload({ onImageUpload, currentImage, entityType, placehold
     setUploading(true);
     onUploadingChange?.(true);
     try {
-      const formData = new FormData();
-      formData.append('image', file);
-      formData.append('entityType', entityType);
-
-      const response = await fetch(uploadUrl, {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error('Upload failed');
-      }
-
-      const data = await response.json();
-      onImageUpload(data.imageUrl);
-    } catch (error) {
-      console.error('Upload error:', error);
-      alert('Failed to upload image');
+      onImageUpload(await uploadImage(kind, file));
+    } catch (uploadError) {
+      setError(uploadError instanceof Error && uploadError.message ? uploadError.message : 'Failed to upload image');
       setPreview(currentImage || null);
     } finally {
       setUploading(false);
@@ -174,6 +185,7 @@ export function ImageUpload({ onImageUpload, currentImage, entityType, placehold
   };
 
   const handleRemove = () => {
+    setError(null);
     setPreview(null);
     onImageUpload('');
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -190,6 +202,7 @@ export function ImageUpload({ onImageUpload, currentImage, entityType, placehold
         onChange={handleFileSelect}
         className="hidden"
         disabled={uploading}
+        aria-label="Choose an image"
       />
       {/* Native capture fallback for browsers without getUserMedia */}
       <input
@@ -281,6 +294,12 @@ export function ImageUpload({ onImageUpload, currentImage, entityType, placehold
         </div>
       )}
 
+      {error && (
+        <p role="alert" className="text-sm text-destructive" data-testid="image-upload-error">
+          {error}
+        </p>
+      )}
+
       {/* Live camera overlay */}
       {cameraOpen && (
         <div
@@ -316,6 +335,7 @@ export function ImageUpload({ onImageUpload, currentImage, entityType, placehold
                 autoPlay
                 playsInline
                 muted
+                onLoadedData={() => setVideoReady(true)}
                 className="w-full max-h-[70vh] rounded-lg bg-black object-contain"
               />
               <div className="flex items-center gap-3">
@@ -323,7 +343,7 @@ export function ImageUpload({ onImageUpload, currentImage, entityType, placehold
                   <X className="w-4 h-4 mr-2" />
                   Cancel
                 </Button>
-                <Button type="button" onClick={capturePhoto} disabled={!streamReady}>
+                <Button type="button" onClick={capturePhoto} disabled={!videoReady}>
                   <Camera className="w-4 h-4 mr-2" />
                   Capture
                 </Button>

@@ -29,6 +29,8 @@ describe("deploy configuration", () => {
     expect(job).toMatch(/POSTGRES_DB: pokerpal_docker/);
     expect(job).toContain(`curl -fsS http://localhost:3000${deploy.healthcheckPath} `);
     expect(job).toContain("http://localhost:3000/api/upload/public");
+    // Production without R2 refuses uploads unless UPLOAD_DIR names where they go.
+    expect(job).toMatch(/--env UPLOAD_DIR=\/app\/uploads/);
     expect(job).toMatch(/docker exec pokerpal sh -c 'test "\$\(id -un\)" = node/);
   });
 
@@ -36,6 +38,7 @@ describe("deploy configuration", () => {
     const compose = read("docker-compose.yml");
 
     expect(compose).toMatch(/^\s+- \.\/uploads:\/app\/uploads$/m);
+    expect(compose).toMatch(/^\s+- UPLOAD_DIR=\/app\/uploads$/m);
     expect(compose).toMatch(/^ {4}user: root$/m);
   });
 });

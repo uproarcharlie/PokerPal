@@ -24,6 +24,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Check } from "lucide-react";
+import type { Viewer } from "@shared/api/common";
 
 const seasonSchema = z.object({
   name: z.string().min(1, "Season name is required"),
@@ -38,6 +39,7 @@ type SeasonFormData = z.infer<typeof seasonSchema>;
 interface Club {
   id: string;
   name: string;
+  viewer?: Viewer;
 }
 
 interface CreateSeasonModalProps {
@@ -48,9 +50,11 @@ interface CreateSeasonModalProps {
 export function CreateSeasonModal({ open, onOpenChange }: CreateSeasonModalProps) {
   const { toast } = useToast();
 
-  const { data: clubs = [] } = useQuery<Club[]>({
+  const { data: allClubs = [] } = useQuery<Club[]>({
     queryKey: ["/api/clubs"],
   });
+  // Seasons can only be added to clubs the user runs (every club for an admin).
+  const clubs = allClubs.filter((club) => club.viewer?.canManage);
 
   const form = useForm<SeasonFormData>({
     resolver: zodResolver(seasonSchema),

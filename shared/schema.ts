@@ -1,7 +1,9 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, decimal, boolean, timestamp, uuid, index } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, decimal, boolean, timestamp, uuid, index, jsonb, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+import type { PrizePoolSnapshot } from "./api/finalize"; // type-only: no runtime import cycle
+import { PAYOUT_STRUCTURE_KEYS } from "./domain/payouts";
 
 // Clubs table
 export const clubs = pgTable("clubs", {
@@ -17,6 +19,7 @@ export const clubs = pgTable("clubs", {
   facebookUrl: text("facebook_url"),
   instagramUrl: text("instagram_url"),
   websiteUrl: text("website_url"),
+  rakeLabel: text("rake_label"), // The club's name for its rake, e.g. "AP"; null or blank shows "Rake". Display only.
   ownerId: varchar("owner_id").references(() => users.id, { onDelete: "set null" }), // Club owner
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => ({
@@ -65,6 +68,19 @@ export const players = pgTable("players", {
   emailIdx: index("idx_players_email").on(table.email),
 }));
 
+/**
+ * Each player's home club: the club that added them, else the club of their first surviving
+ * registration, recorded once and never changed (migrations/0003). It decides who sees the player's contact details and may edit them. club_id has
+ * no foreign key: a deleted club leaves the row, and the player is then admins' only.
+ */
+export const playerHomeClubs = pgTable("player_home_clubs", {
+  playerId: varchar("player_id").primaryKey().references(() => players.id, { onDelete: "cascade" }),
+  clubId: varchar("club_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+}, (table) => ({
+  clubIdx: index("idx_player_home_clubs_club_id").on(table.clubId),
+}));
+
 // Tournaments table
 export const tournaments = pgTable("tournaments", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -101,6 +117,14 @@ export const tournaments = pgTable("tournaments", {
   prizePoolLocked: boolean("prize_pool_locked").default(false),
   prizePoolLockedAt: timestamp("prize_pool_locked_at"),
   manualPrizePool: decimal("manual_prize_pool", { precision: 10, scale: 2 }),
+  // Manual AP total for the main pool (replaces buy-in, re-buy and add-on rake together); null => calculated.
+  rakeOverride: decimal("rake_override", { precision: 10, scale: 2 }),
+  prizePoolAdjustmentReason: text("prize_pool_adjustment_reason"),
+  prizePoolAdjustedAt: timestamp("prize_pool_adjusted_at", { withTimezone: true, mode: "date" }),
+  prizePoolAdjustedBy: varchar("prize_pool_adjusted_by"), // users.id, audit text (no FK)
+  prizePoolSnapshot: jsonb("prize_pool_snapshot").$type<PrizePoolSnapshot>(), // written only by finalize
+  finalizedAt: timestamp("finalized_at", { withTimezone: true, mode: "date" }),
+  finalizedBy: varchar("finalized_by"), // users.id, audit text (no FK)
   useClubAddress: boolean("use_club_address").default(true),
   address: text("address"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -185,8 +209,59 @@ export const activityLog = pgTable("activity_log", {
   description: text("description").notNull(),
   timestamp: timestamp("timestamp", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => ({
-  // Matches getActivityLog: WHERE tournament_id = ? ORDER BY timestamp DESC, id DESC
+  // Matches listActivity (server/repositories/activity.ts): WHERE tournament_id = ? ORDER BY timestamp DESC, id DESC
   tournamentTimeIdx: index("idx_activity_log_tournament_id_timestamp").on(table.tournamentId, table.timestamp),
+}));
+
+// Users who may manage a club besides its owner (clubs.ownerId)
+export const clubManagers = pgTable("club_managers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  clubId: varchar("club_id").references(() => clubs.id, { onDelete: "cascade" }).notNull(),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  role: text("role").notNull().default("manager"), // manager
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  createdBy: varchar("created_by"), // users.id, audit text (no FK)
+}, (table) => ({
+  clubUserUq: unique("uq_club_managers_club_user").on(table.clubId, table.userId),
+  userIdx: index("idx_club_managers_user_id").on(table.userId),
+}));
+
+/**
+ * Invitations to a club's staff (migrations/0004, SEC-P2REV-03): a role is granted only when the
+ * person invited opens the link's secret and accepts, signed in to the account that uses `email`.
+ * Only the secret's sha256 is stored. Open while not accepted, revoked or expired.
+ */
+export const clubStaffInvites = pgTable("club_staff_invites", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  clubId: varchar("club_id").references(() => clubs.id, { onDelete: "cascade" }).notNull(),
+  role: text("role").notNull(), // manager | owner
+  email: text("email").notNull(), // trimmed and lower-cased
+  tokenHash: text("token_hash").notNull(), // sha256 of the link's secret, hex
+  createdBy: varchar("created_by"), // users.id, audit text (no FK)
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" }).notNull(),
+  acceptedBy: varchar("accepted_by"), // users.id (no FK)
+  acceptedAt: timestamp("accepted_at", { withTimezone: true, mode: "date" }),
+  revokedAt: timestamp("revoked_at", { withTimezone: true, mode: "date" }),
+}, (table) => ({
+  tokenHashUq: unique("uq_club_staff_invites_token_hash").on(table.tokenHash),
+  clubIdx: index("idx_club_staff_invites_club_id").on(table.clubId),
+}));
+
+// Staff and admin actions, for accountability. Never served publicly; no FKs, so rows outlive their subjects.
+export const auditLog = pgTable("audit_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  actorUserId: varchar("actor_user_id"),
+  action: text("action").notNull(), // e.g. impersonation.start, user.update, prize_pool.adjust, tournament.finalize
+  targetType: text("target_type"),
+  targetId: varchar("target_id"),
+  data: jsonb("data").$type<Record<string, unknown>>(),
+  ip: text("ip"),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+}, (table) => ({
+  createdAtIdx: index("idx_audit_log_created_at").on(table.createdAt),
+  actorIdx: index("idx_audit_log_actor_user_id").on(table.actorUserId),
+  targetIdx: index("idx_audit_log_target").on(table.targetType, table.targetId),
 }));
 
 // Insert schemas
@@ -233,7 +308,7 @@ export const insertTournamentSchema = createInsertSchema(tournaments, {
   rebuyRakeType: z.enum(["none", "percentage", "fixed"]).optional(),
   addonRakeType: z.enum(["none", "percentage", "fixed"]).optional(),
   highHandRakeType: z.enum(["none", "percentage", "fixed"]).optional(),
-  payoutStructure: z.enum(["standard", "top3", "top5", "top8", "top9", "custom"]).optional(),
+  payoutStructure: z.enum(PAYOUT_STRUCTURE_KEYS).optional(),
   status: z.string().optional(),
   enableHighHand: z.boolean().optional(),
   enableLateRegistration: z.boolean().optional(),
@@ -241,6 +316,14 @@ export const insertTournamentSchema = createInsertSchema(tournaments, {
 }).omit({
   id: true,
   createdAt: true,
+  // Written only by the prize-pool adjustment and finalize services, never from a request body.
+  rakeOverride: true,
+  prizePoolAdjustmentReason: true,
+  prizePoolAdjustedAt: true,
+  prizePoolAdjustedBy: true,
+  prizePoolSnapshot: true,
+  finalizedAt: true,
+  finalizedBy: true,
 });
 
 export const insertTournamentRegistrationSchema = createInsertSchema(tournamentRegistrations, {
@@ -300,3 +383,11 @@ export type InsertPendingAction = z.infer<typeof insertPendingActionSchema>;
 
 export type ActivityLog = typeof activityLog.$inferSelect;
 export type InsertActivityLog = z.infer<typeof insertActivityLogSchema>;
+
+export type ClubManager = typeof clubManagers.$inferSelect;
+export type InsertClubManager = typeof clubManagers.$inferInsert;
+
+export type ClubStaffInvite = typeof clubStaffInvites.$inferSelect;
+
+export type AuditLogEntry = typeof auditLog.$inferSelect;
+export type InsertAuditLogEntry = typeof auditLog.$inferInsert;

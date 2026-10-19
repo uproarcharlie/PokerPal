@@ -56,24 +56,14 @@ export function EliminatePlayerModal({
 
   const eliminatePlayerMutation = useMutation({
     mutationFn: async () => {
+      // The server stamps the elimination time and credits the knockout to the eliminator.
       const response = await apiRequest("PUT", `/api/registrations/${registration.id}`, {
         isEliminated: true,
-        eliminationTime: new Date().toISOString(),
         eliminatedBy: (eliminatedBy && eliminatedBy !== "none") ? eliminatedBy : null,
       });
       return response.json();
     },
-    onSuccess: async () => {
-      // If a player was assigned the knockout, update their knockout count
-      if (eliminatedBy && eliminatedBy !== "none") {
-        const knockoutRegistration = allRegistrations.find(r => r.playerId === eliminatedBy);
-        if (knockoutRegistration) {
-          await apiRequest("PUT", `/api/registrations/${knockoutRegistration.id}`, {
-            knockouts: (knockoutRegistration as any).knockouts ? (knockoutRegistration as any).knockouts + 1 : 1,
-          });
-        }
-      }
-
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tournaments", tournamentId, "registrations"] });
       queryClient.invalidateQueries({ queryKey: ["/api/tournaments", tournamentId, "activity"] });
       toast({

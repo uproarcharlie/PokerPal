@@ -80,7 +80,8 @@ test("a visitor who registers is signed in, and still is on the next page load",
   const register = await page.request.post("/api/auth/register", { data: { email, password: "E2e-Sturdy-Pass1", name: "E2E Player" } });
 
   expect(register.status()).toBe(201);
-  expect(register.headers()["set-cookie"]).toMatch(/^pokerpal\.sid=.*; Secure/);
+  // Beside it, the known-device mark for this account (TN2-06).
+  expect(register.headers()["set-cookie"]).toMatch(/^pokerpal\.sid=.*; Secure/m);
   await page.goto("/");
   const me = await page.evaluate(async () => {
     const response = await fetch("/api/auth/me");
@@ -98,7 +99,7 @@ test("a photo uploaded at self-registration is stored in the server's own upload
 
   expect(response.status()).toBe(200);
   const { imageUrl } = (await response.json()) as { imageUrl: string };
-  expect(imageUrl).toMatch(/^\/uploads\/players\/image-\d+-\d+\.webp$/);
+  expect(imageUrl).toMatch(/^\/uploads\/player_avatar\/[0-9a-f-]{36}\/\d+\.webp$/);
   const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
   expect(fs.existsSync(path.join(e2eWorkDir(e2eDatabaseName(guardEnv())), imageUrl))).toBe(true);
   expect(fs.existsSync(path.join(repoRoot, imageUrl))).toBe(false);

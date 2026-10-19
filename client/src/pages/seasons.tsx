@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { CreateSeasonModal } from "@/components/modals/create-season-modal";
 import { Plus, Calendar, ArrowLeft, Eye, Settings as SettingsIcon, Trophy, Users } from "lucide-react";
 import { Link, useLocation } from "wouter";
+import type { Viewer } from "@shared/api/common";
 
 interface Season {
   id: string;
@@ -20,17 +21,12 @@ interface Season {
 interface Club {
   id: string;
   name: string;
+  viewer?: Viewer;
 }
 
 interface Tournament {
   id: string;
   seasonId?: string;
-}
-
-interface TournamentRegistration {
-  id: string;
-  playerId: string;
-  tournamentId: string;
 }
 
 export default function Seasons() {
@@ -47,10 +43,6 @@ export default function Seasons() {
 
   const { data: tournaments = [] } = useQuery<Tournament[]>({
     queryKey: ["/api/tournaments"],
-  });
-
-  const { data: registrations = [] } = useQuery<TournamentRegistration[]>({
-    queryKey: ["/api/registrations"],
   });
 
   if (isLoading) {
@@ -87,16 +79,9 @@ export default function Seasons() {
 
   const getSeasonStats = (seasonId: string) => {
     const seasonTournaments = tournaments.filter(t => t.seasonId === seasonId);
-    const tournamentIds = seasonTournaments.map(t => t.id);
-
-    const uniquePlayerIds = new Set<string>();
-    registrations
-      .filter(r => tournamentIds.includes(r.tournamentId))
-      .forEach(r => uniquePlayerIds.add(r.playerId));
 
     return {
       tournamentsCount: seasonTournaments.length,
-      playersCount: uniquePlayerIds.size
     };
   };
 
@@ -183,10 +168,6 @@ export default function Seasons() {
                               <span className="text-muted-foreground">Tournaments</span>
                               <span className="font-semibold text-foreground">{stats.tournamentsCount}</span>
                             </div>
-                            <div className="flex items-center justify-between text-sm">
-                              <span className="text-muted-foreground">Players</span>
-                              <span className="font-semibold text-foreground">{stats.playersCount}</span>
-                            </div>
                           </>
                         );
                       })()}
@@ -212,16 +193,18 @@ export default function Seasons() {
                           <Eye className="w-4 h-4 mr-1" />
                           View
                         </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="flex-1"
-                          onClick={() => setLocation(`/seasons/${season.id}/settings`)}
-                          data-testid={`settings-season-${season.id}`}
-                        >
-                          <SettingsIcon className="w-4 h-4 mr-1" />
-                          Settings
-                        </Button>
+                        {clubs.find(c => c.id === season.clubId)?.viewer?.canManage && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="flex-1"
+                            onClick={() => setLocation(`/seasons/${season.id}/settings`)}
+                            data-testid={`settings-season-${season.id}`}
+                          >
+                            <SettingsIcon className="w-4 h-4 mr-1" />
+                            Settings
+                          </Button>
+                        )}
                       </div>
                     </div>
                   </CardContent>

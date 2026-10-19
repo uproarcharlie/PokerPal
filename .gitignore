@@ -24,6 +24,13 @@ logs
 *.pid
 *.seed
 
+# Images uploaded in development (uploads/<kind>/<uuid>/<width>.webp). The legacy files directly under
+# uploads/clubs, players and misc are tracked.
+uploads/player_avatar/
+uploads/club_logo/
+uploads/club_banner/
+uploads/tournament_banner/
+
 # Testing
 coverage
 playwright-report

@@ -98,7 +98,8 @@ docs: update installation instructions
 
 - Place page components in `client/src/pages/`
 - Place reusable components in `client/src/components/`
-- Place API routes in `server/routes.ts`
+- Place API routes in `server/routes/<domain>.ts` (mounted by `server/routes/index.ts`)
+- Place data access in `server/repositories/<domain>.ts`
 - Define shared types in `shared/schema.ts`
 
 ### Styling
@@ -115,7 +116,7 @@ docs: update installation instructions
 1. Update `shared/schema.ts` with Drizzle ORM schema
 2. Add insert/select schemas and types
 3. Add a migration, `migrations/NNNN_name.sql`, that makes the same change (see below), and run `npm run db:migrate`
-4. Update storage interface in `server/storage.ts`
+4. Add the queries to `server/repositories/<domain>.ts`
 
 ### Modifying Existing Tables
 

@@ -24,6 +24,7 @@ import {
   type MigrationLogger,
 } from "../../server/db/migrate";
 import { findGuardViolations, splitSqlStatements } from "../../server/db/migration-guard";
+import { assertSchemaCurrent, missingSchema, SchemaBehindError } from "../../server/db/schema-check";
 import { createScratchDatabase, dropScratchDatabase, pushAppSchema, type ScratchDatabase } from "../helpers/scratch-db";
 import { MIGRATIONS_DIR } from "../setup/databases";
 import { withDatabase } from "../setup/db-guard";
@@ -296,16 +297,16 @@ describe("applyMigrations: unique indexes on tables that already exist", () => {
     const before = await indexes("players");
     const dir = migrationsDir({
       ...shippedFiles(),
-      "0002_redeclare.sql":
+      "9000_redeclare.sql":
         "CREATE TABLE IF NOT EXISTS players (id varchar PRIMARY KEY);\n" +
         "CREATE UNIQUE INDEX IF NOT EXISTS players_name_uq ON players (name);",
     });
 
-    await expect(migrate(dir)).rejects.toThrow(/\n {2}0002_redeclare\.sql:2: CREATE UNIQUE INDEX players_name_uq on "players", which already exists\n/);
+    await expect(migrate(dir)).rejects.toThrow(/\n {2}9000_redeclare\.sql:2: CREATE UNIQUE INDEX players_name_uq on "players", which already exists\n/);
     await expect(applyMigrations({ pool: db().pool, dir, logger: recordingLogger(), dryRun: true })).rejects.toThrow(/players_name_uq/);
 
     expect(await indexes("players")).toEqual(before);
-    expect(await ledger()).not.toContain("0002_redeclare");
+    expect(await ledger()).not.toContain("9000_redeclare");
     // Writes today's code makes still succeed.
     await db().pool.query("INSERT INTO players (name) VALUES ('Alice')");
   });
@@ -587,6 +588,56 @@ describe("a boot that cannot reach the database", () => {
     } finally {
       errors.mockRestore();
     }
+  });
+
+  it("refuses to start with MIGRATE_ON_BOOT=false on a database without the schema this build queries, naming what is missing (P2REV3-PRODSAFE-01)", async () => {
+    // A database left at the Phase 1 state: the baseline and the FK indexes only.
+    const files = shippedFiles();
+    const phaseOne = Object.fromEntries(Object.entries(files).filter(([name]) => name < "0002"));
+    await migrate(migrationsDir(phaseOne));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const logs = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const env = loadEnv({ ...process.env, DATABASE_URL: db().url, MIGRATE_ON_BOOT: "false" });
+
+      const boot = runBootMigrations(env);
+
+      await expect(boot).rejects.toBeInstanceOf(SchemaBehindError);
+      await expect(boot).rejects.toMatchObject({ missing: expect.arrayContaining(["audit_log", "club_managers", "clubs.rake_label", "tournaments.rake_override"]) });
+      expect(errors).toHaveBeenCalledWith(expect.stringMatching(/^\[migrate\] SCHEMA BEHIND THIS BUILD: refusing to start with MIGRATE_ON_BOOT=false\. .*clubs\.rake_label/));
+      // Nothing ran against the old schema: the seeds never started.
+      expect(logs).not.toHaveBeenCalledWith(expect.stringMatching(/^\[seed\]/));
+    } finally {
+      errors.mockRestore();
+      warnings.mockRestore();
+      logs.mockRestore();
+    }
+  });
+
+  it("still starts with MIGRATE_ON_BOOT=false when the database has the schema, the escape hatch for a failing newest migration", async () => {
+    await migrate(migrationsDir({ ...shippedFiles(), "9999_not_yet_applied.sql": "CREATE TABLE IF NOT EXISTS later_feature (id int);" }));
+    await db().pool.query("DELETE FROM _app_migrations WHERE name = '9999_not_yet_applied.sql'");
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const logs = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await runBootMigrations(loadEnv({ ...process.env, DATABASE_URL: db().url, MIGRATE_ON_BOOT: "false" }));
+
+      expect(getBootMigrationStatus()).toEqual({ skipped: true });
+    } finally {
+      warnings.mockRestore();
+      logs.mockRestore();
+    }
+  });
+
+  it("finds nothing missing once every shipped migration is applied, and names a table or column that is gone", async () => {
+    await migrate(migrationsDir(shippedFiles()));
+    expect(await missingSchema(db().pool)).toEqual([]);
+
+    await db().pool.query("ALTER TABLE clubs DROP COLUMN rake_label; DROP TABLE audit_log");
+
+    expect(await missingSchema(db().pool)).toEqual(["audit_log", "clubs.rake_label"]);
+    await expect(assertSchemaCurrent(db().pool)).rejects.toThrow("The database lacks what this build queries: audit_log, clubs.rake_label");
   });
 
   it("still boots against a reachable database, reporting what it applied", async () => {

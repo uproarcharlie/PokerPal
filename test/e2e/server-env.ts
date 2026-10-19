@@ -31,7 +31,11 @@ export function e2ePort(env: GuardEnv): number {
  * whenever R2 credentials exist, and the server's `import "dotenv/config"`
  * fills in whatever a `.env` in its working directory holds. Setting each one
  * to "" stops both, because dotenv never overrides a variable that is set and
- * the app treats "" as unset, so uploads always stay on local disk.
+ * the app treats "" as unset. Production keeps images on local disk only when
+ * UPLOAD_DIR names a directory, so it is set to `uploads` (resolved against the
+ * server's working directory, e2eWorkDir): uploads always stay on local disk.
+ * The rate limits are off: the suite signs up more accounts from one address than
+ * production allows in an hour (signUp), and the limits have their own API tests.
  */
 export function e2eServerEnv({ port, databaseUrl }: { port: number; databaseUrl: string }): Record<string, string> {
   return {
@@ -45,5 +49,7 @@ export function e2eServerEnv({ port, databaseUrl }: { port: number; databaseUrl:
     R2_SECRET_ACCESS_KEY: "",
     R2_BUCKET_NAME: "",
     R2_PUBLIC_URL: "",
+    UPLOAD_DIR: "uploads",
+    RATE_LIMITS_ENABLED: "false",
   };
 }

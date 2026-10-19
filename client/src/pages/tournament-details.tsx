@@ -13,8 +13,26 @@ import { ActivityFeed } from "@/components/tournament/activity-feed";
 import { RegisterPlayerModal } from "@/components/modals/register-player-modal";
 import { AssignHighHandModal } from "@/components/modals/assign-high-hand-modal";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { CorrectResultsDialog, FinalizeDialog } from "@/components/tournament/finalize-dialog";
+import { LIVE_REFRESH_MS } from "@/lib/live-refresh";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { ordinal, tournamentMoney } from "@/lib/prize-pool";
 import { useToast } from "@/hooks/use-toast";
+import { centsToDollars, formatMoney, toCents } from "@shared/domain/money";
+import { nextHighHandAward, paidPercentage, rakeLabel } from "@shared/domain/prize-pool";
+import type { Viewer } from "@shared/api/common";
+import type { PendingActionDto } from "@shared/api/pending-actions";
+import type { PrizePoolSnapshot } from "@shared/api/finalize";
 import {
   ArrowLeft,
   Play,
@@ -33,6 +51,11 @@ import {
   Lock,
   Unlock
 } from "lucide-react";
+
+/** How often the count of player requests still waiting is refreshed. */
+const WAITING_REQUESTS_REFRESH_MS = 15_000;
+
+const isClosedStatus = (status: string | undefined) => status === "completed" || status === "cancelled";
 
 interface Tournament {
   id: string;
@@ -54,6 +77,7 @@ interface Tournament {
   addonRakeType: string | null;
   addonRakeAmount: string | null;
   payoutStructure: string;
+  customPayouts?: string | null;
   enableHighHand: boolean;
   highHandAmount?: string;
   highHandRakeType?: string;
@@ -65,13 +89,17 @@ interface Tournament {
   maxPlayers: number;
   prizePoolLocked: boolean;
   prizePoolLockedAt?: string;
-  manualPrizePool?: string;
+  manualPrizePool?: string | null;
+  rakeOverride?: string | null;
+  prizePoolSnapshot?: PrizePoolSnapshot | null;
   createdAt: string;
+  viewer?: Viewer;
 }
 
 interface Club {
   id: string;
   name: string;
+  rakeLabel?: string | null;
 }
 
 interface Season {
@@ -107,14 +135,23 @@ export default function TournamentDetails() {
   const { toast } = useToast();
   const [showRegisterPlayer, setShowRegisterPlayer] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [showFinalizeDialog, setShowFinalizeDialog] = useState(false);
+  const [showCorrectResults, setShowCorrectResults] = useState(false);
   const [highHandModalOpen, setHighHandModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
   const [editingPrizePool, setEditingPrizePool] = useState(false);
   const [manualPrizePool, setManualPrizePool] = useState("");
+  const [editingMaxPlayers, setEditingMaxPlayers] = useState(false);
+  const [maxPlayersInput, setMaxPlayersInput] = useState("");
+  const [confirmLock, setConfirmLock] = useState<"lock" | "unlock" | null>(null);
   
+  // Polled while the tournament runs, like the public page: QR sign-ups and requests confirmed on another
+  // device change the pool, and what the TD reads out must be what the server pays (P2REV1-MONEY-01).
   const { data: tournament, isLoading: tournamentLoading } = useQuery<Tournament>({
     queryKey: ["/api/tournaments", id],
+    refetchInterval: (query) => (isClosedStatus(query.state.data?.status) ? false : LIVE_REFRESH_MS),
   });
+  const live = tournament !== undefined && !isClosedStatus(tournament.status);
 
   const { data: club } = useQuery<Club>({
     queryKey: ["/api/clubs", tournament?.clubId],
@@ -129,6 +166,17 @@ export default function TournamentDetails() {
   const { data: registrations = [], isLoading: registrationsLoading } = useQuery<TournamentRegistration[]>({
     queryKey: ["/api/tournaments", id, "registrations"],
     enabled: !!id,
+    refetchInterval: live ? LIVE_REFRESH_MS : false,
+  });
+
+  // Player requests still waiting (staff only): ending the tournament discards them, so the page says how many.
+  const runsOpenTournament =
+    tournament?.viewer?.canManage === true && tournament.status !== "completed" && tournament.status !== "cancelled";
+  const { data: waitingRequests = [] } = useQuery<PendingActionDto[]>({
+    queryKey: ["/api/tournaments", id, "pending-actions"],
+    enabled: !!id && runsOpenTournament,
+    refetchInterval: WAITING_REQUESTS_REFRESH_MS,
+    staleTime: 0,
   });
 
   const updateTournamentMutation = useMutation({
@@ -179,23 +227,44 @@ export default function TournamentDetails() {
   });
 
   const lockPrizePoolMutation = useMutation({
-    mutationFn: async () => {
-      const response = await apiRequest("PUT", `/api/tournaments/${id}`, {
-        prizePoolLocked: true,
+    mutationFn: async (locked: boolean) => {
+      const response = await apiRequest("PUT", `/api/tournaments/${id}`, { prizePoolLocked: locked });
+      return response.json();
+    },
+    onSuccess: (_data, locked) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tournaments", id] });
+      setConfirmLock(null);
+      toast(
+        locked
+          ? { title: "Prize Pool Locked", description: "No further registrations, rebuys, or addons will be allowed" }
+          : { title: "Prize Pool Unlocked", description: "Registrations, rebuys and addons are open again" },
+      );
+    },
+    onError: (error: any) => {
+      setConfirmLock(null);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to change the prize pool lock",
+        variant: "destructive",
       });
+    },
+  });
+
+  // Staff are not held to maxPlayers, but QR sign-ups are: raising it lets more players sign themselves up (TN2-03).
+  const updateMaxPlayersMutation = useMutation({
+    mutationFn: async (maxPlayers: number) => {
+      const response = await apiRequest("PUT", `/api/tournaments/${id}`, { maxPlayers });
       return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tournaments", id] });
-      toast({
-        title: "Prize Pool Locked",
-        description: "No further registrations, rebuys, or addons will be allowed",
-      });
+      setEditingMaxPlayers(false);
+      toast({ title: "Success", description: "Max players updated" });
     },
     onError: (error: any) => {
       toast({
         title: "Error",
-        description: error.message || "Failed to lock prize pool",
+        description: error.message || "Failed to update max players",
         variant: "destructive",
       });
     },
@@ -220,28 +289,6 @@ export default function TournamentDetails() {
       toast({
         title: "Error",
         description: error.message || "Failed to update prize pool",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const finalizeTournamentMutation = useMutation({
-    mutationFn: async () => {
-      const response = await apiRequest("POST", `/api/tournaments/${id}/finalize`, {});
-      return response.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/tournaments", id] });
-      queryClient.invalidateQueries({ queryKey: ["/api/tournaments", id, "registrations"] });
-      toast({
-        title: "Tournament Finalized",
-        description: "Positions, prizes, and points have been assigned to all players",
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to finalize tournament",
         variant: "destructive",
       });
     },
@@ -279,67 +326,24 @@ export default function TournamentDetails() {
   }
 
   const totalPlayers = registrations.length;
-  const totalBuyIns = registrations.reduce((sum, reg) => sum + reg.buyIns, 0);
-  const totalRebuys = registrations.reduce((sum, reg) => sum + reg.rebuys, 0);
-  const totalAddons = registrations.reduce((sum, reg) => sum + reg.addons, 0);
-
-  const buyInTotal = totalBuyIns * parseFloat(tournament.buyInAmount);
-  const rebuyTotal = totalRebuys * parseFloat(tournament.rebuyAmount || '0');
-  const addonTotal = totalAddons * parseFloat(tournament.addonAmount || '0');
-  const grossTotal = buyInTotal + rebuyTotal + addonTotal;
-
-  // Calculate buy-in rake
-  let buyInRake = 0;
-  if (tournament.rakeType === 'percentage') {
-    buyInRake = buyInTotal * (parseFloat(tournament.rakeAmount) / 100);
-  } else if (tournament.rakeType === 'fixed') {
-    buyInRake = totalBuyIns * parseFloat(tournament.rakeAmount);
-  }
-
-  // Calculate rebuy rake
-  let rebuyRake = 0;
-  if (tournament.rebuyRakeType === 'percentage') {
-    rebuyRake = rebuyTotal * (parseFloat(tournament.rebuyRakeAmount || '0') / 100);
-  } else if (tournament.rebuyRakeType === 'fixed') {
-    rebuyRake = totalRebuys * parseFloat(tournament.rebuyRakeAmount || '0');
-  }
-
-  // Calculate addon rake
-  let addonRake = 0;
-  if (tournament.addonRakeType === 'percentage') {
-    addonRake = addonTotal * (parseFloat(tournament.addonRakeAmount || '0') / 100);
-  } else if (tournament.addonRakeType === 'fixed') {
-    addonRake = totalAddons * parseFloat(tournament.addonRakeAmount || '0');
-  }
-
-  const rake = buyInRake + rebuyRake + addonRake;
-  const calculatedPrizePool = grossTotal - rake;
-  const netPrizePool = tournament.manualPrizePool
-    ? parseFloat(tournament.manualPrizePool)
-    : calculatedPrizePool;
-
-  // Calculate prize payouts based on payout structure
-  const getPrizePayouts = () => {
-    if (netPrizePool <= 0) return [];
-
-    const payoutStructures: Record<string, number[]> = {
-      'standard': [0.50, 0.30, 0.20],
-      'top3': [0.50, 0.30, 0.20],
-      'top5': [0.40, 0.25, 0.20, 0.10, 0.05],
-      'top8': [0.35, 0.22, 0.15, 0.12, 0.08, 0.04, 0.02, 0.02],
-      'top9': [0.30, 0.20, 0.15, 0.12, 0.09, 0.06, 0.04, 0.02, 0.02],
-    };
-
-    const percentages = payoutStructures[tournament.payoutStructure] || payoutStructures['standard'];
-
-    return percentages.map((percentage, index) => ({
-      position: index + 1,
-      percentage: percentage * 100,
-      amount: Math.round(netPrizePool * percentage),
-    }));
-  };
-
-  const prizePayouts = getPrizePayouts();
+  // The same shared functions finalize pays with: what the TD sees here is what is paid.
+  const { breakdown, display, poolCents } = tournamentMoney(tournament, registrations);
+  const { buyIns: totalBuyIns, rebuys: totalRebuys, addons: totalAddons } = breakdown.counts;
+  const prizePayouts = display.rows;
+  const label = rakeLabel(club);
+  const canManage = tournament.viewer?.canManage === true;
+  // Deleting is for the club's owner or an admin; a manager cancels instead (TN-09).
+  const canDelete = tournament.viewer?.canOwn === true;
+  const closed = tournament.status === "completed" || tournament.status === "cancelled";
+  const paidShare = paidPercentage(prizePayouts);
+  // What the next high-hand winner is awarded, or null once every prize is: the server works it out the same way (MONEY-36).
+  const highHandAwards = registrations.filter((r) => r.highHandWinner).map((r) => toCents(r.highHandAmount));
+  const nextHighHand = nextHighHandAward(breakdown.highHand, highHandAwards);
+  // A finalized tournament's whole finishing order, for correcting it (D19).
+  const finishers = registrations
+    .filter((r) => r.finalPosition != null)
+    .sort((a, b) => (a.finalPosition ?? 0) - (b.finalPosition ?? 0))
+    .map((r) => ({ registrationId: r.id, playerName: r.player?.name ?? "Unknown player" }));
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -360,9 +364,11 @@ export default function TournamentDetails() {
     updateTournamentMutation.mutate({ status: newStatus });
   };
 
-  const canStart = tournament.status === 'registration' && totalPlayers >= tournament.minPlayers;
-  const canPause = tournament.status === 'in_progress';
-  const canEnd = tournament.status === 'in_progress';
+  const canStart = canManage && tournament.status === 'registration' && totalPlayers >= tournament.minPlayers;
+  const canPause = canManage && tournament.status === 'in_progress';
+  const canEnd = canManage && tournament.status === 'in_progress';
+  const canEditPrizePool =
+    canManage && !tournament.prizePoolLocked && tournament.status !== 'completed' && tournament.status !== 'cancelled';
 
   return (
     <>
@@ -390,7 +396,8 @@ export default function TournamentDetails() {
                   <span className="w-2 h-2 bg-current rounded-full mr-2 animate-pulse"></span>
                   {tournament.status === 'in_progress' ? 'In Progress' :
                    tournament.status === 'registration' ? 'Registration' :
-                   tournament.status === 'completed' ? 'Completed' : 'Scheduled'}
+                   tournament.status === 'completed' ? 'Completed' :
+                   tournament.status === 'cancelled' ? 'Cancelled' : 'Scheduled'}
                 </Badge>
                 <Link href={`/admin/registrations/${tournament.id}`} className="hidden sm:inline">
                   <Button variant="outline" size="sm">
@@ -404,15 +411,23 @@ export default function TournamentDetails() {
                     Public View
                   </Button>
                 </Link>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setShowDeleteDialog(true)}
-                  className="text-destructive hover:text-destructive hover:bg-destructive/10 hidden md:flex"
-                >
-                  <Trash2 className="w-4 h-4 mr-2" />
-                  Delete
-                </Button>
+                {canManage && !closed && (
+                  <Button variant="outline" size="sm" onClick={() => setShowRegisterPlayer(true)} data-testid="register-player">
+                    <UserPlus className="w-4 h-4 mr-2" />
+                    Register Player
+                  </Button>
+                )}
+                {canDelete && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowDeleteDialog(true)}
+                    className="text-destructive hover:text-destructive hover:bg-destructive/10 hidden md:flex"
+                  >
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Delete
+                  </Button>
+                )}
                 {canStart && (
                   <Button
                     onClick={() => handleStatusChange('in_progress')}
@@ -437,12 +452,21 @@ export default function TournamentDetails() {
                 {canEnd && (
                   <Button
                     variant="destructive"
-                    onClick={() => finalizeTournamentMutation.mutate()}
-                    disabled={finalizeTournamentMutation.isPending}
+                    onClick={() => setShowFinalizeDialog(true)}
                     data-testid="end-tournament"
                   >
                     <Square className="w-4 h-4 mr-2" />
-                    {finalizeTournamentMutation.isPending ? 'Finalizing...' : 'End Tournament'}
+                    End Tournament
+                    {waitingRequests.length > 0 && (
+                      <Badge variant="secondary" className="ml-2" data-testid="end-tournament-waiting">
+                        {waitingRequests.length} waiting
+                      </Badge>
+                    )}
+                  </Button>
+                )}
+                {canManage && tournament.status === "completed" && finishers.length > 0 && (
+                  <Button variant="outline" onClick={() => setShowCorrectResults(true)} data-testid="correct-results">
+                    Correct Results
                   </Button>
                 )}
               </div>
@@ -451,15 +475,56 @@ export default function TournamentDetails() {
             {/* Tournament Stats */}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-4">
               <div className="bg-muted/30 rounded-lg p-3 md:p-4">
-                <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Players</p>
-                <p className="text-xl md:text-2xl font-bold text-foreground" data-testid="players-count">
-                  {totalPlayers}/{tournament.maxPlayers}
+                <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">
+                  Players
+                  {canManage && !closed && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-5 px-2 ml-2"
+                      data-testid="edit-max-players"
+                      onClick={() => {
+                        setEditingMaxPlayers(!editingMaxPlayers);
+                        setMaxPlayersInput(String(tournament.maxPlayers));
+                      }}
+                    >
+                      {editingMaxPlayers ? "Cancel" : "Edit"}
+                    </Button>
+                  )}
                 </p>
+                {editingMaxPlayers && canManage && !closed ? (
+                  <div className="flex gap-2 items-center">
+                    <span className="text-sm text-muted-foreground">{totalPlayers}/</span>
+                    <Input
+                      type="number"
+                      min={Math.max(2, totalPlayers)}
+                      max={1000}
+                      value={maxPlayersInput}
+                      onChange={(e) => setMaxPlayersInput(e.target.value)}
+                      className="h-8 text-sm"
+                      aria-label="Max players"
+                      data-testid="max-players-input"
+                    />
+                    <Button
+                      size="sm"
+                      className="h-8"
+                      disabled={updateMaxPlayersMutation.isPending || !/^\d+$/.test(maxPlayersInput)}
+                      onClick={() => updateMaxPlayersMutation.mutate(Number(maxPlayersInput))}
+                      data-testid="save-max-players"
+                    >
+                      Save
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="text-xl md:text-2xl font-bold text-foreground" data-testid="players-count">
+                    {totalPlayers}/{tournament.maxPlayers}
+                  </p>
+                )}
               </div>
               <div className="bg-muted/30 rounded-lg p-3 md:p-4">
                 <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">
                   Prize Pool
-                  {!tournament.prizePoolLocked && (
+                  {canEditPrizePool && (
                     <Button
                       variant="ghost"
                       size="sm"
@@ -473,13 +538,13 @@ export default function TournamentDetails() {
                     </Button>
                   )}
                 </p>
-                {editingPrizePool && !tournament.prizePoolLocked ? (
+                {editingPrizePool && canEditPrizePool ? (
                   <div className="flex gap-2 items-center">
                     <Input
                       type="number"
                       value={manualPrizePool}
                       onChange={(e) => setManualPrizePool(e.target.value)}
-                      placeholder={Math.round(calculatedPrizePool).toString()}
+                      placeholder={Math.round(centsToDollars(breakdown.netAfterAp)).toString()}
                       className="h-8 text-sm"
                     />
                     <Button
@@ -492,9 +557,21 @@ export default function TournamentDetails() {
                   </div>
                 ) : (
                   <p className="text-xl md:text-2xl font-bold text-foreground" data-testid="prize-pool">
-                    ${Math.round(netPrizePool).toLocaleString()}
-                    {tournament.manualPrizePool && (
+                    {formatMoney(poolCents)}
+                    {display.source === "live" && breakdown.netSource === "manual_pool" && (
                       <span className="text-xs text-muted-foreground ml-2">(manual)</span>
+                    )}
+                    {display.source === "live" && breakdown.netSource === "ap_override" && (
+                      <span className="text-xs text-muted-foreground ml-2">(manual {label})</span>
+                    )}
+                    {(display.source === "snapshot" || display.source === "stored") && (
+                      <span className="text-xs text-muted-foreground ml-2">(paid)</span>
+                    )}
+                    {display.source === "unrecorded" && (
+                      <span className="text-xs text-muted-foreground ml-2">(estimated: prizes not recorded)</span>
+                    )}
+                    {display.source === "cancelled" && (
+                      <span className="text-xs text-muted-foreground ml-2">(cancelled: no prizes)</span>
                     )}
                   </p>
                 )}
@@ -539,10 +616,18 @@ export default function TournamentDetails() {
                     <Trophy className="w-5 h-5" />
                     Prize Structure
                   </CardTitle>
-                  <p className="text-sm text-muted-foreground">Payout distribution for top finishers</p>
+                  <p className="text-sm text-muted-foreground">
+                    {display.source === "live"
+                      ? "Payout distribution for top finishers"
+                      : display.source === "unrecorded"
+                        ? "Prizes were not recorded for this tournament"
+                        : display.source === "cancelled"
+                          ? "Cancelled: no prizes are paid"
+                          : "What was paid out"}
+                  </p>
                 </CardHeader>
                 <CardContent className="p-6">
-                  {netPrizePool > 0 ? (
+                  {prizePayouts.length > 0 ? (
                     <>
                       {/* Top 3 Highlight */}
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
@@ -557,14 +642,16 @@ export default function TournamentDetails() {
                           >
                             <div className="flex items-center justify-between mb-2">
                               <span className="text-sm font-medium text-muted-foreground">
-                                {payout.position === 1 ? '1st' : payout.position === 2 ? '2nd' : '3rd'} Place
+                                {ordinal(payout.position)} Place
                               </span>
                               <Trophy className={`w-5 h-5 ${index === 0 ? 'text-accent' : 'text-muted-foreground'}`} />
                             </div>
-                            <p className="text-3xl font-bold text-foreground">
-                              ${payout.amount.toLocaleString()}
+                            <p className="text-3xl font-bold text-foreground" data-testid={`payout-${payout.position}`}>
+                              {formatMoney(payout.amountCents)}
                             </p>
-                            <p className="text-xs text-muted-foreground mt-1">{payout.percentage}% of prize pool</p>
+                            {payout.percentage !== null && (
+                              <p className="text-xs text-muted-foreground mt-1">{payout.percentage}% of prize pool</p>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -592,15 +679,15 @@ export default function TournamentDetails() {
                                         {payout.position === 1 ? '🥇 1st' :
                                          payout.position === 2 ? '🥈 2nd' :
                                          payout.position === 3 ? '🥉 3rd' :
-                                         `${payout.position}th`}
+                                         ordinal(payout.position)}
                                       </span>
                                     </td>
                                     <td className="py-3 px-3 text-right text-sm text-muted-foreground">
-                                      {payout.percentage}%
+                                      {payout.percentage !== null ? `${payout.percentage}%` : '-'}
                                     </td>
                                     <td className="py-3 px-3 text-right">
                                       <span className="font-bold text-foreground">
-                                        ${payout.amount.toLocaleString()}
+                                        {formatMoney(payout.amountCents)}
                                       </span>
                                     </td>
                                   </tr>
@@ -609,15 +696,27 @@ export default function TournamentDetails() {
                               <tfoot>
                                 <tr className="border-t-2 border-border font-bold">
                                   <td className="py-3 px-3 text-foreground">Total</td>
-                                  <td className="py-3 px-3 text-right text-muted-foreground">100%</td>
+                                  <td className="py-3 px-3 text-right text-muted-foreground">
+                                    {paidShare !== null ? `${paidShare}%` : ""}
+                                  </td>
                                   <td className="py-3 px-3 text-right text-primary text-lg">
-                                    ${netPrizePool.toLocaleString()}
+                                    {formatMoney(display.totalCents)}
                                   </td>
                                 </tr>
                               </tfoot>
                             </table>
                           </div>
                         </div>
+                      )}
+
+                      {display.undistributedCents > 0 && (
+                        <Alert className="mt-4" data-testid="undistributed">
+                          <AlertDescription>
+                            {display.source === "live"
+                              ? `Only ${totalPlayers} ${totalPlayers === 1 ? "player" : "players"}: ${formatMoney(display.undistributedCents)} of the pool is not paid out unless more players enter.`
+                              : `${formatMoney(display.undistributedCents)} of the pool was not paid out: there were fewer players than paid places.`}
+                          </AlertDescription>
+                        </Alert>
                       )}
 
                       {tournament.enableHighHand && tournament.highHandAmount && (
@@ -627,7 +726,7 @@ export default function TournamentDetails() {
                             <p className="text-xs text-muted-foreground">Additional prize for highest hand</p>
                           </div>
                           <p className="text-xl font-bold text-accent">
-                            ${parseFloat(tournament.highHandAmount).toLocaleString()}
+                            {formatMoney(toCents(tournament.highHandAmount))}
                           </p>
                         </div>
                       )}
@@ -635,7 +734,13 @@ export default function TournamentDetails() {
                   ) : (
                     <div className="text-center py-8">
                       <Trophy className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                      <p className="text-sm text-muted-foreground">Prize pool will be calculated once players register</p>
+                      <p className="text-sm text-muted-foreground" data-testid="no-payouts">
+                        {display.source === "unrecorded"
+                          ? "This tournament's results were entered by hand, so what each place was paid was never recorded."
+                          : display.source === "cancelled"
+                            ? "This tournament was cancelled, so no prizes are paid."
+                            : "Prize pool will be calculated once players register"}
+                      </p>
                     </div>
                   )}
                 </CardContent>
@@ -644,13 +749,10 @@ export default function TournamentDetails() {
               {/* Prize Pool Calculator */}
               <PrizePoolCalculator
                 tournament={tournament}
-                grossTotal={grossTotal}
-                rake={rake}
-                netPrizePool={netPrizePool}
-                totalBuyIns={totalBuyIns}
-                totalRebuys={totalRebuys}
-                totalAddons={totalAddons}
-                highHandEntrants={registrations.filter(r => r.enteringHighHands).length}
+                breakdown={breakdown}
+                display={display}
+                rakeLabel={label}
+                highHandAwardsCents={highHandAwards}
               />
 
               {/* Tournament Info */}
@@ -709,6 +811,9 @@ export default function TournamentDetails() {
                 tournamentId={tournament.id}
                 registrations={registrations}
                 isLoading={registrationsLoading}
+                canManage={canManage}
+                closed={closed}
+                completed={tournament.status === "completed"}
               />
             </TabsContent>
 
@@ -743,17 +848,29 @@ export default function TournamentDetails() {
                         </div>
                         <div className="min-w-0">
                           <h3 className="font-semibold text-sm md:text-base">Confirm Actions</h3>
-                          <p className="text-xs md:text-sm text-muted-foreground">Review and approve pending actions</p>
+                          <p
+                            className={`text-xs md:text-sm ${waitingRequests.length > 0 ? "font-semibold text-destructive" : "text-muted-foreground"}`}
+                            data-testid="waiting-requests"
+                          >
+                            {waitingRequests.length > 0
+                              ? `${waitingRequests.length} player request${waitingRequests.length === 1 ? "" : "s"} waiting`
+                              : "Review and approve pending actions"}
+                          </p>
                         </div>
                       </div>
                     </CardContent>
                   </Card>
                 </Link>
 
-                {tournament.enableHighHand && (
+                {canManage && tournament.enableHighHand && (
                   <Card
                     className="transition-colors h-full hover:bg-muted/50 cursor-pointer"
-                    onClick={() => setHighHandModalOpen(true)}
+                    onClick={() => {
+                      // The award is worked out from the pot as it is now: fetch it before showing the amount.
+                      queryClient.invalidateQueries({ queryKey: ["/api/tournaments", id, "registrations"] });
+                      queryClient.invalidateQueries({ queryKey: ["/api/tournaments", id], exact: true });
+                      setHighHandModalOpen(true);
+                    }}
                   >
                     <CardContent className="p-4 md:p-6">
                       <div className="flex items-center gap-3">
@@ -771,32 +888,34 @@ export default function TournamentDetails() {
                   </Card>
                 )}
 
-                <Card
-                  className={`transition-colors h-full ${
-                    tournament.prizePoolLocked ? 'opacity-50' : 'hover:bg-muted/50 cursor-pointer'
-                  }`}
-                  onClick={() => !tournament.prizePoolLocked && lockPrizePoolMutation.mutate()}
-                >
-                  <CardContent className="p-4 md:p-6">
-                    <div className="flex items-center gap-3">
-                      <div className="shrink-0">
-                        {tournament.prizePoolLocked ? (
-                          <Lock className="w-6 h-6 md:w-8 md:h-8 text-primary" />
-                        ) : (
-                          <Unlock className="w-6 h-6 md:w-8 md:h-8 text-primary" />
-                        )}
+                {/* A finished tournament's pool settings are frozen, so the lock is offered only while it is open. */}
+                {canManage && !closed && (
+                  <Card
+                    className="transition-colors h-full hover:bg-muted/50 cursor-pointer"
+                    onClick={() => setConfirmLock(tournament.prizePoolLocked ? "unlock" : "lock")}
+                    data-testid="prize-pool-lock-card"
+                  >
+                    <CardContent className="p-4 md:p-6">
+                      <div className="flex items-center gap-3">
+                        <div className="shrink-0">
+                          {tournament.prizePoolLocked ? (
+                            <Lock className="w-6 h-6 md:w-8 md:h-8 text-primary" />
+                          ) : (
+                            <Unlock className="w-6 h-6 md:w-8 md:h-8 text-primary" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <h3 className="font-semibold text-sm md:text-base">
+                            {tournament.prizePoolLocked ? "Prize Pool Locked" : "Lock Prize Pool"}
+                          </h3>
+                          <p className="text-xs md:text-sm text-muted-foreground">
+                            {tournament.prizePoolLocked ? "Tap to unlock" : "Finalize registrations"}
+                          </p>
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <h3 className="font-semibold text-sm md:text-base">
-                          {tournament.prizePoolLocked ? "Prize Pool Locked" : "Lock Prize Pool"}
-                        </h3>
-                        <p className="text-xs md:text-sm text-muted-foreground">
-                          {tournament.prizePoolLocked ? "No further changes allowed" : "Finalize registrations"}
-                        </p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                    </CardContent>
+                  </Card>
+                )}
 
                 <Link href={`/admin/registrations/${tournament.id}`} className="block">
                   <Card className="hover:bg-muted/50 transition-colors cursor-pointer h-full">
@@ -875,24 +994,47 @@ export default function TournamentDetails() {
         isDeleting={deleteTournamentMutation.isPending}
       />
 
+      <AlertDialog open={confirmLock !== null} onOpenChange={(open) => !open && setConfirmLock(null)}>
+        <AlertDialogContent data-testid="confirm-lock">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{confirmLock === "unlock" ? "Unlock the prize pool?" : "Lock the prize pool?"}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmLock === "unlock"
+                ? "Players can sign up, and re-buys and add-ons can be added, again until you lock it."
+                : "No new sign-ups, re-buys or add-ons after this. Re-buy and add-on requests players sent before the lock can still be confirmed."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={lockPrizePoolMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={lockPrizePoolMutation.isPending}
+              onClick={(e) => {
+                e.preventDefault();
+                lockPrizePoolMutation.mutate(confirmLock !== "unlock");
+              }}
+              data-testid="confirm-lock-action"
+            >
+              {confirmLock === "unlock" ? "Unlock" : "Lock"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <FinalizeDialog open={showFinalizeDialog} onOpenChange={setShowFinalizeDialog} tournamentId={tournament.id} />
+
+      <CorrectResultsDialog
+        open={showCorrectResults}
+        onOpenChange={setShowCorrectResults}
+        tournamentId={tournament.id}
+        finishers={finishers}
+      />
+
       <AssignHighHandModal
         open={highHandModalOpen}
         onOpenChange={setHighHandModalOpen}
         tournamentId={tournament.id}
         registrations={registrations}
-        defaultHighHandAmount={(() => {
-          // Calculate high hand amount per winner
-          const highHandEntrants = registrations.filter(r => r.enteringHighHands).length;
-          const highHandGross = highHandEntrants * parseFloat(tournament.highHandAmount || '0');
-          const highHandRakeAmount = tournament.highHandRakeType === 'percentage'
-            ? highHandGross * (parseFloat(tournament.highHandRakeAmount || '0') / 100)
-            : parseFloat(tournament.highHandRakeAmount || '0');
-          const highHandNet = highHandGross - highHandRakeAmount;
-          const highHandPerWinner = tournament.highHandPayouts && tournament.highHandPayouts > 0
-            ? highHandNet / tournament.highHandPayouts
-            : highHandNet;
-          return highHandPerWinner.toFixed(2);
-        })()}
+        nextAwardCents={nextHighHand}
       />
     </>
   );

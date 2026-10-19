@@ -3,8 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { populate } from "dotenv";
 import { describe, expect, it } from "vitest";
-import { loadEnv, setEnv } from "../../server/config/env";
-import { isCloudStorageEnabled } from "../../server/services/storage";
+import { loadEnv } from "../../server/config/env";
+import { imageStoreConfig } from "../../server/services/images/store";
 import { e2eDatabaseUrl } from "../e2e/database";
 import { DEFAULT_E2E_PORT, e2ePort, e2eServerEnv, e2eWorkDir } from "../e2e/server-env";
 
@@ -29,21 +29,21 @@ const configured = e2eServerEnv({ port: 4710, databaseUrl: "postgres://localhost
 
 describe("the e2e server's environment", () => {
   it("never reaches cloud storage, even with R2 credentials in the shell and in .env", () => {
-    setEnv(loadEnv(serverEnvironment({ ...R2_CREDENTIALS, USE_CLOUD_STORAGE: "true" }, R2_CREDENTIALS, configured)));
+    const env = loadEnv(serverEnvironment({ ...R2_CREDENTIALS, USE_CLOUD_STORAGE: "true" }, R2_CREDENTIALS, configured));
 
-    expect(isCloudStorageEnabled()).toBe(false);
+    expect(imageStoreConfig(env).kind).toBe("local");
   });
 
   it("would, without those blanks: production turns cloud storage on whenever credentials exist", () => {
     const withoutBlanks = Object.fromEntries(Object.entries(configured).filter(([key]) => !key.startsWith("R2_")));
 
-    setEnv(loadEnv(serverEnvironment({}, R2_CREDENTIALS, { ...withoutBlanks, USE_CLOUD_STORAGE: "false" })));
+    const env = loadEnv(serverEnvironment({}, R2_CREDENTIALS, { ...withoutBlanks, USE_CLOUD_STORAGE: "false" }));
 
-    expect(isCloudStorageEnabled()).toBe(true);
+    expect(imageStoreConfig(env).kind).toBe("r2");
   });
 
-  it("runs the production build", () => {
-    expect(loadEnv(configured)).toMatchObject({ NODE_ENV: "production", PORT: 4710 });
+  it("runs the production build, with the rate limits off (the suite signs up more accounts than one address may)", () => {
+    expect(loadEnv(configured)).toMatchObject({ NODE_ENV: "production", PORT: 4710, RATE_LIMITS_ENABLED: false });
   });
 });
 

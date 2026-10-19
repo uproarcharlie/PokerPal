@@ -57,9 +57,29 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 Optional, with defaults that suit Railway, so leave them unset unless you need a change (`.env.production.example` describes each):
 
-- `TRUST_PROXY` (default `1`): how many proxies sit in front of the app, so client IPs and https are read correctly.
+- `TRUST_PROXY` (default `1`): how many proxies sit in front of the app, so client IPs and https are read correctly. Behind Cloudflare and Railway, keep it at `1`. The app then trusts Railway's edge only. The rate limits take the visitor's own address from `CF-Connecting-IP`, but only when the request reached Railway from a Cloudflare address (and, once `CLOUDFLARE_ORIGIN_SECRET` is set, carries that secret). A higher number would let a visitor pick their own address with `X-Forwarded-For`.
+- `CLOUDFLARE_ORIGIN_SECRET` (recommended): coming from a Cloudflare address only proves a request left Cloudflare's network, not that it went through the lovepoker.club zone: anyone's Cloudflare Worker can call the `*.up.railway.app` origin with a `CF-Connecting-IP` of their choosing and so dodge the per-visitor rate limits. To close that, in this order:
+  1. generate a secret (`node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"`);
+  2. in Cloudflare, add a Transform Rule (Rules → Transform Rules → Modify Request Header) for the zone's hostname that sets the request header `X-Origin-Auth` to that secret on every request;
+  3. set `CLOUDFLARE_ORIGIN_SECRET` to the same value on Railway.
+  Doing 3 before 2 is safe but keys every visitor on the Cloudflare edge address until 2 is done, so do 2 first. Optionally remove the generated `*.up.railway.app` domain once the custom domain works. Unset, the boot log says `CLOUDFLARE_ORIGIN_SECRET is not set` and the header is believed from any Cloudflare address, as before.
 - `DB_POOL_MAX` (default `10`): the most Postgres connections the app holds open.
 - `MIGRATE_ON_BOOT` (default `true`): apply the migrations at every start. See [When a boot migration fails](#when-a-boot-migration-fails) before setting it to `false`.
+- `RATE_LIMITS_ENABLED` (default: on): `false` turns the API rate limits off, for a production-mode run that is not the live site.
+- `RATE_LIMIT_PUBLIC_WRITE` (default `300`) and `RATE_LIMIT_LIVE` (default `10000`): raise one limit for a big night without touching the sign-in throttle. Phones on the venue Wi-Fi share one address. `publicWrite` counts, per 15 minutes per address (or per signed-in account): new players and their photos together (a new player with a photo is 2), and each tournament's sign-ups plus re-buy, add-on and knockout requests separately (1 each). So 60 new players with photos are about 120 in the first bucket, and 60 sign-ups plus 90 requests about 150 in that tournament's. `live` is page polling: an open tournament page polls about 360 times in 15 minutes, so 10000 covers about 27 phones watching non-stop.
+- `UPLOAD_DIR`: without R2, production stores images only in the directory this names, which must be a persistent volume. With neither R2 nor `UPLOAD_DIR`, image uploads answer 503.
+
+The server refuses to start (so the healthcheck keeps the previous deployment serving) when `SESSION_SECRET` is missing or still one of the example placeholders, when only some of the five `R2_*` variables are set, or when `R2_PUBLIC_URL` is not an http(s) URL or is the `*.r2.cloudflarestorage.com` API host. The log names the variable, never its value.
+
+#### After a deploy: what the log should say
+
+- `Image storage: Cloudflare R2 bucket "…", served from https://…`, and no `Image storage is not configured` line.
+- On the first boot with the club-owner seed, `[seed] Central Stars owner: set; club … is now owned by charlie@eccuity.com`. Later boots say `unchanged; club … already has an owner`, or once an admin has changed or cleared the owner, `… was set before …, so it is left as it is` (the seed runs at most once per club). The seed trusts only an account that had that address before 2026-10-19 (created and last changed before then), because nothing verifies email addresses: `unchanged; no account uses charlie@eccuity.com`, `… was created or changed after …` and `… is deactivated` all mean an admin sets the owner on the club's Managers tab instead. `… clubs look like Central Stars` also needs an admin to set the owner there. Before deploying, check that the account exists on production and was created before 2026-10-19.
+- After a rollback to a build before Phase 2, sessions keep working: Phase 2 still writes the session's `role` and `originalAdminRole`, which that build authorized from (remove them once a rollback could no longer go that far).
+- No `Ignoring CF-Connecting-IP from non-Cloudflare peer` line. If one appears, requests are reaching the app without passing through Cloudflare, and the rate limits key on that peer address.
+- With `CLOUDFLARE_ORIGIN_SECRET` set, no `Ignoring CF-Connecting-IP without a valid x-origin-auth header` line, which means the Transform Rule is missing or its value differs. Without it set, one `CLOUDFLARE_ORIGIN_SECRET is not set` line at boot.
+- On the first boot with player home clubs, `[seed] Player home clubs: set; recorded the home club of N players` (every player who has registered anywhere, given the club of their first registration). Later boots say `unchanged; every registered player already has one`.
+- `Rate limit "<name>" reached by …` lines are normal: one per visitor per limit per 15 minutes.
 
 ### How a deploy goes live
 
@@ -72,7 +92,8 @@ CI builds the same image and boots it against Postgres on every push and pull re
 The log shows `[migrate] MIGRATIONS FAILED`, and above it the file, line and reason.
 
 1. **During a deploy** nothing is down: the previous deployment keeps serving. Fix the migration, or revert the commit, and push again.
-2. **After a crash or restart**, nothing serves until a boot succeeds. If the database already has the schema the build needs (for example, the failing file is the newest one and the code does not use what it adds yet), set `MIGRATE_ON_BOOT=false` on the service to start without migrating. Remove it as soon as the fix is deployed, or later migrations never run.
+2. **After a crash or restart**, nothing serves until a boot succeeds. If the database already has the schema the build needs (for example, the failing file is the newest one and the code does not use what it adds yet), set `MIGRATE_ON_BOOT=false` on the service to start without migrating (the boot data seeds still run, skipping any whose tables do not exist yet). Remove it as soon as the fix is deployed, or later migrations never run.
+   The app checks this for you: with `MIGRATE_ON_BOOT=false` it still compares the database with every table and column the build queries, and if any is missing it logs `[migrate] SCHEMA BEHIND THIS BUILD: refusing to start …` with what is missing and exits, so the healthcheck fails and the previous deployment keeps serving. It runs the same check after applying the migrations. A deploy whose code needs a migration therefore never goes live behind a green healthcheck because the variable was left set.
 3. To see what would run against a database without changing anything: `DATABASE_URL=… npm run db:migrate -- --dry-run --yes`.
 4. `index … exists but is INVALID` means an earlier `CREATE INDEX CONCURRENTLY` failed part-way, leaving an index Postgres never uses. Drop the index it names with `DROP INDEX CONCURRENTLY IF EXISTS <index>`, then boot again; the migration builds it afresh.
 

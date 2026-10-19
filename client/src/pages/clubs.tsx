@@ -5,7 +5,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CreateClubModal } from "@/components/modals/create-club-modal";
 import { Plus, Users, Eye, Settings as SettingsIcon, ArrowLeft, ChevronDown, ChevronUp } from "lucide-react";
 import { Link, useLocation } from "wouter";
-import { useAuth } from "@/contexts/auth-context";
+import { RichTextContent } from "@/components/rich-text-content";
+import { richTextToPlain } from "@/lib/rich-text";
+import type { Viewer } from "@shared/api/common";
+import type { MemberCountsResponse } from "@shared/api/clubs";
 
 interface Club {
   id: string;
@@ -13,7 +16,7 @@ interface Club {
   description?: string;
   imageUrl?: string;
   createdAt: string;
-  ownerId?: string | null;
+  viewer?: Viewer;
 }
 
 interface Tournament {
@@ -30,7 +33,6 @@ interface Season {
 }
 
 export default function Clubs() {
-  const { user, isAdmin } = useAuth();
   const [showCreateClub, setShowCreateClub] = useState(false);
   const [expandedDescriptions, setExpandedDescriptions] = useState<Set<string>>(new Set());
   const [, setLocation] = useLocation();
@@ -59,20 +61,9 @@ export default function Clubs() {
     queryKey: ["/api/seasons"],
   });
 
-  const { data: membersCountData = {} } = useQuery<Record<string, { count: number }>>({
-    queryKey: ["/api/clubs/members-counts", clubs.map(c => c.id)],
+  const { data: memberCounts = {} } = useQuery<MemberCountsResponse>({
+    queryKey: ["/api/clubs/member-counts"],
     enabled: clubs.length > 0,
-    queryFn: async () => {
-      const counts: Record<string, { count: number }> = {};
-      await Promise.all(
-        clubs.map(async (club) => {
-          const response = await fetch(`/api/clubs/${club.id}/members-count`);
-          const data = await response.json();
-          counts[club.id] = data;
-        })
-      );
-      return counts;
-    },
   });
 
   const getClubStats = (clubId: string) => {
@@ -82,7 +73,7 @@ export default function Clubs() {
     const activeSeason = clubSeasons.find(s => s.isActive);
 
     return {
-      members: membersCountData[clubId]?.count || 0,
+      members: memberCounts[clubId] ?? 0,
       activeTournaments: activeTournaments.length,
       totalTournaments: clubTournaments.length,
       activeSeason: activeSeason?.name || 'None'
@@ -178,11 +169,11 @@ export default function Clubs() {
                   <CardContent>
                     {club.description && (
                       <div className="mb-4">
-                        <div
-                          className={`text-sm text-muted-foreground prose prose-sm max-w-none ${!expandedDescriptions.has(club.id) && club.description.length > 100 ? 'line-clamp-2' : ''}`}
-                          dangerouslySetInnerHTML={{ __html: club.description }}
+                        <RichTextContent
+                          className={`text-sm text-muted-foreground prose prose-sm max-w-none ${!expandedDescriptions.has(club.id) && richTextToPlain(club.description).length > 100 ? 'line-clamp-2' : ''}`}
+                          html={club.description}
                         />
-                        {club.description.length > 100 && (
+                        {richTextToPlain(club.description).length > 100 && (
                           <button
                             onClick={() => toggleDescription(club.id)}
                             className="text-xs text-primary hover:underline mt-1 flex items-center gap-1"
@@ -231,14 +222,14 @@ export default function Clubs() {
                       <Button
                         variant="outline"
                         size="sm"
-                        className={isAdmin || club.ownerId === user?.id ? "flex-1" : "w-full"}
+                        className={club.viewer?.canManage ? "flex-1" : "w-full"}
                         onClick={() => setLocation(`/clubs/${club.id}`)}
                         data-testid={`view-club-${club.id}`}
                       >
                         <Eye className="w-4 h-4 mr-1" />
                         View
                       </Button>
-                      {(isAdmin || club.ownerId === user?.id) && (
+                      {club.viewer?.canManage && (
                         <Button
                           variant="outline"
                           size="sm"

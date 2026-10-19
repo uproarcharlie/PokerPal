@@ -1,14 +1,18 @@
 import { useState } from "react";
-import { useLocation, Link } from "wouter";
+import { useLocation, useSearch, Link } from "wouter";
 import { useAuth } from "@/contexts/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Eye, EyeOff } from "lucide-react";
+import { nextPath, withNext } from "@/lib/next-path";
 
 export default function LoginPage() {
   const [, setLocation] = useLocation();
+  const search = useSearch();
+  // Back to where sign-in was asked for (an invitation link), else the clubs list.
+  const after = nextPath(search);
   const { login, isAuthenticated } = useAuth();
   const [formData, setFormData] = useState({
     email: "",
@@ -19,7 +23,7 @@ export default function LoginPage() {
 
   // Redirect if already authenticated
   if (isAuthenticated) {
-    setLocation("/clubs");
+    setLocation(after);
     return null;
   }
 
@@ -29,7 +33,7 @@ export default function LoginPage() {
 
     try {
       await login(formData.email, formData.password);
-      setLocation("/clubs");
+      setLocation(after);
     } catch (err) {
       // Error is handled by auth context
     } finally {
@@ -103,7 +107,7 @@ export default function LoginPage() {
             </Button>
             <p className="text-sm text-center text-gray-600">
               Don't have an account?{" "}
-              <Link href="/register" className="text-primary hover:underline">
+              <Link href={withNext("/register", search)} className="text-primary hover:underline">
                 Register
               </Link>
             </p>

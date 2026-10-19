@@ -4,6 +4,10 @@ import * as schema from "@shared/schema";
 import { getEnv } from "./config/env";
 
 export type Database = NodePgDatabase<typeof schema>;
+/** The `tx` a `db.transaction(async (tx) => ...)` callback receives. */
+export type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+/** What repository functions take, so a service can run several of them in one transaction. */
+export type Executor = Database | Transaction;
 
 let pool: Pool | undefined;
 let database: Database | undefined;

@@ -10,8 +10,8 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Users, Edit, UserCog, Shield, ShieldAlert, Loader2, Eye } from "lucide-react";
-import { useLocation } from "wouter";
+import { pageNavigation } from "@/lib/page-navigation";
+import { Users, Edit, UserCog, Shield, ShieldAlert, Loader2 } from "lucide-react";
 
 interface User {
   id: string;
@@ -30,7 +30,6 @@ export default function UserManagementPage() {
   const { isAdmin, user: currentUser } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [, setLocation] = useLocation();
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<"all" | "user" | "player">("all");
@@ -101,7 +100,7 @@ export default function UserManagementPage() {
         description: "You are now viewing the app as this user. Refresh to see changes.",
       });
       // Reload the page to refresh session
-      setTimeout(() => window.location.reload(), 1500);
+      setTimeout(() => pageNavigation.reload(), 1500);
     },
     onError: (error: Error) => {
       toast({
@@ -112,28 +111,8 @@ export default function UserManagementPage() {
     },
   });
 
-  // Stop impersonation
-  const stopImpersonation = async () => {
-    try {
-      const response = await fetch("/api/admin/stop-impersonation", {
-        method: "POST",
-        credentials: "include",
-      });
-      if (!response.ok) throw new Error("Failed to stop impersonation");
-
-      toast({
-        title: "Impersonation ended",
-        description: "You are back to your admin account.",
-      });
-      setTimeout(() => window.location.reload(), 1500);
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to stop impersonation",
-        variant: "destructive",
-      });
-    }
-  };
+  // The server refuses an admin's change to their own role or status (CANNOT_MODIFY_SELF).
+  const editingSelf = editingUser !== null && editingUser.id === currentUser?.id;
 
   const handleEditSubmit = () => {
     if (!editingUser) return;
@@ -144,8 +123,7 @@ export default function UserManagementPage() {
         name: editingUser.name,
         email: editingUser.email,
         phone: editingUser.phone,
-        role: editingUser.role,
-        isActive: editingUser.isActive,
+        ...(editingSelf ? {} : { role: editingUser.role, isActive: editingUser.isActive }),
       },
     });
   };
@@ -185,30 +163,6 @@ export default function UserManagementPage() {
           <p className="text-muted-foreground">Manage all users, club members, and permissions</p>
         </div>
       </div>
-
-      {/* Impersonation Banner */}
-      {currentUser?.role === 'full_member' && (
-        <Card className="mb-6 border-orange-500 bg-orange-50 dark:bg-orange-950">
-          <CardContent className="pt-6">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <Eye className="h-5 w-5 text-orange-600" />
-                <div>
-                  <p className="font-medium text-orange-900 dark:text-orange-100">
-                    Impersonation Mode Active
-                  </p>
-                  <p className="text-sm text-orange-700 dark:text-orange-300">
-                    You are viewing the app as another user
-                  </p>
-                </div>
-              </div>
-              <Button onClick={stopImpersonation} variant="outline" size="sm">
-                Exit Impersonation
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       <Card>
         <CardHeader>
@@ -309,7 +263,8 @@ export default function UserManagementPage() {
                             >
                               <Edit className="h-4 w-4" />
                             </Button>
-                            {user.type === "user" && user.id !== currentUser?.id && (
+                            {/* Other admins and disabled accounts cannot be impersonated (403 / 409). */}
+                            {user.type === "user" && user.id !== currentUser?.id && user.role !== "admin" && user.isActive && (
                               <Button
                                 variant="outline"
                                 size="sm"
@@ -374,40 +329,48 @@ export default function UserManagementPage() {
                   }
                 />
               </div>
-              <div className="space-y-2">
-                <Label>Role</Label>
-                <Select
-                  value={editingUser.role}
-                  onValueChange={(value) =>
-                    setEditingUser({ ...editingUser, role: value })
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="full_member">Full Member</SelectItem>
-                    <SelectItem value="admin">Admin</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Status</Label>
-                <Select
-                  value={editingUser.isActive ? "active" : "disabled"}
-                  onValueChange={(value) =>
-                    setEditingUser({ ...editingUser, isActive: value === "active" })
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="active">Active</SelectItem>
-                    <SelectItem value="disabled">Disabled</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              {editingSelf ? (
+                <p className="text-sm text-muted-foreground">
+                  You can't change your own role or status. Another admin can.
+                </p>
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <Label>Role</Label>
+                    <Select
+                      value={editingUser.role}
+                      onValueChange={(value) =>
+                        setEditingUser({ ...editingUser, role: value })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="full_member">Full Member</SelectItem>
+                        <SelectItem value="admin">Admin</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Status</Label>
+                    <Select
+                      value={editingUser.isActive ? "active" : "disabled"}
+                      onValueChange={(value) =>
+                        setEditingUser({ ...editingUser, isActive: value === "active" })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="active">Active</SelectItem>
+                        <SelectItem value="disabled">Disabled</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              )}
             </div>
           )}
           <DialogFooter>

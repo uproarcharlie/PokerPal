@@ -2,8 +2,8 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
   allocatePayouts,
-  legacyPayouts,
   PAYOUT_ALGORITHM,
+  PAYOUT_STRUCTURE_KEYS,
   PAYOUT_STRUCTURE_LABELS,
   PAYOUT_STRUCTURES,
   parseCustomPayouts,
@@ -11,6 +11,7 @@ import {
   undistributedCents,
   type StandardPayoutKey,
 } from "./payouts";
+import { legacyPayouts } from "@test/helpers/legacy-money";
 
 /**
  * Today's payout tables, copied verbatim. The same literal appears three times at dddf8ad:
@@ -94,6 +95,13 @@ describe("payout tables", () => {
       top9: "Top 9 (30/20/15/12/9/6/4/2/2)",
       custom: "Custom (pays Standard 50/30/20 until set up)",
     });
+  });
+});
+
+describe("PAYOUT_STRUCTURE_KEYS (P2REV4-10)", () => {
+  it("is every table, in menu order, then custom: built from the tables, so the API and the form never miss one", () => {
+    expect(PAYOUT_STRUCTURE_KEYS).toEqual([...Object.keys(PAYOUT_STRUCTURES), "custom"]);
+    expect(PAYOUT_STRUCTURE_KEYS).toEqual(Object.keys(PAYOUT_STRUCTURE_LABELS));
   });
 });
 

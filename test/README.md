@@ -104,7 +104,7 @@ The guard itself (which statements a migration may contain) is unit-tested in `s
 ```ts
 import { beforeEach, expect, it } from "vitest";
 import { createClub, createTournamentScenario } from "../factories";
-import { anon, asJson, resetDb, signIn } from "../helpers";
+import { anon, resetDb, signIn } from "../helpers";
 
 beforeEach(resetDb);
 
@@ -117,9 +117,9 @@ it("lists a tournament's registrations", async () => {
   expect(response.body).toHaveLength(6);
 });
 
-it("returns a club exactly as stored", async () => {
+it("returns a club's public fields", async () => {
   const club = await createClub();
-  expect((await (await anon()).get(`/api/clubs/${club.id}`)).body).toEqual(asJson(club));
+  expect((await (await anon()).get(`/api/clubs/${club.id}`)).body).toMatchObject({ name: club.name, viewer: { canManage: false } });
 });
 
 it("lets admins list users", async () => {
@@ -161,14 +161,30 @@ it.fails("refuses an anonymous visitor (SEC-02)", async () => {
 - **Check why it fails.** Vitest passes an `it.fails` test whenever it throws, for any reason, so a typo or a broken setup step passes just as well as the bug does. When you write one, change it to `it` once and run it: it must fail on the intended assertion (for example "expected 201 to be 401"), not earlier. Then put `.fails` back.
 - **When the fix lands**, the test starts failing, because it no longer throws. Switch it to `it`, and delete the `"today: …"` test beside it, if any.
 
-### Rate limits are shared within a file
+Phase 2 fixed every bug the Phase 1 `it.fails` tests marked, so none are open today. Keep the convention for the next one.
 
-`getApp()` builds one app per test file, so every test in that file shares the app's in-memory rate limiters:
+### Authorization and public data
 
-- the global `/api` limiter: 500 requests per IP per 15 minutes, counting only successful responses;
-- `/api/upload/public`: 50 requests per IP per 15 minutes, counting failures too.
+Two files check the whole API at once, from the routes the running app registered (`test/helpers/routes.ts` reads Express's router stack and the guard each route mounts):
 
-A file that would go past either budget, or a test that checks a limit, should build an app of its own so its counters start at zero: `createApp({ env: loadEnv(process.env), sessionStore: new session.MemoryStore() })`, as `auth.api.test.ts` and `uploads.api.test.ts` do.
+- `authz-matrix.api.test.ts` has a row for every write and every guarded read: the guards it must mount, and the status each visitor gets (nobody signed in, a signed-in stranger, the club's manager and owner, a platform admin, and a manager whose account was deactivated). It fails for a write without a guard, for a public write not in the contract's list, and for any route without a row. **A new route needs a row there.**
+- `public-pii.api.test.ts` requests every GET route without a guard, as several visitors, in a club whose people all have emails, phones and accounts, and fails if a body has a forbidden key (`findForbiddenKeys`) or any of those values. **A new public read needs a probe there.**
+
+For a club with every kind of visitor signed in, use `clubWithStaff()` from `test/helpers/club-staff.ts` (with `VISITORS`, `agentFor`, `MANAGER_ROUTE` and `OWNER_ROUTE` for a table over them), or `signInClubRole(role, clubId)` for one visitor at an existing club.
+
+### Rate limits
+
+The limiters in `server/http/rate-limits.ts` (the global `/api` limiter, the sign-in and sign-up limiters, and the public-write, upload, staff-change and live limiters) pass every request through under `NODE_ENV=test`, so API tests are never throttled by them. A test that checks one builds an app of its own with them turned on and low limits, so its counters start at zero:
+
+```ts
+const app = await createApp({
+  env: loadEnv(process.env),
+  sessionStore: new session.MemoryStore(),
+  rateLimits: { enabled: true, limits: { globalApi: 2 } },
+});
+```
+
+`getApp()` builds one app per test file, so a test that turns limiters on always builds its own app, as above, and never shares counters with the rest of the file.
 
 ## Writing component tests
 
@@ -201,7 +217,7 @@ The webServer command, `test/e2e/start-server.ts`, does this:
 1. It runs the guard and holds the name of **`<test database>_e2e`** (`pokerpal_test_e2e` by default, or `TEST_DB_NAME` plus `_e2e`) for the whole run, as an api run holds its own. It recreates that database empty on the test database server. It is left in place afterwards for debugging.
 2. It empties the server's working directory, **`tmp/e2e/<e2e database>/`** (git-ignored). Local-disk uploads are written to and served from `uploads/` there, never the repo's own `uploads/`.
 3. `npm run build` runs. Set `E2E_SKIP_BUILD=1` to reuse an existing `dist/`; CI does this with the build job's output.
-4. `node dist/index.js` starts from that directory with `NODE_ENV=production` on **port 4710**, or `E2E_PORT`. Its boot migrations build the schema, as on a fresh deploy. Its R2 variables are set to empty (`test/e2e/server-env.ts`), so uploads stay on local disk even when the shell holds R2 credentials. Parallel runs still share `dist/`: build once, then run the others with `E2E_SKIP_BUILD=1`.
+4. `node dist/index.js` starts from that directory with `NODE_ENV=production` on **port 4710**, or `E2E_PORT`. Its boot migrations build the schema, as on a fresh deploy. Its R2 variables are set to empty and `UPLOAD_DIR` to `uploads` (`test/e2e/server-env.ts`), so uploads stay on local disk, in its working directory, even when the shell holds R2 credentials. Production keeps images on local disk only with `UPLOAD_DIR` set. Parallel runs still share `dist/`: build once, then run the others with `E2E_SKIP_BUILD=1`.
 5. Playwright waits for `/api/health`, then runs Chromium. Every request carries `X-Forwarded-Proto: https`, as Railway's proxy sends, so the production session cookie (`Secure`) is set over plain `http://localhost`. The browser has a fake camera (`--use-fake-device-for-media-stream`, `camera` permission granted). Traces are kept on the first retry.
 
 `test/e2e/smoke.spec.ts` checks that:
@@ -242,7 +258,9 @@ test/
               databases.ts (create/drop/migrate helpers), run-lock.ts (one run per database name),
               global-db.ts + api.ts (api project), dom.ts (web project)
   helpers/    getApp, anon, signIn, loginAs, resetDb, testDb, asJson, UNKNOWN_ID;
-              media.ts (fake camera stream); scratch-db.ts (empty databases, drizzle-kit push)
+              club-staff.ts (a club's visitors for authorization tests); routes.ts (the app's routes and guards);
+              images.ts (image fixtures); media.ts (fake camera stream); web.tsx (rendering for web tests);
+              scratch-db.ts (empty databases, drizzle-kit push)
   factories/  build*/create* and createTournamentScenario
   msw/        the MSW server for component tests
   api/        api tests (*.api.test.ts)
@@ -257,7 +275,7 @@ test/
 - **Typecheck**: `npm run typecheck`.
 - **Tests**: `vitest run --coverage` against a `postgres:16-alpine` service, with `TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/pokerpal_test`.
 - **Build**: `npm run build`. The resulting `dist/` is uploaded.
-- **Docker image**: builds the `Dockerfile` Railway deploys (alpine, production dependencies only, running as the `node` user), boots it against an empty `postgres:16-alpine` database until `/api/health` passes, then uploads a photo through `/api/upload/public`, which exercises sharp's alpine build and the `node` user writing `uploads/`. `test/unit/deploy-config.test.ts` checks the job is there.
+- **Docker image**: builds the `Dockerfile` Railway deploys (alpine, production dependencies only, running as the `node` user), boots it against an empty `postgres:16-alpine` database until `/api/health` passes, then uploads a photo through `/api/upload/public` (with `UPLOAD_DIR=/app/uploads`, since the job has no R2), which exercises sharp's alpine build and the `node` user writing `uploads/`. `test/unit/deploy-config.test.ts` checks the job is there.
 - **E2E**: runs after Tests and Build. It installs Chromium and runs Playwright on the built `dist/`, and uploads the report when it fails.
 
 Coverage is report-only, except `shared/domain/**` (the money code), which must keep 95% line and 90% branch coverage.

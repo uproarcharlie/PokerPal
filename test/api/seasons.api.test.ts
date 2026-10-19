@@ -1,15 +1,12 @@
 /**
- * Characterization of today's season API (server/routes.ts): list, read,
- * create, update and delete, and what a delete takes with it.
- *
- * Writes that are unauthenticated today are exercised as the club owner or an
- * admin, who keep access once they are locked down. `it.fails` tests state the
- * correct behaviour for a known hole, tagged with its audit finding id; switch
- * them to `it` when the hole is fixed.
+ * The season API (server/routes/seasons.ts): public list and read; create and update by the club's
+ * staff; delete by its owner or an admin (SEC-03); what a delete takes with it; open-ended seasons
+ * (DATA-22).
  */
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
-import { pointsAllocations, pointsSystems, seasons, tournaments } from "@shared/schema";
+import { auditLog, pointsAllocations, pointsSystems, seasons, tournaments } from "@shared/schema";
+import { findForbiddenKeys } from "@shared/api/public";
 import {
   createClub,
   createPointsAllocations,
@@ -19,10 +16,13 @@ import {
   createUser,
 } from "../factories";
 import { anon, asJson, resetDb, signIn, testDb, UNKNOWN_ID } from "../helpers";
+import { clubWithStaff } from "../helpers/club-staff";
 
 beforeEach(resetDb);
 
 const seasonRow = async (id: string) => (await testDb().select().from(seasons).where(eq(seasons.id, id)))[0];
+
+const UNAUTHENTICATED = { error: "Authentication required", code: "UNAUTHENTICATED" };
 
 /** A signed-in member and a club they own. */
 async function clubOwner() {
@@ -32,16 +32,16 @@ async function clubOwner() {
 }
 
 describe("GET /api/seasons", () => {
-  it("lists every season of every club when no clubId is given", async () => {
+  it("lists every season of every club, oldest first, when no clubId is given", async () => {
     const [clubA, clubB] = [await createClub(), await createClub()];
-    const spring = await createSeason({ clubId: clubA.id, name: "A Spring" });
-    const ongoing = await createSeason({ clubId: clubB.id, name: "B Ongoing", endDate: null, isActive: false });
+    const ongoing = await createSeason({ clubId: clubB.id, name: "B Ongoing", endDate: null, isActive: false, createdAt: new Date("2026-01-01") });
+    const spring = await createSeason({ clubId: clubA.id, name: "A Spring", createdAt: new Date("2026-02-01") });
 
     const response = await (await anon()).get("/api/seasons");
 
     expect(response.status).toBe(200);
-    const listed = [...(response.body as Array<{ name: string }>)].sort((a, b) => a.name.localeCompare(b.name));
-    expect(listed).toEqual([asJson(spring), asJson(ongoing)]);
+    expect(response.body).toEqual([asJson(ongoing), asJson(spring)]);
+    expect(findForbiddenKeys(response.body)).toEqual([]);
   });
 
   it("lists only that club's seasons when given ?clubId=", async () => {
@@ -55,13 +55,16 @@ describe("GET /api/seasons", () => {
     expect(response.body).toEqual([asJson(season)]);
   });
 
-  it("returns an empty list for an unknown club", async () => {
+  it("returns an empty list for an unknown club, and 400 for a malformed club id", async () => {
     await createSeason({ clubId: (await createClub()).id });
 
-    const response = await (await anon()).get("/api/seasons").query({ clubId: UNKNOWN_ID });
+    const unknown = await (await anon()).get("/api/seasons").query({ clubId: UNKNOWN_ID });
+    const malformed = await (await anon()).get("/api/seasons").query({ clubId: "not an id" });
 
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual([]);
+    expect(unknown.status).toBe(200);
+    expect(unknown.body).toEqual([]);
+    expect(malformed.status).toBe(400);
+    expect(malformed.body.code).toBe("VALIDATION");
   });
 });
 
@@ -79,18 +82,20 @@ describe("GET /api/seasons/:id", () => {
     const response = await (await anon()).get(`/api/seasons/${UNKNOWN_ID}`);
 
     expect(response.status).toBe(404);
-    expect(response.body).toEqual({ error: "Season not found" });
+    expect(response.body).toEqual({ error: "Season not found", code: "NOT_FOUND" });
   });
 });
 
 describe("POST /api/seasons", () => {
-  it("requires a signed-in user", async () => {
-    const club = await createClub();
+  it("requires a signed-in, active user", async () => {
+    const { club, deactivated } = await clubWithStaff();
 
     const response = await (await anon()).post("/api/seasons").send({ name: "2026", clubId: club.id, startDate: "2026-01-01" });
+    const fromDeactivated = await deactivated.agent.post("/api/seasons").send({ name: "2026", clubId: club.id, startDate: "2026-01-01" });
 
     expect(response.status).toBe(401);
-    expect(response.body).toEqual({ error: "Authentication required" });
+    expect(response.body).toEqual(UNAUTHENTICATED);
+    expect(fromDeactivated.status).toBe(401);
     expect(await testDb().select().from(seasons)).toEqual([]);
   });
 
@@ -133,13 +138,14 @@ describe("POST /api/seasons", () => {
     });
   });
 
-  it("rejects a body without a name, a club or a valid start date", async () => {
+  it("rejects a body without a name, a club or a valid start date, or ending before it starts", async () => {
     const { agent, club } = await clubOwner();
 
     for (const [body, field] of [
       [{ clubId: club.id, startDate: "2026-01-01" }, "name"],
       [{ name: "No club", startDate: "2026-01-01" }, "clubId"],
       [{ name: "Bad date", clubId: club.id, startDate: "not a date" }, "startDate"],
+      [{ name: "Backwards", clubId: club.id, startDate: "2026-06-01", endDate: "2026-01-01" }, "endDate"],
     ] as const) {
       const response = await agent.post("/api/seasons").send(body);
 
@@ -150,32 +156,38 @@ describe("POST /api/seasons", () => {
     expect(await testDb().select().from(seasons)).toEqual([]);
   });
 
-  it("answers 500 when the club does not exist", async () => {
+  it("answers 404 when the club does not exist", async () => {
     const { agent } = await signIn({ role: "admin" });
 
     const response = await agent.post("/api/seasons").send({ name: "Orphan", clubId: UNKNOWN_ID, startDate: "2026-01-01" });
 
-    expect(response.status).toBe(500);
-    expect(response.body).toEqual({ error: "Failed to create season" });
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: "Club not found", code: "NOT_FOUND" });
   });
 
-  it.fails("refuses a member who does not own the club (SEC-03)", async () => {
-    const { agent } = await signIn();
-    const club = await createClub({ ownerId: (await createUser()).id });
+  it("lets the club's managers and admins create one, and refuses anyone else (SEC-03)", async () => {
+    const { club, manager, admin, stranger } = await clubWithStaff();
+    const body = { name: "League", clubId: club.id, startDate: "2026-01-01" };
 
-    const response = await agent.post("/api/seasons").send({ name: "Planted", clubId: club.id, startDate: "2026-01-01" });
+    expect((await manager.agent.post("/api/seasons").send(body)).status).toBe(201);
+    expect((await admin.agent.post("/api/seasons").send(body)).status).toBe(201);
+    const refused = await stranger.agent.post("/api/seasons").send({ ...body, name: "Planted" });
 
-    expect(response.status).toBe(403);
-    expect(await testDb().select().from(seasons)).toEqual([]);
+    expect(refused.status).toBe(403);
+    expect(refused.body).toEqual({ error: "You don't have permission to manage this club", code: "FORBIDDEN" });
+    expect((await testDb().select().from(seasons)).map((s) => s.name)).toEqual(["League", "League"]);
   });
 
-  it.fails("saves a blank end date as no end date, not 1 January 1970 (DATA-22)", async () => {
+  it("saves a blank end date as no end date, not 1 January 1970 (DATA-22)", async () => {
     const { agent, club } = await clubOwner();
 
-    const response = await agent.post("/api/seasons").send({ name: "Open-ended", clubId: club.id, startDate: "2026-01-01", endDate: null });
+    for (const endDate of [null, ""]) {
+      const response = await agent.post("/api/seasons").send({ name: "Open-ended", clubId: club.id, startDate: "2026-01-01", endDate });
 
-    expect(response.status).toBe(201);
-    expect(response.body.endDate).toBeNull();
+      expect(response.status).toBe(201);
+      expect(response.body.endDate).toBeNull();
+      expect((await seasonRow(response.body.id)).endDate).toBeNull();
+    }
   });
 });
 
@@ -194,69 +206,98 @@ describe("PUT /api/seasons/:id", () => {
     expect(await seasonRow(season.id)).toEqual(expected);
   });
 
+  it("accepts the whole edit form, which resends the season's own club", async () => {
+    const { agent, club } = await clubOwner();
+    const season = await createSeason({ clubId: club.id });
+
+    const response = await agent.put(`/api/seasons/${season.id}`).send({
+      name: "Renamed",
+      clubId: club.id,
+      startDate: "2026-01-01T00:00:00.000Z",
+      endDate: null,
+      isActive: true,
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ name: "Renamed", clubId: club.id, endDate: null });
+  });
+
   it("answers 404 for an unknown season", async () => {
     const { agent } = await signIn({ role: "admin" });
 
     const response = await agent.put(`/api/seasons/${UNKNOWN_ID}`).send({ name: "Ghost" });
 
     expect(response.status).toBe(404);
-    expect(response.body).toEqual({ error: "Season not found" });
+    expect(response.body).toEqual({ error: "Season not found", code: "NOT_FOUND" });
   });
 
-  it("rejects an invalid body", async () => {
+  it("rejects an invalid body, including an end before the stored start", async () => {
     const { agent, club } = await clubOwner();
-    const season = await createSeason({ clubId: club.id });
+    const season = await createSeason({ clubId: club.id, startDate: new Date("2026-03-01T00:00:00Z") });
 
-    const response = await agent.put(`/api/seasons/${season.id}`).send({ startDate: "not a date" });
+    const badDate = await agent.put(`/api/seasons/${season.id}`).send({ startDate: "not a date" });
+    const backwards = await agent.put(`/api/seasons/${season.id}`).send({ endDate: "2026-02-01" });
 
-    expect(response.status).toBe(400);
-    expect(response.body.error).toBe("Invalid season data");
+    expect(badDate.status).toBe(400);
+    expect(badDate.body.error).toBe("Invalid season data");
+    expect(backwards.status).toBe(400);
+    expect(backwards.body.details).toEqual([expect.objectContaining({ path: ["endDate"] })]);
     expect(await seasonRow(season.id)).toEqual(season);
   });
 
-  it.fails("requires a signed-in user (SEC-03)", async () => {
-    const season = await createSeason({ clubId: (await createClub()).id });
+  it("requires a signed-in, active user (SEC-03)", async () => {
+    const { club, deactivated } = await clubWithStaff();
+    const season = await createSeason({ clubId: club.id });
 
     const response = await (await anon()).put(`/api/seasons/${season.id}`).send({ name: "Vandalised" });
+    const fromDeactivated = await deactivated.agent.put(`/api/seasons/${season.id}`).send({ name: "Vandalised" });
 
     expect(response.status).toBe(401);
+    expect(response.body).toEqual(UNAUTHENTICATED);
+    expect(fromDeactivated.status).toBe(401);
     expect(await seasonRow(season.id)).toEqual(season);
   });
 
-  it.fails("refuses a member who does not own the season's club (SEC-03)", async () => {
-    const { agent } = await signIn();
-    const season = await createSeason({ clubId: (await createClub({ ownerId: (await createUser()).id })).id });
+  it("lets the club's managers and admins update it, and refuses anyone else (SEC-03)", async () => {
+    const { club, manager, admin, stranger } = await clubWithStaff();
+    const season = await createSeason({ clubId: club.id });
 
-    const response = await agent.put(`/api/seasons/${season.id}`).send({ name: "Vandalised" });
+    expect((await manager.agent.put(`/api/seasons/${season.id}`).send({ name: "By manager" })).status).toBe(200);
+    expect((await admin.agent.put(`/api/seasons/${season.id}`).send({ name: "By admin" })).status).toBe(200);
+    const refused = await stranger.agent.put(`/api/seasons/${season.id}`).send({ name: "Vandalised" });
 
-    expect(response.status).toBe(403);
-    expect(await seasonRow(season.id)).toEqual(season);
+    expect(refused.status).toBe(403);
+    expect(refused.body).toEqual({ error: "You don't have permission to manage this season", code: "FORBIDDEN" });
+    expect((await seasonRow(season.id)).name).toBe("By admin");
   });
 
-  it.fails("does not move a season to another club (SEC-03)", async () => {
+  it("does not move a season to another club (SEC-03)", async () => {
     const { agent, club } = await clubOwner();
     const season = await createSeason({ clubId: club.id });
-    const otherClub = await createClub();
+    const otherClub = await createClub({ ownerId: (await createUser()).id });
 
-    await agent.put(`/api/seasons/${season.id}`).send({ clubId: otherClub.id });
+    const response = await agent.put(`/api/seasons/${season.id}`).send({ clubId: otherClub.id, name: "Moved" });
 
-    expect((await seasonRow(season.id)).clubId).toBe(club.id);
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: "A season cannot move to another club", code: "CANNOT_MOVE" });
+    expect(await seasonRow(season.id)).toEqual(season);
   });
 
-  it.fails("clears the end date when sent a blank one, instead of saving 1 January 1970 (DATA-22)", async () => {
+  it("clears the end date when sent a blank one, instead of saving 1 January 1970 (DATA-22)", async () => {
     const { agent, club } = await clubOwner();
     const season = await createSeason({ clubId: club.id });
 
     const response = await agent.put(`/api/seasons/${season.id}`).send({ endDate: null });
 
     expect(response.status).toBe(200);
+    expect(response.body.endDate).toBeNull();
     expect((await seasonRow(season.id)).endDate).toBeNull();
   });
 });
 
 describe("DELETE /api/seasons/:id", () => {
-  it("deletes the season with its points systems and allocations, and unlinks its tournaments", async () => {
-    const { agent, club } = await clubOwner();
+  it("deletes the season with its points systems and allocations, unlinks its tournaments, and audits it", async () => {
+    const { agent, club, user } = await clubOwner();
     const season = await createSeason({ clubId: club.id });
     const keptSeason = await createSeason({ clubId: club.id });
     const system = await createPointsSystem({ seasonId: season.id });
@@ -275,6 +316,9 @@ describe("DELETE /api/seasons/:id", () => {
     expect(await db.select().from(tournaments).where(eq(tournaments.id, tournament.id))).toEqual([
       { ...tournament, seasonId: null, pointsSystemId: null },
     ]);
+    expect(await db.select().from(auditLog).where(and(eq(auditLog.action, "season.delete"), eq(auditLog.targetId, season.id)))).toEqual([
+      expect.objectContaining({ actorUserId: user.id, targetType: "season", data: { name: season.name, clubId: club.id } }),
+    ]);
   });
 
   it("answers 404 for an unknown season", async () => {
@@ -283,27 +327,34 @@ describe("DELETE /api/seasons/:id", () => {
     const response = await agent.delete(`/api/seasons/${UNKNOWN_ID}`);
 
     expect(response.status).toBe(404);
-    expect(response.body).toEqual({ error: "Season not found" });
+    expect(response.body).toEqual({ error: "Season not found", code: "NOT_FOUND" });
   });
 
-  it.fails("requires a signed-in user (SEC-03)", async () => {
-    const season = await createSeason({ clubId: (await createClub()).id });
+  it("requires a signed-in, active user (SEC-03)", async () => {
+    const { club, deactivated } = await clubWithStaff();
+    const season = await createSeason({ clubId: club.id });
     await createPointsSystem({ seasonId: season.id });
 
     const response = await (await anon()).delete(`/api/seasons/${season.id}`);
+    const fromDeactivated = await deactivated.agent.delete(`/api/seasons/${season.id}`);
 
     expect(response.status).toBe(401);
+    expect(fromDeactivated.status).toBe(401);
     expect(await seasonRow(season.id)).toEqual(season);
     expect(await testDb().select().from(pointsSystems)).toHaveLength(1);
   });
 
-  it.fails("refuses a member who does not own the season's club (SEC-03)", async () => {
-    const { agent } = await signIn();
-    const season = await createSeason({ clubId: (await createClub({ ownerId: (await createUser()).id })).id });
+  it("refuses a stranger and a manager: only the owner or an admin deletes a season (SEC-03)", async () => {
+    const { club, manager, stranger, admin } = await clubWithStaff();
+    const season = await createSeason({ clubId: club.id });
 
-    const response = await agent.delete(`/api/seasons/${season.id}`);
+    for (const who of [stranger, manager]) {
+      const response = await who.agent.delete(`/api/seasons/${season.id}`);
 
-    expect(response.status).toBe(403);
+      expect(response.status).toBe(403);
+      expect(response.body).toEqual({ error: "Only the club's owner or an admin can do that", code: "FORBIDDEN" });
+    }
     expect(await seasonRow(season.id)).toEqual(season);
+    expect((await admin.agent.delete(`/api/seasons/${season.id}`)).status).toBe(204);
   });
 });
