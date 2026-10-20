@@ -4,7 +4,7 @@
  * the tournament's club.
  */
 import type { Request } from "express";
-import { STAFF_ONLY_ACTIVITY_TYPES } from "@shared/api/tournaments";
+import { STAFF_ONLY_ACTIVITY_TYPES } from "@shared/domain/tournaments";
 import { db } from "../db";
 import { canManageClub } from "../http/authz";
 import { listActivity } from "../repositories/activity";

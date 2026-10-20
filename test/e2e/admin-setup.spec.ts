@@ -17,13 +17,14 @@ test("a new account, made a platform admin, sets up a club, a season, a points s
 
   await test.step("sign up as a member", async () => {
     await page.goto("/register");
-    await page.getByLabel("Full Name *").fill("Ada Admin");
-    await page.getByLabel("Email *").fill(email);
-    await page.getByLabel("Password *", { exact: true }).fill(PASSWORD);
-    await page.getByLabel("Confirm Password *").fill(PASSWORD);
+    await page.getByLabel("Full Name*").fill("Ada Admin");
+    await page.getByLabel("Email*").fill(email);
+    await page.getByLabel("Password*", { exact: true }).fill(PASSWORD);
+    await page.getByLabel("Confirm Password*").fill(PASSWORD);
     await page.getByRole("button", { name: "Create Account" }).click();
 
-    await expect(page.getByRole("heading", { name: "Club Management" })).toBeVisible();
+    // Signing up lands on the staff home, the dashboard (P3REV5-CQ-13).
+    await expect(page.getByRole("heading", { name: "Dashboard", level: 1 })).toBeVisible();
     await expect(page.getByTestId("nav-users")).toHaveCount(0);
   });
 
@@ -35,6 +36,7 @@ test("a new account, made a platform admin, sets up a club, a season, a points s
   });
 
   await test.step("create a club", async () => {
+    await page.getByTestId("nav-clubs").click();
     await page.getByTestId("create-club-button").click();
     const form = page.getByRole("dialog", { name: "Create New Club" });
     await form.getByTestId("club-name").fill(clubName);
@@ -44,7 +46,7 @@ test("a new account, made a platform admin, sets up a club, a season, a points s
     await expect(toast(page, "Club created successfully!")).toBeVisible();
     await expect(form).toBeHidden();
     const card = page.locator('[data-testid^="club-card-"]').filter({ hasText: clubName });
-    await expect(card.getByRole("button", { name: "Settings" })).toBeVisible();
+    await expect(card.getByRole("link", { name: "Settings" })).toBeVisible();
   });
 
   await test.step("create a season for it", async () => {
@@ -60,7 +62,7 @@ test("a new account, made a platform admin, sets up a club, a season, a points s
     const card = page.locator('[data-testid^="season-card-"]').filter({ hasText: seasonName });
     await expect(card).toContainText(clubName);
     await expect(card).toContainText("Active Season");
-    await card.getByRole("button", { name: "Settings" }).click();
+    await card.getByRole("link", { name: "Settings" }).click();
     await expect(page.getByRole("heading", { name: `${seasonName} Settings` })).toBeVisible();
   });
 
@@ -107,7 +109,7 @@ test("a new account, made a platform admin, sets up a club, a season, a points s
 
   await test.step("the club's page lists the tournament, which opens its admin page", async () => {
     await page.getByTestId("nav-clubs").click();
-    await page.locator('[data-testid^="club-card-"]').filter({ hasText: clubName }).getByRole("button", { name: "View" }).click();
+    await page.locator('[data-testid^="club-card-"]').filter({ hasText: clubName }).getByRole("link", { name: "View" }).click();
     await expect(page.getByTestId("club-name")).toHaveText(clubName);
     await expect(page.getByTestId("total-tournaments")).toHaveText("1");
     await expect(page.getByTestId("active-seasons")).toHaveText("1");

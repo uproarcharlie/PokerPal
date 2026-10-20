@@ -113,3 +113,44 @@ export function registrationRemovalProblem(registration: RemovalInput, registrat
   if (registration.finalPosition != null) recorded.push("a finishing position");
   return recorded.length > 0 ? recorded.join(", ") : null;
 }
+
+/** A registration as the standings tables read it. A `PublicRegistration` fits as it is. */
+export interface StandingInput {
+  isEliminated?: boolean | null;
+  eliminationTime?: Date | string | null;
+  finalPosition?: number | null;
+}
+
+export interface Standing<T> {
+  registration: T;
+  /** The place to show; null for a player still in, whose place is not decided yet. */
+  place: number | null;
+}
+
+function displayOrder(a: StandingInput, b: StandingInput, completed: boolean): number {
+  if (completed) {
+    if (a.finalPosition && !b.finalPosition) return -1;
+    if (!a.finalPosition && b.finalPosition) return 1;
+    if (a.finalPosition && b.finalPosition) return a.finalPosition - b.finalPosition;
+  }
+  if (a.isEliminated && !b.isEliminated) return 1;
+  if (!a.isEliminated && b.isEliminated) return -1;
+  if (a.isEliminated && b.isEliminated) return eliminatedAt(b.eliminationTime) - eliminatedAt(a.eliminationTime);
+  return 0;
+}
+
+/**
+ * The standings as the TD's page and the players' pages both show them, best first, with each one's
+ * place. Once completed: by finishing position. Otherwise: everyone still in first (in the order given,
+ * registration order), with no place, since a row number would be a made-up rank; then everyone out,
+ * latest out first, so each one's row number is the place they finished in (PUB-25, P3REV5-CQ-01).
+ * Display only: finalize ranks with rankFinishers.
+ */
+export function standingsFor<T extends StandingInput>(registrations: readonly T[], completed: boolean): Standing<T>[] {
+  return [...registrations]
+    .sort((a, b) => displayOrder(a, b, completed))
+    .map((registration, index) => ({
+      registration,
+      place: completed ? (registration.finalPosition ?? null) : registration.isEliminated ? index + 1 : null,
+    }));
+}

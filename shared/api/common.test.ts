@@ -10,8 +10,8 @@ import {
   nullableDateSchema,
   optionalMoneySchema,
   optionalText,
-  safeHttpUrl,
 } from "./common";
+import { safeHttpUrl } from "../domain/urls";
 import { isApiErrorBody, isErrorCode } from "./errors";
 
 const ok = <T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, value: unknown): T => schema.parse(value);

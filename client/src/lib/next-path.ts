@@ -4,7 +4,7 @@
  * else, such as `//elsewhere.example` or a full URL, is ignored, so the parameter can never send
  * someone to another site.
  */
-export function nextPath(search: string, fallback = "/clubs"): string {
+export function nextPath(search: string, fallback: string): string {
   const next = new URLSearchParams(search).get("next");
   return next && /^\/(?![/\\])/.test(next) ? next : fallback;
 }

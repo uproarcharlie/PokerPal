@@ -2,6 +2,7 @@
 import { z } from "zod";
 import { PAYOUT_STRUCTURE_KEYS, parseCustomPayouts } from "../domain/payouts";
 import { HIGH_HAND_PRIZES_MAX } from "../domain/prize-pool";
+import { TOURNAMENT_STATUSES } from "../domain/tournaments";
 import {
   dateSchema,
   idSchema,
@@ -19,12 +20,8 @@ import {
 import type { PrizePoolSnapshot, PublicPrizePoolSnapshot } from "./finalize";
 import type { PublicTournament } from "./public";
 
-export const TOURNAMENT_STATUSES = ["scheduled", "registration", "in_progress", "completed", "cancelled"] as const;
-export type TournamentStatus = (typeof TOURNAMENT_STATUSES)[number];
+export type { ActivityEventType, TournamentStatus } from "../domain/tournaments";
 export const tournamentStatusSchema = z.enum(TOURNAMENT_STATUSES);
-
-/** No further registrations, counts, eliminations or money changes. Reached only via finalize or cancel. */
-export const CLOSED_STATUSES: readonly TournamentStatus[] = ["completed", "cancelled"];
 
 export { PAYOUT_STRUCTURE_KEYS };
 
@@ -131,6 +128,11 @@ export const updateTournamentSchema = z
     clubId: idSchema,
     status: tournamentStatusSchema,
     prizePoolLocked: z.boolean(),
+    /**
+     * The TD was told what a new price re-prices among the entries already recorded (409 ENTRIES_REPRICED,
+     * answered only once nothing else refuses the change).
+     */
+    repriceEntries: z.boolean(),
     manualPrizePool: z.preprocess(
       (value) => (typeof value === "string" && value.trim() === "" ? null : value),
       moneySchema.nullable(),
@@ -155,6 +157,16 @@ export const tournamentsQuerySchema = z.object({
 export type TournamentsQuery = z.infer<typeof tournamentsQuerySchema>;
 
 /** GET /api/tournaments: one SQL query, counts by aggregate (no per-tournament queries: perf-19). */
+/**
+ * GET /api/tournaments/counts: how many tournaments each club and each season has, and how many of a
+ * club's are active, so the Clubs and Seasons pages count them without downloading every tournament
+ * ever run (P3REV3-CQ-12). A club or season with none is left out (read it as 0).
+ */
+export interface TournamentCountsDto {
+  clubs: Record<string, { total: number; active: number }>;
+  seasons: Record<string, number>;
+}
+
 export type TournamentListItemDto = PublicTournament & {
   /**
    * Registrations with payment confirmed, for someone who runs the tournament's club; null for
@@ -180,33 +192,3 @@ export type TournamentDetailDto = WithViewer<
  * 50-player game with re-buys and add-ons logs about 300 entries), so the feed never loses its start.
  */
 export const activityQuerySchema = z.object({ limit: limitSchema(1000, 2000) });
-
-/**
- * Every activity_log.event_type the app writes, so writers, the staff-only filter and the client's
- * feed all name the same set (rows written before Phase 2 may hold other text, which the feed shows
- * plainly).
- */
-export const ACTIVITY_EVENT_TYPES = [
-  "registration",
-  "registration_removed",
-  "elimination",
-  "knockout_credited", // a claim credited for a player the TD had already marked out: not a second elimination
-  "player_restored",
-  "rebuy",
-  "addon",
-  "reentry",
-  "payment_confirmed",
-  "high_hand",
-  "status_change",
-  "prize_pool_locked",
-  "prize_pool_adjusted",
-  "rake_rates_changed",
-  "tournament_refinalized",
-] as const;
-export type ActivityEventType = (typeof ACTIVITY_EVENT_TYPES)[number];
-
-/**
- * Activity that is staff bookkeeping rather than part of the game: shown only to people who can
- * manage the tournament's club. Everyone else's feed leaves these entries out.
- */
-export const STAFF_ONLY_ACTIVITY_TYPES = ["payment_confirmed", "rake_rates_changed"] as const satisfies readonly ActivityEventType[];

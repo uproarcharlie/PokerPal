@@ -7,8 +7,9 @@ import {
   SheetFooter,
 } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
+import type { ReturnFocusProps } from "@/components/ui/return-focus";
 
-interface FormSlideoutProps {
+interface FormSlideoutProps extends Pick<ReturnFocusProps, "returnFocusTo"> {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
@@ -28,11 +29,13 @@ export function FormSlideout({
   footer,
   side = "right",
   className,
+  returnFocusTo,
 }: FormSlideoutProps) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent 
-        side={side} 
+      <SheetContent
+        side={side}
+        returnFocusTo={returnFocusTo}
         className={cn(
           "flex flex-col w-full sm:max-w-[540px] md:max-w-[640px] lg:max-w-[720px]",
           className

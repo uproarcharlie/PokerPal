@@ -4,6 +4,9 @@ import { defineConfig } from "vitest/config";
 
 const fromRoot = (relative: string) => fileURLToPath(new URL(relative, import.meta.url));
 
+/** How long one web test (or hook) may take before it fails. */
+export const WEB_TIMEOUT_MS = 20_000;
+
 // Numbers and dates are formatted in the host's locale, which ICU reads from these when a process starts.
 // Pinned here, before Vitest starts its workers, so no test result depends on the machine it runs on.
 process.env.LC_ALL = "en_US.UTF-8";
@@ -70,6 +73,11 @@ export default defineConfig({
           environment: "jsdom",
           include: ["client/src/**/*.test.{ts,tsx}"],
           setupFiles: ["test/setup/dom.ts"],
+          // A form test types and clicks through a whole dialog: well under a second alone, but several
+          // seconds when every worker is busy (a full run, CI's two cores with coverage). Vitest's 5 s
+          // default failed such tests at random (P3REV3-CQ-07).
+          hookTimeout: WEB_TIMEOUT_MS,
+          testTimeout: WEB_TIMEOUT_MS,
         },
       },
     ],

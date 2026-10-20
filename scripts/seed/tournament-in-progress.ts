@@ -68,7 +68,7 @@ function logSuccess(message: string) {
   log(`  ✓ ${message}`, colors.green);
 }
 
-function logData(label: string, data: any) {
+function logData(label: string, data: unknown) {
   log(`  ${label}: ${JSON.stringify(data, null, 2)}`, colors.yellow);
 }
 
@@ -278,7 +278,6 @@ async function runInProgressTest() {
 
     log("\nCurrent players still active:", colors.magenta);
     createdPlayers.forEach((p, i) => {
-      const reg = registrations[i];
       const rebuyText = i < 2 ? " (+1 rebuy)" : "";
       const addonText = i < 4 ? " (+addon)" : "";
       log(`  ${i + 1}. ${p.name}${rebuyText}${addonText}`, colors.magenta);

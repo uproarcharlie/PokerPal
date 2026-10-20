@@ -96,8 +96,11 @@ docs: update installation instructions
 
 ### File Organization
 
-- Place page components in `client/src/pages/`
-- Place reusable components in `client/src/components/`
+- Place a domain's pages, components, fetchers and hooks in `client/src/features/<domain>/` (`pages/`, `components/`, `api.ts`, `hooks.ts`)
+- Give each read one hook, in its own domain's `hooks.ts` (`useClub` in `features/clubs/hooks.ts`, `useSeasonLeaderboard` in `features/seasons/hooks.ts`); other features import it rather than writing their own
+- Build forms with `useForm({ resolver: formResolver(schema) })` from `client/src/lib/forms.ts` (one wording for zod's checks on every form), type whole numbers into text boxes (`inputMode="numeric"` with `typedNumber`), and put server refusals on their field with `showServerFieldErrors`
+- Keep staff code out of what public pages load: when public pages read a domain (clubs, seasons, tournaments), its changes and staff-only reads go in `staff-api.ts` / `staff-hooks.ts`, and plain constants a public page needs go in a zod-free `shared/domain/*` module rather than a `shared/api/*` schema file. `test/unit/public-bundle.test.ts` checks every page in the public and sign-in layouts
+- Place components used across domains in `client/src/components/shared/` (and images in `components/image/`)
 - Place API routes in `server/routes/<domain>.ts` (mounted by `server/routes/index.ts`)
 - Place data access in `server/repositories/<domain>.ts`
 - Define shared types in `shared/schema.ts`

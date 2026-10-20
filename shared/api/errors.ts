@@ -69,7 +69,10 @@ export const ERROR_CODES = [
   "COUNT_BELOW_ZERO",
   "HIGH_HAND_AWARDED",
   "HIGH_HAND_OVER_POOL",
-  "HIGH_HAND_ENTRIES", // 409, turning the high hand off while entries are in it (details.entrants)
+  "HIGH_HAND_ENTRIES", // 409, turning the high hand off (details.entrants) or removing its price (details.count) while entries are in it
+  "REBUYS_RECORDED", // 409, removing the re-buy price while re-buys are recorded (details.count)
+  "ADDONS_RECORDED", // 409, removing the add-on price while add-ons are recorded (details.count)
+  "ENTRIES_REPRICED", // 409, a new price for entries already recorded, sent without repriceEntries (details.changes)
   "REBUY_BEFORE_ELIMINATION", // 409, confirming a re-buy asked for before the player went out: say whether it puts them back in
   "REGISTRATION_IN_PLAY", // 409, removing an entry that already has results, counts or knockouts
   // tournaments, money, finalize

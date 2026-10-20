@@ -126,6 +126,19 @@ describe("POST /api/tournaments/:id/registrations", () => {
     expect(await registrationsOf(notOffered.id)).toEqual([]);
   });
 
+  it("refuses a high-hand entry for a high hand switched on with no price, which no screen offers (P3REV3-CQ-03)", async () => {
+    const club = await createClub();
+    const unpriced = await createTournament({ clubId: club.id, enableHighHand: true, highHandAmount: null });
+    const free = await createTournament({ clubId: club.id, enableHighHand: true, highHandAmount: "0.00" });
+    const player = await createPlayer();
+
+    for (const tournament of [unpriced, free]) {
+      const response = await signUp(tournament, { playerId: player.id, enteringHighHands: true });
+      expect(response.status).toBe(400);
+      expect(response.body).toMatchObject({ code: "HIGH_HAND_NOT_AVAILABLE" });
+    }
+  });
+
   it("never stores payment, money, counts or results sent by an anonymous sign-up (SEC-06 / security-09)", async () => {
     const tournament = await createTournament({ clubId: (await createClub()).id });
     const player = await createPlayer();

@@ -27,6 +27,18 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
 
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
   test:
     name: Unit, API and component tests
     runs-on: ubuntu-latest
@@ -139,7 +151,8 @@ jobs:
 
   e2e:
     name: End-to-end (production build)
-    needs: [test, build]
+    # Only once every other gate is green: typecheck, lint (`--max-warnings=0`), tests and the build.
+    needs: [quality, lint, test, build]
     runs-on: ubuntu-latest
     services:
       postgres:

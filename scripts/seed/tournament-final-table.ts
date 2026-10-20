@@ -67,7 +67,7 @@ function logSuccess(message: string) {
   log(`  ✓ ${message}`, colors.green);
 }
 
-function logData(label: string, data: any) {
+function logData(label: string, data: unknown) {
   log(`  ${label}: ${JSON.stringify(data, null, 2)}`, colors.yellow);
 }
 

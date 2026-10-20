@@ -9,13 +9,6 @@ import { describe, expect, it } from "vitest";
 
 const CLIENT = join(__dirname, "../../client/src");
 
-/** Unused today and due to go in the Phase 3 client clean-up; nothing may join this list. */
-const KNOWN_UNUSED = [
-  "components/modals/edit-club-modal.tsx",
-  "components/modals/edit-season-modal.tsx",
-  "components/modals/points-system-modal.tsx",
-];
-
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
     const path = join(dir, name);
@@ -37,14 +30,15 @@ describe("client components", () => {
     const sources = new Map(files.map((file) => [file, readFileSync(file, "utf8")]));
     const components = files.filter((file) => {
       const path = relative(CLIENT, file);
-      return /^(components|pages)\//.test(path) && !path.startsWith("components/ui/") && path.endsWith(".tsx");
+      return /^(components|pages|app|features)\//.test(path) && !path.startsWith("components/ui/") && path.endsWith(".tsx");
     });
 
     const unused = components
       .filter((file) => {
         const module = relative(CLIENT, file).replace(/\.tsx$/, "");
         const base = module.split("/").pop() as string;
-        const imports = new RegExp(`from ["'](?:@/${module}|\\.{1,2}/(?:[^"']*/)?${base})["']`);
+        // A static import, or the router's lazy `import("...")` of a page.
+        const imports = new RegExp(`(?:from |import\\()["'](?:@/${module}|\\.{1,2}/(?:[^"']*/)?${base})["']`);
         const names = exportedNames(sources.get(file) ?? "");
         return !Array.from(sources).some(([other, text]) => {
           if (other === file || !imports.test(text)) return false;
@@ -56,6 +50,6 @@ describe("client components", () => {
       .map((file) => relative(CLIENT, file))
       .sort();
 
-    expect(unused).toEqual(KNOWN_UNUSED);
+    expect(unused).toEqual([]);
   });
 });

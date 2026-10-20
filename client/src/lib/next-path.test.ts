@@ -3,13 +3,13 @@ import { nextPath, withNext } from "./next-path";
 
 describe("nextPath", () => {
   it("returns a path on this site", () => {
-    expect(nextPath("?next=/staff-invite")).toBe("/staff-invite");
-    expect(nextPath("?next=%2Fclubs%2Fc1%2Fsettings")).toBe("/clubs/c1/settings");
+    expect(nextPath("?next=/staff-invite", "/dashboard")).toBe("/staff-invite");
+    expect(nextPath("?next=%2Fclubs%2Fc1%2Fsettings", "/dashboard")).toBe("/clubs/c1/settings");
   });
 
   it("ignores anything that could leave the site, and an absent parameter", () => {
     for (const search of ["?next=//evil.example", "?next=/\\evil.example", "?next=https://evil.example", "?next=javascript:alert(1)", "", "?other=1"]) {
-      expect(nextPath(search)).toBe("/clubs");
+      expect(nextPath(search, "/dashboard")).toBe("/dashboard");
     }
   });
 

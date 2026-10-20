@@ -52,10 +52,11 @@ const useFormField = () => {
     throw new Error("useFormField should be used within <FormField>")
   }
 
-  const { id } = itemContext
+  const { id, required = false } = itemContext
 
   return {
     id,
+    required,
     name: fieldContext.name,
     formItemId: `${id}-form-item`,
     formDescriptionId: `${id}-form-item-description`,
@@ -66,20 +67,26 @@ const useFormField = () => {
 
 type FormItemContextValue = {
   id: string
+  required?: boolean
 }
 
 const FormItemContext = React.createContext<FormItemContextValue>(
   {} as FormItemContextValue
 )
 
+/**
+ * `required` marks the field as one the form cannot be sent without: its label ends in a "*" that
+ * screen readers skip, and its control says aria-required (WCAG 3.3.2, P3REV-MA-REQUIRED-STAR). A
+ * form with one says what the mark means (RequiredNote).
+ */
 const FormItem = React.forwardRef<
   HTMLDivElement,
-  React.HTMLAttributes<HTMLDivElement>
->(({ className, ...props }, ref) => {
+  React.HTMLAttributes<HTMLDivElement> & { required?: boolean }
+>(({ className, required, ...props }, ref) => {
   const id = React.useId()
 
   return (
-    <FormItemContext.Provider value={{ id }}>
+    <FormItemContext.Provider value={{ id, required }}>
       <div ref={ref} className={cn("space-y-2", className)} {...props} />
     </FormItemContext.Provider>
   )
@@ -89,8 +96,8 @@ FormItem.displayName = "FormItem"
 const FormLabel = React.forwardRef<
   React.ElementRef<typeof LabelPrimitive.Root>,
   React.ComponentPropsWithoutRef<typeof LabelPrimitive.Root>
->(({ className, ...props }, ref) => {
-  const { error, formItemId } = useFormField()
+>(({ className, children, ...props }, ref) => {
+  const { error, formItemId, required } = useFormField()
 
   return (
     <Label
@@ -98,7 +105,10 @@ const FormLabel = React.forwardRef<
       className={cn(error && "text-destructive", className)}
       htmlFor={formItemId}
       {...props}
-    />
+    >
+      {children}
+      {required ? <span aria-hidden="true">*</span> : null}
+    </Label>
   )
 })
 FormLabel.displayName = "FormLabel"
@@ -107,12 +117,13 @@ const FormControl = React.forwardRef<
   React.ElementRef<typeof Slot>,
   React.ComponentPropsWithoutRef<typeof Slot>
 >(({ ...props }, ref) => {
-  const { error, formItemId, formDescriptionId, formMessageId } = useFormField()
+  const { error, formItemId, formDescriptionId, formMessageId, required } = useFormField()
 
   return (
     <Slot
       ref={ref}
       id={formItemId}
+      aria-required={required || undefined}
       aria-describedby={
         !error
           ? `${formDescriptionId}`

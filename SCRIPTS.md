@@ -140,9 +140,24 @@ npm run check
 
 ---
 
-## Testing Scripts
+## Lint and Test Scripts
 
-### `npm run test:tournament`
+- `npm run lint`: ESLint over the whole repo (`--max-warnings=0`, so a warning fails it)
+- `npm test`: every Vitest project. `npm run test:unit` (pure logic), `npm run test:api` (the API against a
+  local throwaway Postgres database whose name ends in `_test`), `npm run test:web` (React screens in jsdom)
+- `npm run test:e2e`: Playwright against the production build, including the axe-core accessibility checks
+  (`test/e2e/accessibility.spec.ts`: no serious or critical problem on the sign-in, public club and tournament,
+  QR sign-up and TD tournament pages, on a phone and a laptop)
+- Screenshots for a visual review: `TEST_DB_NAME=pokerpal_test_<you> SCREENSHOTS_DIR=<folder> NODE_ENV=test npx
+  playwright test -c test/e2e/screenshots/playwright.config.ts` builds a demo club on the e2e database and saves
+  the main pages (each tab) at 375×812 and 1280×800 as `<page>-<width>x<height>.png` (default folder `tmp/screenshots`)
+- `npm run verify`: type check, lint, tests and build, in that order
+
+---
+
+## Seed Scripts
+
+### `npm run seed:tournament`
 **Purpose:** Run complete tournament lifecycle integration test (keeps data)
 
 **What it does:**
@@ -166,7 +181,7 @@ npm run check
 
 **Example:**
 ```bash
-npm run test:tournament
+npm run seed:tournament
 ```
 
 **Output:**
@@ -191,11 +206,11 @@ npm run test:tournament
 
 ---
 
-### `npm run test:tournament:cleanup`
+### `npm run seed:tournament:cleanup`
 **Purpose:** Run complete tournament lifecycle integration test (deletes data after)
 
 **What it does:**
-- Same as `test:tournament` but with cleanup
+- Same as `seed:tournament` but with cleanup
 - Creates and executes a full tournament
 - Runs through all 16 stages
 - **DELETES all test data** at the end
@@ -209,11 +224,11 @@ npm run test:tournament
 
 **Example:**
 ```bash
-npm run test:tournament:cleanup
+npm run seed:tournament:cleanup
 ```
 
 **Output:**
-- Same detailed logs as `test:tournament`
+- Same detailed logs as `seed:tournament`
 - Additional cleanup logs at the end
 - ✓ Confirmation of data deletion
 
@@ -226,7 +241,7 @@ npm run test:tournament:cleanup
 
 ---
 
-### `npm run test:tournament:setup`
+### `npm run seed:tournament:setup`
 **Purpose:** Create tournament at registration phase (stops before starting)
 
 **What it does:**
@@ -245,7 +260,7 @@ npm run test:tournament:cleanup
 
 **Example:**
 ```bash
-npm run test:tournament:setup
+npm run seed:tournament:setup
 ```
 
 **What gets created:**
@@ -266,7 +281,7 @@ npm run test:tournament:setup
 
 ---
 
-### `npm run test:tournament:active`
+### `npm run seed:tournament:active`
 **Purpose:** Create tournament in-progress (ready for eliminations)
 
 **What it does:**
@@ -287,7 +302,7 @@ npm run test:tournament:setup
 
 **Example:**
 ```bash
-npm run test:tournament:active
+npm run seed:tournament:active
 ```
 
 **What gets created:**
@@ -312,7 +327,7 @@ npm run test:tournament:active
 
 ---
 
-### `npm run test:tournament:final`
+### `npm run seed:tournament:final`
 **Purpose:** Create tournament at final table (4 players remaining)
 
 **What it does:**
@@ -332,7 +347,7 @@ npm run test:tournament:active
 
 **Example:**
 ```bash
-npm run test:tournament:final
+npm run seed:tournament:final
 ```
 
 **What gets created:**
@@ -408,10 +423,10 @@ npm run start
 ### Testing Workflow
 ```bash
 # Run integration test (keeps data)
-npm run test:tournament
+npm run seed:tournament
 
 # Or run with cleanup
-npm run test:tournament:cleanup
+npm run seed:tournament:cleanup
 
 # Check types
 npm run check
@@ -424,7 +439,7 @@ npm run check
 npm run db:migrate
 
 # 3. Test with sample data
-npm run test:tournament
+npm run seed:tournament
 
 # 4. Verify types still work
 npm run check
@@ -438,7 +453,7 @@ npm run check
 1. `npm install` - Install dependencies
 2. Setup `.env` file
 3. `npm run db:migrate` - Create database schema
-4. `npm run test:tournament` - Generate sample data
+4. `npm run seed:tournament` - Generate sample data
 5. `npm run dev` - Start development
 
 ### Daily Development
@@ -449,7 +464,7 @@ npm run check
 
 ### Pre-Deployment
 1. `npm run check` - Verify types
-2. `npm run test:tournament:cleanup` - Integration test
+2. `npm run seed:tournament:cleanup` - Integration test
 3. `npm run build` - Build production bundle
 4. `npm run start` - Test production build
 
@@ -467,7 +482,7 @@ npm run check
 - ✓ User has CREATE permissions
 - ✓ The message names the file, line and rule the guard or Postgres rejected
 
-### `npm run test:tournament` fails
+### `npm run seed:tournament` fails
 - ✓ Database is accessible
 - ✓ No conflicting data with same names
 - ✓ Sufficient database permissions
@@ -498,11 +513,11 @@ npm run check
 | `npm run start` | Start production | - | - |
 | `npm run check` | Type check | - | - |
 | `npm run db:migrate` | Apply migrations | - | Yes |
-| `npm run test:tournament` | Full lifecycle test | Completed | ✅ Yes |
-| `npm run test:tournament:cleanup` | Full lifecycle test | Completed | ❌ No |
-| `npm run test:tournament:setup` | Registration phase test | Scheduled | ✅ Yes |
-| `npm run test:tournament:active` | Active tournament test | In Progress | ✅ Yes |
-| `npm run test:tournament:final` | Final table test | Final Table | ✅ Yes |
+| `npm run seed:tournament` | Full lifecycle test | Completed | ✅ Yes |
+| `npm run seed:tournament:cleanup` | Full lifecycle test | Completed | ❌ No |
+| `npm run seed:tournament:setup` | Registration phase test | Scheduled | ✅ Yes |
+| `npm run seed:tournament:active` | Active tournament test | In Progress | ✅ Yes |
+| `npm run seed:tournament:final` | Final table test | Final Table | ✅ Yes |
 
 ### Test Script Stages
 
@@ -517,7 +532,7 @@ npm run check
 
 ### What Each Test Creates
 
-#### 🎯 `test:tournament:setup` - Registration Phase
+#### 🎯 `seed:tournament:setup` - Registration Phase
 **Status:** scheduled
 **Created:**
 - 1 Club ("Setup Test Club")
@@ -537,7 +552,7 @@ npm run check
 
 ---
 
-#### 🎯 `test:tournament:active` - Tournament Running
+#### 🎯 `seed:tournament:active` - Tournament Running
 **Status:** in_progress
 **Created:**
 - 1 Club ("In-Progress Test Club")
@@ -561,7 +576,7 @@ npm run check
 
 ---
 
-#### 🎯 `test:tournament:final` - Final Table
+#### 🎯 `seed:tournament:final` - Final Table
 **Status:** in_progress (final table)
 **Created:**
 - 1 Club ("Final Table Test Club")
@@ -588,7 +603,7 @@ npm run check
 
 ---
 
-#### 🎯 `test:tournament` - Complete Lifecycle
+#### 🎯 `seed:tournament` - Complete Lifecycle
 **Status:** completed
 **Created:**
 - 1 Club ("Test Poker Club")
@@ -631,10 +646,10 @@ npm run check
 
 ---
 
-#### 🎯 `test:tournament:cleanup` - Complete with Cleanup
+#### 🎯 `seed:tournament:cleanup` - Complete with Cleanup
 **Status:** completed (then deleted)
 **Created:**
-- Same as `test:tournament` above
+- Same as `seed:tournament` above
 - Runs through all 16 steps
 - **Then deletes all test data**
 
@@ -660,21 +675,21 @@ npm run check
 
 | Working On | Use This Script |
 |------------|----------------|
-| Tournament creation UI | `test:tournament:setup` |
-| Registration flow | `test:tournament:setup` |
-| Payment confirmation | `test:tournament:setup` |
-| Starting tournaments | `test:tournament:setup` |
-| Player eliminations | `test:tournament:active` |
-| Knockout tracking | `test:tournament:active` |
-| Rebuys/addons | `test:tournament:active` |
-| High hand features | `test:tournament:active` or `final` |
-| Final table logic | `test:tournament:final` |
-| Prize distribution | `test:tournament:final` |
-| Points calculation | `test:tournament:final` |
-| Completion flow | `test:tournament:final` |
-| Full system test | `test:tournament` |
-| Demo data | `test:tournament` |
-| CI/CD pipeline | `test:tournament:cleanup` |
+| Tournament creation UI | `seed:tournament:setup` |
+| Registration flow | `seed:tournament:setup` |
+| Payment confirmation | `seed:tournament:setup` |
+| Starting tournaments | `seed:tournament:setup` |
+| Player eliminations | `seed:tournament:active` |
+| Knockout tracking | `seed:tournament:active` |
+| Rebuys/addons | `seed:tournament:active` |
+| High hand features | `seed:tournament:active` or `final` |
+| Final table logic | `seed:tournament:final` |
+| Prize distribution | `seed:tournament:final` |
+| Points calculation | `seed:tournament:final` |
+| Completion flow | `seed:tournament:final` |
+| Full system test | `seed:tournament` |
+| Demo data | `seed:tournament` |
+| CI/CD pipeline | `seed:tournament:cleanup` |
 
 ---
 
@@ -684,10 +699,10 @@ You can run tests sequentially to create multiple tournaments at different stage
 
 ```bash
 # Create tournaments at each stage
-npm run test:tournament:setup
-npm run test:tournament:active
-npm run test:tournament:final
-npm run test:tournament
+npm run seed:tournament:setup
+npm run seed:tournament:active
+npm run seed:tournament:final
+npm run seed:tournament
 
 # Now you have 4 tournaments in your database:
 # 1. Scheduled (ready for registration)

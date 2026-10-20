@@ -3,6 +3,7 @@ import {
   knockoutTargetsFor,
   maxRebuysMessage,
   offersAddons,
+  offersHighHand,
   offersRebuys,
   requestersFor,
   requestRefusal,
@@ -77,5 +78,14 @@ describe("requestRefusal", () => {
     });
     expect(requestRefusal({ ...open, maxRebuys: null }, { isEliminated: false, rebuys: 50 }, "rebuy")).toBeNull();
     expect(maxRebuysMessage(1)).toBe("This tournament allows at most 1 re-buy per player");
+  });
+});
+
+describe("offersHighHand (P3REV5-CQ-02)", () => {
+  it("is a high hand switched on with an entry fee: a stored $0 fee is none", () => {
+    expect(offersHighHand({ enableHighHand: true, highHandAmount: "5.00" })).toBe(true);
+    expect(offersHighHand({ enableHighHand: true, highHandAmount: "0.00" })).toBe(false);
+    expect(offersHighHand({ enableHighHand: false, highHandAmount: "5.00" })).toBe(false);
+    expect(offersHighHand({ enableHighHand: null, highHandAmount: null })).toBe(false);
   });
 });

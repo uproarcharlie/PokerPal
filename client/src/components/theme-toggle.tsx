@@ -1,54 +1,20 @@
 import { Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useEffect, useState } from "react";
+import { useTheme } from "@/app/theme";
 
+/**
+ * The staff screens' light/dark switch; the ThemeController applies and remembers the choice. Its
+ * name is what it says ("Dark Mode" switches to dark), so speech and the screen agree.
+ */
 export function ThemeToggle() {
-  const [theme, setTheme] = useState<"light" | "dark">("light");
-
-  useEffect(() => {
-    // Check if user has a saved preference
-    const savedTheme = localStorage.getItem("theme") as "light" | "dark" | null;
-    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-
-    const initialTheme = savedTheme || (prefersDark ? "dark" : "light");
-    setTheme(initialTheme);
-
-    if (initialTheme === "dark") {
-      document.documentElement.classList.add("dark");
-    }
-  }, []);
-
-  const toggleTheme = () => {
-    const newTheme = theme === "light" ? "dark" : "light";
-    setTheme(newTheme);
-    localStorage.setItem("theme", newTheme);
-
-    if (newTheme === "dark") {
-      document.documentElement.classList.add("dark");
-    } else {
-      document.documentElement.classList.remove("dark");
-    }
-  };
+  const { preference, setPreference } = useTheme();
+  const next = preference === "light" ? "dark" : "light";
+  const Icon = next === "dark" ? Moon : Sun;
 
   return (
-    <Button
-      variant="ghost"
-      size="sm"
-      onClick={toggleTheme}
-      className="w-full justify-start"
-      aria-label="Toggle theme"
-    >
-      {theme === "light" ? (
-        <>
-          <Moon className="w-4 h-4 mr-3" />
-          <span>Dark Mode</span>
-        </>
-      ) : (
-        <>
-          <Sun className="w-4 h-4 mr-3" />
-          <span>Light Mode</span>
-        </>
-      )}
+    <Button variant="ghost" size="sm" onClick={() => setPreference(next)} className="w-full justify-start">
+      <Icon className="mr-3 h-4 w-4" aria-hidden="true" />
+      <span>{next === "dark" ? "Dark Mode" : "Light Mode"}</span>
     </Button>
   );
 }

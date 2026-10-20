@@ -97,7 +97,11 @@ The application will be available at `http://localhost:5000`
 - `npm run dev` - Start development server with hot reload
 - `npm run build` - Build for production
 - `npm run start` - Start production server
-- `npm run check` - Run TypeScript type checking
+- `npm run check` / `npm run typecheck` - Run TypeScript type checking
+- `npm run lint` - ESLint (TypeScript, React hooks, accessibility); warnings fail
+- `npm test` - Every Vitest project; `npm run test:unit`, `test:api` (real local Postgres) and `test:web` (jsdom) run one
+- `npm run test:e2e` - Playwright against the production build
+- `npm run verify` - Type check, lint, tests and build, as CI runs them
 - `npm run db:migrate` - Apply the database migrations (the server also does this on every start)
 
 ## Project Structure
@@ -105,18 +109,24 @@ The application will be available at `http://localhost:5000`
 ```
 .
 ├── client/                 # Frontend React application
-│   ├── src/
-│   │   ├── pages/         # Page components
-│   │   ├── components/    # Reusable UI components
-│   │   └── lib/           # Utilities and configurations
+│   └── src/
+│       ├── app/           # Router (lazy pages and staff layout), routes, providers, theme, layouts, error boundaries
+│       ├── features/      # One folder per domain: api.ts, hooks.ts (+ staff-api.ts, staff-hooks.ts), components/, pages/
+│       ├── components/    # ui/ (shadcn), shared/ (page header, query states…), image/, auth/, layout/
+│       └── lib/           # Typed API client + query keys, formatting, forms
 ├── server/                # Backend Express application
 │   ├── index.ts          # Server entry point
 │   ├── app.ts            # Express app (middleware + routes)
 │   ├── routes/           # API routes, one module per domain
+│   ├── services/         # Business logic and transactions
 │   ├── repositories/     # Database operations, one module per domain
 │   └── vite.ts           # Vite middleware
-├── shared/               # Shared types and schemas
-│   └── schema.ts         # Drizzle database schema
+├── shared/               # Code used by both client and server
+│   ├── schema.ts         # Drizzle database schema (server only at runtime)
+│   ├── api/              # Request schemas (zod) and response types, per domain
+│   └── domain/           # Pure logic: money, payouts, standings, points
+├── migrations/           # SQL applied at boot (additive only)
+├── test/                 # Test setup, helpers, API, unit and e2e suites
 └── package.json
 ```
 
@@ -212,6 +222,7 @@ Every endpoint is under `/api` and answers JSON. Errors are `{ "error": "<senten
 | PUT | `/api/players/:id` | staff of the player's home club | Edit a player |
 | GET | `/api/public/tournaments/:id/players?q=` | anyone | Name search for the QR register page (the club's players; its staff also find players from other clubs) |
 | GET | `/api/tournaments`, `/api/tournaments/:id` | anyone | Tournaments (filters `clubId`, `seasonId`, `status`, `upcoming=true` (scheduled or open, starting no more than 12 hours ago), `limit`); paid counts and finalize warnings only for your own clubs |
+| GET | `/api/tournaments/counts` | anyone | Tournaments per club (all, and active) and per season |
 | POST | `/api/tournaments` | staff | Create a tournament (30 per account and 60 per address per hour; at most 100 upcoming per club) |
 | PUT | `/api/tournaments/:id` | staff | Edit, change status, lock the pool, set a manual pool or AP rates (the same rules as the prize-pool endpoints) |
 | DELETE | `/api/tournaments/:id` | owner | Delete a tournament (staff can cancel instead) |

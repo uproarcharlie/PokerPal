@@ -8,12 +8,14 @@ import type { Request } from "express";
 import {
   MAX_UPCOMING_TOURNAMENTS_PER_CLUB,
   type CreateTournamentInput,
+  type TournamentCountsDto,
   type TournamentsQuery,
   type TournamentStatus,
   type UpdateTournamentInput,
 } from "@shared/api/tournaments";
-import { isAmountSet, toCents } from "@shared/domain/money";
+import { formatMoney, isAmountSet, toCents } from "@shared/domain/money";
 import { computePrizePool, rakeLabel } from "@shared/domain/prize-pool";
+import { isActiveStatus } from "@shared/domain/tournaments";
 import { RAKE_RATE_KEYS, type RakeAmountKey, type RakeRates, type RakeTypeKey } from "@shared/domain/rake-rates";
 import type { Tournament } from "@shared/schema";
 import type { AppEnv } from "../config/env";
@@ -43,6 +45,21 @@ export async function requireTournament(id: string): Promise<Tournament> {
   const tournament = await tournamentsRepo.getTournament(db, id);
   if (!tournament) throw notFound("Tournament not found");
   return tournament;
+}
+
+/**
+ * GET /api/tournaments/counts: every club's tournaments (all, and the active ones) and every season's,
+ * in one GROUP BY. Public, as the list it counts is (P3REV3-CQ-12).
+ */
+export async function tournamentCounts(): Promise<TournamentCountsDto> {
+  const counts: TournamentCountsDto = { clubs: {}, seasons: {} };
+  for (const { clubId, seasonId, status, count } of await tournamentsRepo.countTournamentsByClubSeasonAndStatus(db)) {
+    const club = (counts.clubs[clubId] ??= { total: 0, active: 0 });
+    club.total += count;
+    if (isActiveStatus(status)) club.active += count;
+    if (seasonId) counts.seasons[seasonId] = (counts.seasons[seasonId] ?? 0) + count;
+  }
+  return counts;
 }
 
 /** GET /api/tournaments. Who has paid is counted only for the viewer's own clubs (P2REV0-SEC-04). */
@@ -205,13 +222,75 @@ function assertNoHighHandEntrants(registrations: readonly { enteringHighHands: b
   throw conflict("HIGH_HAND_ENTRIES", `${who} entered the high hand: take them out of it before turning it off`, { entrants });
 }
 
+/** Each entry price, the entries the pool counts at it, and the refusal for removing it while any are recorded. */
+const PRICED_PARTS = [
+  { price: "buyInAmount", count: "buyIns", one: "buy-in", many: "buy-ins", removed: null },
+  { price: "rebuyAmount", count: "rebuys", one: "re-buy", many: "re-buys", removed: "REBUYS_RECORDED" },
+  { price: "addonAmount", count: "addons", one: "add-on", many: "add-ons", removed: "ADDONS_RECORDED" },
+  { price: "highHandAmount", count: "highHandEntrants", one: "high-hand entry", many: "high-hand entries", removed: "HIGH_HAND_ENTRIES" },
+] as const;
+
+type PricedPart = (typeof PRICED_PARTS)[number];
+type Repricing = { field: PricedPart["price"]; count: number; fromCents: number; toCents: number };
+const entriesOf = (part: PricedPart, count: number) => `${count} ${count === 1 ? part.one : part.many}`;
+
+/**
+ * The pool counts every recorded entry at the tournament's current prices, so a new price re-prices
+ * the entries already taken: every screen, what the desk asks for and finalize's payouts move with it
+ * (P3REV0-PARITY-EDIT-REPRICE). Removing a price (null or $0) while its entries are recorded is
+ * refused here, confirmed or not (REBUYS_RECORDED, ADDONS_RECORDED, HIGH_HAND_ENTRIES: those entries
+ * would silently become $0). Returns every other change to a price with recorded entries: each needs
+ * the TD's confirmation (assertRepricingConfirmed).
+ */
+function repricedEntries(before: Tournament, after: Tournament, counts: Readonly<Record<PricedPart["count"], number>>): Repricing[] {
+  const changes: Repricing[] = [];
+  for (const part of PRICED_PARTS) {
+    const count = counts[part.count];
+    const from = toCents(before[part.price]);
+    const to = toCents(after[part.price]);
+    if (count === 0 || from === to) continue;
+    if (to === 0 && part.removed !== null) {
+      const recorded = `${entriesOf(part, count)} ${count === 1 ? "is" : "are"} recorded`;
+      throw conflict(
+        part.removed,
+        `${recorded}: take them off the players before removing the ${part.one} price. To stop taking more, lock the prize pool.`,
+        { field: part.price, count },
+      );
+    }
+    changes.push({ field: part.price, count, fromCents: from, toCents: to });
+  }
+  return changes;
+}
+
+/**
+ * 409 ENTRIES_REPRICED (details.changes) for a re-pricing the TD has not yet confirmed with
+ * `repriceEntries: true`, saying what it re-prices. Asked only once every refusal has passed, so the
+ * TD is never asked to confirm a change that would then be refused anyway (HIGH_HAND_AWARDED,
+ * AP_EXCEEDS_GROSS, …).
+ */
+function assertRepricingConfirmed(changes: readonly Repricing[], confirmed: boolean): void {
+  if (changes.length === 0 || confirmed) return;
+  const list = changes.map((change) => {
+    const part = PRICED_PARTS.find((candidate) => candidate.price === change.field) as PricedPart;
+    return `${entriesOf(part, change.count)} from ${formatMoney(change.fromCents)} to ${formatMoney(change.toCents)}`;
+  });
+  const sentence = list.length === 1 ? list[0] : `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`;
+  throw conflict(
+    "ENTRIES_REPRICED",
+    `This re-prices what is already recorded: ${sentence}. The prize pool and what players owe change with it.`,
+    { changes },
+  );
+}
+
 /**
  * PUT /api/tournaments/:id. clubId may be resent but never changed; seasonId and pointsSystemId must
  * stay within the club; the status follows `assertStatusChange`; the pool settings are frozen once
  * the tournament is completed or cancelled. Locking the pool stamps prizePoolLockedAt; a manual
  * prize pool goes through the adjustment service and AP rates through the rates service, exactly as
- * their own endpoints do; new entry prices may not leave a manual AP total above the gross. A new
- * image must be one we stored. Status changes and locks are logged as before.
+ * their own endpoints do; a price with entries recorded at it is never removed (repricedEntries) and
+ * changes only with `repriceEntries`, asked last (assertRepricingConfirmed); new entry prices may not
+ * leave a manual AP total above the gross. A new image must be one we stored. Status changes and
+ * locks are logged as before.
  */
 export async function updateTournament(env: AppEnv, req: Request, id: string, input: UpdateTournamentInput): Promise<TournamentDetail> {
   let previousImageUrl: string | null = null;
@@ -219,7 +298,7 @@ export async function updateTournament(env: AppEnv, req: Request, id: string, in
     const current = await tournamentsRepo.lockTournamentForUpdate(tx, id);
     if (!current) throw notFound("Tournament not found");
     previousImageUrl = current.imageUrl;
-    const { clubId, status, prizePoolLocked, manualPrizePool, ...allConfig } = input;
+    const { clubId, status, prizePoolLocked, manualPrizePool, repriceEntries = false, ...allConfig } = input;
     const { rates, others: config } = splitRates(allConfig);
 
     if (clubId !== undefined && clubId !== current.clubId) {
@@ -273,11 +352,12 @@ export async function updateTournament(env: AppEnv, req: Request, id: string, in
     const ratesSent = Object.keys(rates).length > 0;
     const pricesSent = ENTRY_AMOUNTS.some((key) => config[key] !== undefined);
     const highHandSent = HIGH_HAND_FIELDS.some((key) => input[key] !== undefined);
-    if (ratesSent || highHandSent || manualPrizePool !== undefined || (pricesSent && isAmountSet(current.rakeOverride))) {
+    if (ratesSent || highHandSent || manualPrizePool !== undefined || pricesSent) {
       const context = await loadPrizePoolContext(tx, updated);
       if (input.enableHighHand === false && current.enableHighHand === true) {
         assertNoHighHandEntrants(context.registrations);
       }
+      const repriced = repricedEntries(current, updated, computePrizePool(current, context.registrations).counts);
       if (ratesSent) {
         const change = { changes: rates, keepOverride: false, clearOverrideWhenUnchanged: false, reason: null };
         updated = await applyRakeRates(tx, req, { ...context, tournament: updated }, change);
@@ -297,6 +377,7 @@ export async function updateTournament(env: AppEnv, req: Request, id: string, in
       }
       // The high-hand awards already made must still fit a changed high-hand pot (MONEY-P2REV-05).
       assertHighHandAwardsFit({ tournament: current, registrations: context.registrations }, { tournament: updated, registrations: context.registrations });
+      assertRepricingConfirmed(repriced, repriceEntries);
     }
     return updated;
   });

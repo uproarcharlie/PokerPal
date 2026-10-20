@@ -35,7 +35,6 @@ import {
   activityLog,
   type Club,
   type Season,
-  type PointsSystem,
   type Player,
   type Tournament,
   type TournamentRegistration,
@@ -75,7 +74,7 @@ function logSuccess(message: string) {
   log(`  ✓ ${message}`, colors.green);
 }
 
-function logData(label: string, data: any) {
+function logData(label: string, data: unknown) {
   log(`  ${label}: ${JSON.stringify(data, null, 2)}`, colors.yellow);
 }
 
@@ -89,10 +88,9 @@ async function runTournamentLifecycleTest() {
 
   let createdClub: Club | undefined;
   let createdSeason: Season | undefined;
-  let createdPointsSystem: PointsSystem;
-  let createdPlayers: Player[] = [];
+  const createdPlayers: Player[] = [];
   let createdTournament: Tournament | undefined;
-  let registrations: TournamentRegistration[] = [];
+  const registrations: TournamentRegistration[] = [];
 
   try {
     // Step 1: Create Club
@@ -130,7 +128,6 @@ async function runTournamentLifecycleTest() {
       participationPoints: 10,
       knockoutPoints: 5,
     }).returning();
-    createdPointsSystem = pointsSystem;
     logSuccess("Points system created");
     logData("Points System", {
       id: pointsSystem.id,

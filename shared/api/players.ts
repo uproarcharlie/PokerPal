@@ -9,7 +9,7 @@
  */
 import { z } from "zod";
 import type { Player } from "../schema";
-import { idSchema, imageUrlSchema, optionalText, requiredText, type Json } from "./common";
+import { idSchema, imageUrlSchema, requiredText, type Json } from "./common";
 import { phoneSchema } from "./auth";
 import type { PublicPlayer } from "./public";
 

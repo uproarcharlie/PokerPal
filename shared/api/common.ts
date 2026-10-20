@@ -6,6 +6,7 @@
  * form-only fields such as `enableRebuys`, and a stripped field can never be written.
  */
 import { z } from "zod";
+import { URL_MAX } from "../domain/urls";
 
 /** A value as `res.json` sends it: Dates become ISO strings, recursively. */
 export type Json<T> = T extends Date
@@ -66,8 +67,6 @@ export const dateSchema = z.union([z.string().trim().min(1), z.date()]).pipe(z.c
  */
 export const nullableDateSchema = z.preprocess(blankToNull, dateSchema.nullable()).optional();
 
-const URL_MAX = 2048;
-
 /** An absolute http(s) URL; blank or null stores NULL. javascript:, data: and the like are refused (SEC-08). */
 export const httpUrlSchema = z
   .preprocess(
@@ -81,24 +80,6 @@ export const httpUrlSchema = z
       .nullable(),
   )
   .optional();
-
-/**
- * `value` when it is an absolute http(s) URL (the rule httpUrlSchema applies on write), else null.
- * For links stored before that rule existed: a club's social links went straight into the column, so
- * a stored row can hold `javascript:` or `data:` (P2REV0-SEC-05). Every response and every page that
- * renders such a link passes it through this.
- */
-export function safeHttpUrl(value: string | null | undefined): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (trimmed.length === 0 || trimmed.length > URL_MAX || !/^https?:\/\//i.test(trimmed)) return null;
-  try {
-    const { protocol } = new URL(trimmed);
-    return protocol === "http:" || protocol === "https:" ? trimmed : null;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * An image reference as the upload endpoints return it: an https URL or a path under /uploads/.

@@ -124,8 +124,8 @@ test("a TD confirms payments, approves re-buys and add-ons, records knockouts an
     await page.goto(`/admin/actions/${tournament.id}`);
     const requests = page.getByRole("row").filter({ has: page.getByRole("button", { name: "Confirm", exact: true }) });
     await expect(requests).toHaveCount(2);
-    await expect(requests.filter({ hasText: ava })).toContainText("rebuy");
-    await expect(requests.filter({ hasText: ben })).toContainText("addon");
+    await expect(requests.filter({ hasText: ava })).toContainText("Re-buy");
+    await expect(requests.filter({ hasText: ben })).toContainText("Add-on");
     for (const remaining of [1, 0]) {
       await requests.first().getByRole("button", { name: "Confirm", exact: true }).click();
       await expect(requests).toHaveCount(remaining);
@@ -246,11 +246,14 @@ test("a TD confirms payments, approves re-buys and add-ons, records knockouts an
 
     await phone.getByRole("tab", { name: "Standings" }).click();
     await expect(phone.getByText("Final Results")).toBeVisible();
+    // A phone has no room for the Status, Knockouts and Points columns: the player's cell says them, under
+    // the name ("1st", "1 knockout", "105 pts"; no knockout badge for none), and only Prize is beside it (MA-05).
+    const finalResults = phone.getByRole("region", { name: "Final results", exact: true }).locator("table");
     const results = async () =>
-      (await tableRows(tableWithColumn(phone, "Knockouts"))).map(([, player, , knockouts, pointsAwarded, prize]) => ({
+      (await tableRows(finalResults)).map(([, player, prize]) => ({
         player: playerIn(player),
-        knockouts,
-        points: pointsAwarded,
+        knockouts: /(\d+) knockouts?\b/.exec(player)?.[1] ?? "0",
+        points: /([\d,]+) pts\b/.exec(player)?.[1],
         prize,
       }));
     const knockoutsBy = { [ben]: "1", [ava]: "1", [cal]: "0", [dee]: "0" };
@@ -260,11 +263,12 @@ test("a TD confirms payments, approves re-buys and add-ons, records knockouts an
 
     // This was the season's only game, so the season leaderboard is its points.
     await phone.getByRole("tab", { name: season.name }).click();
+    // On a phone the Played column is the player's cell's "1 tournament".
     const leaderboard = async () =>
-      (await tableRows(tableWithColumn(phone, "Rank"))).map(([rank, player, played, total]) => ({
+      (await tableRows(tableWithColumn(phone, "Rank"))).map(([rank, player, total]) => ({
         rank,
         player: playerIn(player),
-        played,
+        played: /(\d+) tournaments?\b/.exec(player)?.[1],
         points: total.replace(/\s*pts$/, ""),
       }));
     await expect

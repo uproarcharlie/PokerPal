@@ -6,7 +6,7 @@
 import type { Viewer } from "@shared/api/common";
 import { PUBLIC_SNAPSHOT_FIELDS } from "@shared/api/finalize";
 import { pickFields, PUBLIC_TOURNAMENT_FIELDS } from "@shared/api/public";
-import { CLOSED_STATUSES } from "@shared/api/tournaments";
+import { CLOSED_STATUSES } from "@shared/domain/tournaments";
 import { formatMoney, toCents, type MoneyInput } from "@shared/domain/money";
 import {
   computePrizePool,

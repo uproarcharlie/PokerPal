@@ -43,13 +43,6 @@ blob-report
 *.swp
 .DS_Store
 
-# Replit specific
-.replit
-.config
-.upm
-replit.nix
-.breakpoints
-
 # Temporary files
 tmp
 temp

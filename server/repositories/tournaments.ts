@@ -85,6 +85,21 @@ export async function listTournamentsWithCounts(ex: Executor, filter: Tournament
   return filter.limit === undefined ? await query : await query.limit(filter.limit);
 }
 
+/** How many tournaments there are of each club, season and status: one GROUP BY, for the counts. */
+export async function countTournamentsByClubSeasonAndStatus(
+  ex: Executor,
+): Promise<Array<{ clubId: string; seasonId: string | null; status: string; count: number }>> {
+  return ex
+    .select({
+      clubId: tournaments.clubId,
+      seasonId: tournaments.seasonId,
+      status: tournaments.status,
+      count: sql<number>`count(*)`.mapWith(Number),
+    })
+    .from(tournaments)
+    .groupBy(tournaments.clubId, tournaments.seasonId, tournaments.status);
+}
+
 /** A new tournament's columns, as the create service has checked them (its rates merged by mergeRakeRates). */
 export type NewTournamentRow = typeof tournaments.$inferInsert;
 

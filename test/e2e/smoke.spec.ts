@@ -2,7 +2,7 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import sharp from "sharp";
 import { guardEnv } from "../setup/db-guard";
 import { e2eDatabaseName } from "./database";
@@ -17,22 +17,14 @@ declare global {
 /** Console errors an anonymous visit is expected to log: the auth check is told "nobody" with a 401. */
 const EXPECTED_CONSOLE_ERRORS = [{ url: /\/api\/auth\/me$/, text: /status of 401/ }];
 
-/**
- * CSP violations production has today and this behaviour-neutral phase leaves
- * alone. client/src/index.css @imports Google Fonts, which the production
- * `style-src` blocks, so the live site falls back to system fonts. Self-hosting
- * the fonts (branding phase) fixes it; the test then fails until the entry is
- * deleted, so the allowance cannot outlive the bug.
- */
-const KNOWN_CSP_VIOLATIONS = [{ directive: "style-src-elem", blockedUri: /^https:\/\/fonts\.googleapis\.com\/css2\?/ }];
-
-test("the landing page loads with no console errors or CSP violations", async ({ page }) => {
+/** Collects a page's console errors, uncaught exceptions and CSP violations from its first script on. */
+async function watch(page: Page): Promise<{ consoleErrors: string[]; cspViolations: () => Promise<Window["__cspViolations"]> }> {
   const consoleErrors: string[] = [];
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     const { url } = message.location();
     const text = message.text();
-    // CSP reports are checked precisely below, from the securitypolicyviolation events.
+    // CSP reports are checked precisely, from the securitypolicyviolation events.
     const isCspReport = text.includes("Content Security Policy");
     const expected = EXPECTED_CONSOLE_ERRORS.some((entry) => entry.url.test(url) && entry.text.test(text));
     if (!expected && !isCspReport) consoleErrors.push(`${text} (${url})`);
@@ -44,6 +36,11 @@ test("the landing page loads with no console errors or CSP violations", async ({
       window.__cspViolations.push({ directive: event.effectiveDirective, blockedUri: event.blockedURI || "inline" });
     });
   });
+  return { consoleErrors, cspViolations: () => page.evaluate(() => window.__cspViolations) };
+}
+
+test("the landing page loads with no console errors or CSP violations, in the self-hosted Inter", async ({ page }) => {
+  const { consoleErrors, cspViolations } = await watch(page);
 
   const response = await page.goto("/");
 
@@ -51,15 +48,58 @@ test("the landing page loads with no console errors or CSP violations", async ({
   await expect(page).toHaveTitle(/LovePoker\.club/);
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Run Your Poker Club Like a Pro");
   await page.waitForLoadState("networkidle");
+  // The font comes from our own origin, so production's `font-src 'self'` lets it load.
+  const interLoaded = await page.evaluate(async () => {
+    await document.fonts.ready;
+    return Array.from(document.fonts).some((face) => face.family.includes("Inter Variable") && face.status === "loaded");
+  });
+  expect(interLoaded).toBe(true);
+  expect(await cspViolations()).toEqual([]);
+  expect(consoleErrors).toEqual([]);
+});
 
-  const violations = await page.evaluate(() => window.__cspViolations);
-  const isKnown = (violation: { directive: string; blockedUri: string }, known: (typeof KNOWN_CSP_VIOLATIONS)[number]) =>
-    violation.directive === known.directive && known.blockedUri.test(violation.blockedUri);
-  expect(violations.filter((violation) => !KNOWN_CSP_VIOLATIONS.some((known) => isKnown(violation, known)))).toEqual([]);
-  expect(
-    KNOWN_CSP_VIOLATIONS.filter((known) => !violations.some((violation) => isKnown(violation, known))),
-    "a known CSP violation no longer happens: delete it from KNOWN_CSP_VIOLATIONS",
-  ).toEqual([]);
+const PUBLIC_PAGES: Array<{ path: string; ready: (page: Page) => Locator }> = [
+  { path: "/home", ready: (page) => page.getByRole("heading", { name: "Upcoming Tournaments" }) },
+  { path: "/login", ready: (page) => page.getByRole("button", { name: "Sign In" }) },
+  { path: "/register", ready: (page) => page.getByLabel("Email") },
+  { path: "/privacy", ready: (page) => page.getByRole("heading", { level: 1, name: "Privacy" }) },
+  // An unknown address is a page of its own, not the sign-in screen (each page now loads on demand).
+  { path: "/no-such-page", ready: (page) => page.getByRole("heading", { name: "Page not found" }) },
+];
+
+for (const { path, ready } of PUBLIC_PAGES) {
+  test(`${path} loads on its own with no console errors or CSP violations`, async ({ page }) => {
+    const { consoleErrors, cspViolations } = await watch(page);
+
+    const response = await page.goto(path);
+
+    expect(response?.status()).toBe(200);
+    await expect(ready(page)).toBeVisible();
+    expect(new URL(page.url()).pathname).toBe(path);
+    await page.waitForLoadState("networkidle");
+    expect(await cspViolations()).toEqual([]);
+    expect(consoleErrors).toEqual([]);
+  });
+}
+
+test("a signed-in organiser's staff pages load in the sidebar layout with no console errors or CSP violations", async ({ page }) => {
+  const register = await page.request.post("/api/auth/register", {
+    data: { email: `e2e-staff-${Date.now()}@example.test`, password: "E2e-Sturdy-Pass1", name: "E2E Organiser" },
+  });
+  expect(register.status()).toBe(201);
+  const { consoleErrors, cspViolations } = await watch(page);
+
+  for (const [path, heading] of [
+    ["/clubs", "Club Management"],
+    ["/tournaments", "Tournaments"],
+    ["/settings", "Settings"],
+  ] as const) {
+    await page.goto(path);
+    await expect(page.getByRole("heading", { name: heading, exact: true }).first()).toBeVisible();
+    await expect(page.getByTestId("nav-clubs")).toBeVisible();
+  }
+  await page.waitForLoadState("networkidle");
+  expect(await cspViolations()).toEqual([]);
   expect(consoleErrors).toEqual([]);
 });
 

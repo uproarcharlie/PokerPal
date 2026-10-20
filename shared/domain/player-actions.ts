@@ -32,6 +32,15 @@ export function offersAddons(tournament: { addonAmount?: MoneyInput }): boolean 
   return toCents(tournament.addonAmount) > 0;
 }
 
+/**
+ * A tournament runs a high hand when it is switched on with an entry fee. These three are the one test
+ * of whether a part exists, on every screen (the TD's desk, the edit form, the public page) as on the
+ * server: a stored "0.00" price is not a part the tournament has (P3REV5-CQ-02).
+ */
+export function offersHighHand(tournament: { enableHighHand?: boolean | null; highHandAmount?: MoneyInput }): boolean {
+  return tournament.enableHighHand === true && toCents(tournament.highHandAmount) > 0;
+}
+
 export const PRIZE_POOL_LOCKED_MESSAGE = "Prize pool is locked. No rebuys or addons allowed.";
 
 export function maxRebuysMessage(max: number): string {

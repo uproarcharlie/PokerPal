@@ -1,51 +1,79 @@
 /**
- * Rendering for `web` tests: a fresh query client with the app's defaults, the real AuthProvider
- * (it asks GET /api/auth/me, which `mockSignedIn` / `mockSignedOut` answer through MSW), the toaster,
- * and a memory router so pages read their params as they do in the app.
+ * Rendering for `web` tests: the app's providers (AppProviders: query client, theme, the real
+ * AuthProvider, which asks GET /api/auth/me as `mockSignedIn` / `mockSignedOut` answer through MSW, and
+ * the toaster) with a fresh query client that never retries, and an in-memory URL so pages read their
+ * params and query string as they do in the app.
  */
-import type { ReactElement } from "react";
-import { act, render, renderHook, type RenderResult } from "@testing-library/react";
-import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
+import { useSyncExternalStore, type ReactElement } from "react";
+import { act, render, type RenderResult } from "@testing-library/react";
+import type { QueryClient } from "@tanstack/react-query";
 import { http, HttpResponse } from "msw";
 import { Route, Router } from "wouter";
-import { memoryLocation } from "wouter/memory-location";
-import { Toaster } from "@/components/ui/toaster";
-import { AuthProvider, type Impersonator } from "@/contexts/auth-context";
-import { useToast } from "@/hooks/use-toast";
-import { createQueryClient } from "@/lib/queryClient";
+import { AppProviders } from "@/app/providers";
+import type { Impersonator } from "@/contexts/auth-context";
+import { dismissToast } from "@/hooks/use-toast";
+import { createQueryClient } from "@/lib/api/query-client";
 import type { ErrorCode } from "@shared/api/errors";
 import { server } from "../msw/server";
 
 export interface RenderPageOptions {
-  /** The URL the page is shown at, e.g. "/register/t1". */
+  /** The URL the page is shown at, e.g. "/register/t1" or "/login?next=%2Fclubs". */
   path?: string;
   /** The route pattern the page is mounted under, e.g. "/register/:tournamentId". */
   route?: string;
 }
 
+/** The app's query defaults, except that a failed request fails at once instead of being retried. */
+export function createTestQueryClient(): QueryClient {
+  return createQueryClient({ queries: { retry: false } });
+}
+
 /** Toasts live in module state: close the last test's, so a new Toaster starts empty. */
 function dismissToasts(): void {
-  const { result, unmount } = renderHook(() => useToast());
-  act(() => result.current.dismiss());
-  unmount();
+  act(() => dismissToast());
+}
+
+/**
+ * A location for `<Router hook={…} searchHook={…}>` starting at `initial` ("/leaderboards?season=s1"):
+ * routes match the path alone and `useSearch()` reads the query, as in the browser.
+ */
+export function urlLocation(initial: string) {
+  let url = new URL(initial, "http://localhost");
+  const listeners = new Set<() => void>();
+  const subscribe = (listener: () => void) => {
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  };
+  const navigate = (to: string) => {
+    url = new URL(to, url);
+    listeners.forEach((listener) => listener());
+  };
+  return {
+    useLocation: (): [string, (to: string) => void] => [useSyncExternalStore(subscribe, () => url.pathname), navigate],
+    useSearch: () => useSyncExternalStore(subscribe, () => url.search.replace(/^\?/, "")),
+    /** The current path and query. */
+    href: () => `${url.pathname}${url.search}`,
+  };
 }
 
 export function renderWithApp(ui: ReactElement, { path = "/", route }: RenderPageOptions = {}): RenderResult & {
   queryClient: QueryClient;
+  /** The current path and query, e.g. "/login?next=%2Fclubs". */
   location: () => string;
 } {
   dismissToasts();
-  const queryClient = createQueryClient();
-  const memory = memoryLocation({ path, record: true });
+  const queryClient = createTestQueryClient();
+  const location = urlLocation(path);
   const result = render(
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <Router hook={memory.hook}>{route ? <Route path={route}>{ui}</Route> : ui}</Router>
-        <Toaster />
-      </AuthProvider>
-    </QueryClientProvider>,
+    <AppProviders queryClient={queryClient}>
+      <Router hook={location.useLocation} searchHook={location.useSearch}>
+        {route ? <Route path={route}>{ui}</Route> : ui}
+      </Router>
+    </AppProviders>,
   );
-  return { ...result, queryClient, location: () => memory.history.at(-1) ?? path };
+  return { ...result, queryClient, location: location.href };
 }
 
 export interface MockUser {

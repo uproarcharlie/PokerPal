@@ -3,7 +3,7 @@
  * server pays from (finalize, GET /api/tournaments/:id/prize-pool), so what a TD sees on the admin
  * page, players see on the public page and finalize pays are the same numbers.
  */
-import type { Cents } from "@shared/domain/money";
+import { formatMoney, type Cents } from "@shared/domain/money";
 import {
   computePrizePool,
   payoutsForDisplay,
@@ -39,10 +39,16 @@ export function tournamentMoney(
   return { breakdown, display, poolCents: settled ? display.totalCents : breakdown.net };
 }
 
-/** "1st", "2nd", "3rd", "4th", ..., "11th", "21st". */
-export function ordinal(position: number): string {
-  const mod100 = position % 100;
-  if (mod100 >= 11 && mod100 <= 13) return `${position}th`;
-  const suffix = { 1: "st", 2: "nd", 3: "rd" }[position % 10] ?? "th";
-  return `${position}${suffix}`;
+/**
+ * Why part of the pool is not paid out, in one wording for every screen that says so (the TD's and the
+ * players' prize structure, the paid pool): fewer players than paid places. Null when all of it is
+ * paid. `entrants` is how many players are entered (for a game still running).
+ */
+export function undistributedNote(display: Pick<PayoutDisplay, "source" | "undistributedCents">, entrants: number): string | null {
+  if (display.undistributedCents <= 0) return null;
+  const amount = formatMoney(display.undistributedCents);
+  return display.source === "live"
+    ? `Only ${entrants} ${entrants === 1 ? "player" : "players"}: ${amount} of the pool is not paid out unless more players enter.`
+    : `${amount} of the pool was not paid out: there were fewer players than paid places.`;
 }
+

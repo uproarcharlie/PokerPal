@@ -15,7 +15,7 @@ import type {
 import { pickFields, PUBLIC_REGISTRATION_FIELDS } from "@shared/api/public";
 import type { ActivityEventType } from "@shared/api/tournaments";
 import { centsToDecimalString, centsToDollars, formatMoney, toCents } from "@shared/domain/money";
-import { maxRebuysMessage, overRebuyLimit, PRIZE_POOL_LOCKED_MESSAGE } from "@shared/domain/player-actions";
+import { maxRebuysMessage, offersHighHand, overRebuyLimit, PRIZE_POOL_LOCKED_MESSAGE } from "@shared/domain/player-actions";
 import { registrationRemovalProblem } from "@shared/domain/standings";
 import {
   amountDueCents,
@@ -372,7 +372,8 @@ export async function registerPlayer(tournamentId: string, input: StaffRegistrat
     if (tournament.prizePoolLocked) {
       throw conflict("PRIZE_POOL_LOCKED", "Prize pool is locked. No new registrations allowed.");
     }
-    if (input.enteringHighHands && !tournament.enableHighHand) {
+    // Switched on with no price (or $0) is no high hand, as every screen shows it (P3REV3-CQ-03).
+    if (input.enteringHighHands && !offersHighHand(tournament)) {
       throw badRequest("High hands entry is not available for this tournament", "HIGH_HAND_NOT_AVAILABLE");
     }
     if (input.rebuys && overRebuyLimit(tournament, input.rebuys)) {
@@ -575,7 +576,7 @@ export async function updateRegistration(req: Request, registrationId: string, i
     if (added.rebuys > 0 && overRebuyLimit(tournament, input.rebuys ?? 0)) {
       throw maxRebuysReached(tournament.maxRebuys ?? 0);
     }
-    if (joinsHighHand && !tournament.enableHighHand) {
+    if (joinsHighHand && !offersHighHand(tournament)) {
       throw badRequest("High hands entry is not available for this tournament", "HIGH_HAND_NOT_AVAILABLE");
     }
     // Ticking or unticking an entry moves the high-hand pot, which the awards already made must still fit.

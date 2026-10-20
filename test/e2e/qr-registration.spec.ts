@@ -63,6 +63,18 @@ test("a player registers from the QR code on a phone: new with a selfie, then an
     const camera = page.getByRole("dialog", { name: "Take a photo" });
     const uploaded = page.waitForResponse((response) => response.url().endsWith("/api/images/player_avatar"));
     await camera.getByRole("button", { name: "Capture" }).click();
+    // Then the player frames it in the circle it is shown in, and the upload starts.
+    const framing = page.getByRole("dialog", { name: "Position your picture" });
+    // At zoom 1 the frame spans the picture's short side: what is kept is what the frame shows (IMG-REV3-01).
+    const frame = framing.locator(".reactEasyCrop_CropArea");
+    const picture = framing.locator(".reactEasyCrop_Image");
+    await expect
+      .poll(async () => {
+        const [box, image] = await Promise.all([frame.boundingBox(), picture.boundingBox()]);
+        return box && image ? Math.abs(Math.min(image.width, image.height) - box.height) : Number.POSITIVE_INFINITY;
+      })
+      .toBeLessThan(1.5);
+    await framing.getByRole("button", { name: "Use this" }).click();
 
     const response = await uploaded;
     expect(response.status()).toBe(201);
@@ -70,6 +82,8 @@ test("a player registers from the QR code on a phone: new with a selfie, then an
     expect(photoUrl).toMatch(/^\/uploads\/player_avatar\/[0-9a-f-]{36}\/\d+\.webp$/);
     await expect(camera).toBeHidden();
     await expect(page.getByAltText("Upload preview")).toBeVisible();
+    // Focus is back on the photo field, not thrown to the top of the page (MA-P3REV1-01).
+    await expect(page.locator(":focus")).toHaveText(/Retake|Change/);
     await expect(page.getByTestId("step2-next")).toHaveText("Continue");
   });
 
@@ -91,8 +105,10 @@ test("a player registers from the QR code on a phone: new with a selfie, then an
     await page.getByTestId("step1-next").click();
     await page.getByTestId("player-search").fill(token);
 
+    // Each match also shows the player's photo, or their initials.
     const matches = page.getByRole("list", { name: "Matching players" }).getByRole("button");
-    await expect(matches).toHaveText([regular.name, newcomer.name].sort());
+    await expect(matches).toContainText([regular.name, newcomer.name].sort());
+    await expect(matches).toHaveCount(2);
     await matches.filter({ hasText: regular.name }).click();
     await page.getByTestId("step2-next").click();
 
@@ -129,11 +145,15 @@ test("a player registers from the QR code on a phone: new with a selfie, then an
   await test.step("tonight's list has both players once, the newcomer with their photo", async () => {
     const registrations = await registrationsOf(request, tonight.id);
     expect(registrations.map((registration) => registration.player?.name).sort()).toEqual([regular.name, newcomer.name].sort());
-    expect(registrations.find((registration) => registration.player?.name === newcomer.name)?.player?.imageUrl).toBe(photoUrl);
+    const entry = registrations.find((registration) => registration.player?.name === newcomer.name);
+    expect(entry?.player?.imageUrl).toBe(photoUrl);
 
     await page.goto(`/tournament/${tonight.id}`);
     await page.getByRole("tab", { name: "Standings" }).click();
-    const avatar = page.getByRole("img", { name: newcomer.name });
+    // The photo sits beside the player's name, which labels the row (so the picture itself has no alt text).
+    const standing = page.getByTestId(`standing-player-${entry?.id}`);
+    await expect(standing).toContainText(newcomer.name);
+    const avatar = standing.locator("img");
     await expect(avatar).toHaveAttribute("src", photoUrl);
     await expect.poll(() => avatar.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
   });

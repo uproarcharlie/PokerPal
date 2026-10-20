@@ -80,7 +80,7 @@ test("a manager who accepted an invitation runs that club's tournament, and not 
 
     // Managers edit the club, but only the owner or an admin changes its staff.
     await managerPage.getByTestId(`settings-club-${club.id}`).click();
-    await expect(managerPage.getByRole("tab", { name: "Edit Profile" })).toBeVisible();
+    await expect(managerPage.getByRole("tab", { name: "Profile", exact: true })).toBeVisible();
     await expect(managerPage.getByRole("tab", { name: "Managers" })).toHaveCount(0);
 
     // A new tournament can go in the club they run, and only there.
@@ -136,6 +136,7 @@ test("a manager who accepted an invitation runs that club's tournament, and not 
 
   await test.step("once the owner removes them, the manager can no longer run the club", async () => {
     await page.getByRole("button", { name: `Remove ${manager.name}` }).click();
+    await page.getByRole("alertdialog", { name: `Remove ${manager.name}?` }).getByRole("button", { name: "Remove manager" }).click();
     await expect(toast(page, "Manager removed")).toBeVisible();
     await expect(page.getByTestId("no-managers")).toBeVisible();
 

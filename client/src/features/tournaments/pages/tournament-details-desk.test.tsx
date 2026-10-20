@@ -1,0 +1,766 @@
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { delay, http, HttpResponse } from "msw";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { server } from "@test/msw/server";
+import { apiError, mockSignedIn, renderWithApp } from "@test/helpers/web";
+import { clubDto, phoneLayout, recordBodies, registrationDto, screenWidth, tournamentDto } from "@test/helpers/f1-tournaments";
+import type { PublicRegistration } from "@shared/api/public";
+import type { TournamentDetailDto } from "@shared/api/tournaments";
+import { PODIUM } from "@/components/shared/podium";
+import { qk } from "@/lib/api/query-keys";
+import { LIVE_REFRESH_MS } from "@/lib/live-refresh";
+import TournamentDetailsPage from "./tournament-details";
+
+const field = [registrationDto("r1", "Ann", 2), registrationDto("r2", "Bob", 2), registrationDto("r3", "Cat", 1)];
+
+function mockDesk(tournament: Partial<TournamentDetailDto> = {}, registrations: PublicRegistration[] = field) {
+  server.use(
+    http.get("/api/tournaments/t1", () => HttpResponse.json(tournamentDto(tournament))),
+    http.get("/api/clubs/c1", () => HttpResponse.json(clubDto())),
+    http.get("/api/tournaments/t1/registrations", () => HttpResponse.json(registrations)),
+    http.get("/api/tournaments/t1/pending-actions", () => HttpResponse.json([])),
+  );
+}
+
+/** Records the bodies sent to PUT `path`, answering with the tournament or registration as it was. */
+function mockPut(path: string, answer: () => Response = () => HttpResponse.json(tournamentDto())) {
+  const sent = recordBodies();
+  server.use(
+    http.put(path, async ({ request }) => {
+      await sent.record(request);
+      return answer();
+    }),
+  );
+  return sent.bodies;
+}
+
+function renderDesk() {
+  const user = userEvent.setup();
+  const view = renderWithApp(<TournamentDetailsPage />, { path: "/admin/tournaments/t1", route: "/admin/tournaments/:id" });
+  return { user, ...view };
+}
+
+beforeEach(() => {
+  mockSignedIn({ id: "u1", name: "Tess TD", email: "tess@club.test", role: "full_member" });
+});
+
+describe("TournamentDetailsPage: loading and errors", () => {
+  it("says a tournament that does not exist was not found, with a way back", async () => {
+    server.use(
+      http.get("/api/tournaments/t1", () => apiError(404, "NOT_FOUND", "Tournament not found")),
+      http.get("/api/tournaments/t1/registrations", () => apiError(404, "NOT_FOUND", "Tournament not found")),
+    );
+    renderDesk();
+
+    expect(await screen.findByRole("heading", { name: "Tournament not found" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to Tournaments" })).toHaveAttribute("href", "/tournaments");
+  });
+
+  it("asks once for a tournament that does not exist, and never polls it (P3REV2-CQ-01)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let asked = 0;
+    server.use(
+      http.get("/api/tournaments/t1", () => {
+        asked += 1;
+        return apiError(404, "NOT_FOUND", "Tournament not found");
+      }),
+      http.get("/api/tournaments/t1/registrations", () => apiError(404, "NOT_FOUND", "Tournament not found")),
+    );
+    renderDesk();
+    expect(await screen.findByRole("heading", { name: "Tournament not found" })).toBeInTheDocument();
+
+    await vi.advanceTimersByTimeAsync(LIVE_REFRESH_MS * 4);
+
+    expect(asked).toBe(1);
+    expect(screen.getByRole("heading", { name: "Tournament not found" })).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it("asks for the players alongside the tournament, not after it (P3REV4-PERF-07)", async () => {
+    const order: string[] = [];
+    let release: () => void = () => undefined;
+    const tournamentAnswered = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.get("/api/tournaments/t1", async () => {
+        order.push("tournament");
+        await tournamentAnswered;
+        return HttpResponse.json(tournamentDto());
+      }),
+      http.get("/api/clubs/c1", () => HttpResponse.json(clubDto())),
+      http.get("/api/tournaments/t1/registrations", () => {
+        order.push("registrations");
+        return HttpResponse.json(field);
+      }),
+      http.get("/api/tournaments/t1/pending-actions", () => HttpResponse.json([])),
+    );
+    renderDesk();
+
+    await waitFor(() => expect(order).toEqual(["tournament", "registrations"]));
+    release();
+    expect(await screen.findByRole("heading", { name: "Friday Freezeout" })).toBeInTheDocument();
+  });
+
+  it("says the tournament could not be loaded, rather than that it does not exist, and tries again", async () => {
+    let fail = true;
+    server.use(
+      http.get("/api/tournaments/t1", () => (fail ? apiError(500, "INTERNAL", "Something went wrong on our side. Please try again.") : HttpResponse.json(tournamentDto()))),
+      http.get("/api/clubs/c1", () => HttpResponse.json(clubDto())),
+      http.get("/api/tournaments/t1/registrations", () => HttpResponse.json(field)),
+      http.get("/api/tournaments/t1/pending-actions", () => HttpResponse.json([])),
+    );
+    const { user } = renderDesk();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("The tournament could not be loaded");
+    fail = false;
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+
+    expect(await screen.findByRole("heading", { name: "Friday Freezeout" })).toBeInTheDocument();
+  });
+
+  it("shows no pool until the players are in, and says when they could not be loaded", async () => {
+    mockDesk();
+    server.use(http.get("/api/tournaments/t1/registrations", () => apiError(500, "INTERNAL", "Something went wrong on our side. Please try again.")));
+    renderDesk();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("The players could not be loaded");
+    expect(screen.queryByTestId("prize-pool")).not.toBeInTheDocument();
+  });
+});
+
+describe("TournamentDetailsPage: the tournament's image", () => {
+  it("leaves no empty box behind when the stored image cannot be loaded (IMG-P3-04)", async () => {
+    mockDesk({ imageUrl: "/uploads/tournament_banner/2d3e4f50-6a7b-4c8d-9e0f-b1c2d3e4f5a6/800.webp" });
+    renderDesk();
+
+    const card = (await screen.findByRole("heading", { name: "Tournament Info" })).closest(".rounded-lg") as HTMLElement;
+    const image = card.querySelector("img");
+    expect(image).not.toBeNull();
+    fireEvent.error(image as HTMLImageElement);
+
+    await waitFor(() => expect(card.querySelector("img")).toBeNull());
+    expect(card.querySelector(".aspect-video")).toBeNull();
+  });
+});
+
+describe("TournamentDetailsPage: on a phone", () => {
+  it("types the max players into a 16 px box, so iOS does not zoom the page (MA-07), behind a 40 px Edit (MA-08)", async () => {
+    mockDesk();
+    const { user } = renderDesk();
+
+    const edit = await screen.findByTestId("edit-max-players");
+    expect(edit).toHaveClass("h-10");
+    await user.click(edit);
+
+    const box = screen.getByTestId("max-players-input").className.split(/\s+/);
+    expect(box).toContain("text-base");
+    expect(box).not.toContain("text-sm");
+  });
+});
+
+describe("TournamentDetailsPage: status", () => {
+  it("names a cancelled tournament Cancelled, never Scheduled", async () => {
+    mockDesk({ status: "cancelled" });
+    renderDesk();
+
+    await screen.findByTestId("prize-pool");
+    expect(screen.getAllByText("Cancelled", { exact: true }).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Scheduled", { exact: true })).not.toBeInTheDocument();
+  });
+
+  it("starts a tournament once enough players are in", async () => {
+    mockDesk({ status: "registration", minPlayers: 3 });
+    const sent = mockPut("/api/tournaments/t1");
+    const { user } = renderDesk();
+
+    await user.click(await screen.findByTestId("start-tournament"));
+    await waitFor(() => expect(sent).toEqual([{ status: "in_progress" }]));
+    expect(await screen.findByText("Tournament status updated successfully")).toBeInTheDocument();
+  });
+
+  it("does not offer Start until the minimum number of players is in", async () => {
+    mockDesk({ status: "registration", minPlayers: 8 });
+    renderDesk();
+
+    await screen.findByTestId("prize-pool");
+    expect(screen.queryByTestId("start-tournament")).not.toBeInTheDocument();
+  });
+
+  it("offers Start only once the players are in, even for a tournament with no minimum (P3REV3-CQ-05)", async () => {
+    mockDesk({ status: "registration", minPlayers: 0 });
+    let answer: () => void = () => {};
+    server.use(
+      http.get("/api/tournaments/t1/registrations", async () => {
+        await new Promise<void>((resolve) => (answer = resolve));
+        return HttpResponse.json(field);
+      }),
+    );
+    renderDesk();
+
+    expect(await screen.findByTestId("register-player")).toBeInTheDocument();
+    expect(screen.queryByTestId("start-tournament")).not.toBeInTheDocument();
+    answer();
+    expect(await screen.findByTestId("start-tournament")).toBeInTheDocument();
+  });
+
+  it("shows the server's sentence when a status change is refused", async () => {
+    mockDesk();
+    mockPut("/api/tournaments/t1", () => apiError(400, "INVALID_STATUS_TRANSITION", "Reopen a cancelled tournament before starting it"));
+    const { user } = renderDesk();
+
+    await user.click(await screen.findByTestId("pause-tournament"));
+
+    expect(await screen.findByText("Reopen a cancelled tournament before starting it")).toBeInTheDocument();
+  });
+});
+
+describe("TournamentDetailsPage: after finalize", () => {
+  const finished = [
+    registrationDto("r2", "Bob", 1, { finalPosition: 1, prizeAmount: "142.50", pointsAwarded: 100 }),
+    registrationDto("r1", "Ann", 1, { finalPosition: 2, prizeAmount: "47.50", pointsAwarded: 70 }),
+    registrationDto("r3", "Cat", 1, { finalPosition: 3, isEliminated: true, pointsAwarded: 50 }),
+  ];
+
+  it("shows each player's place, not Active, under Final Standings", async () => {
+    mockDesk({ status: "completed" }, finished);
+    const { user } = renderDesk();
+
+    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+
+    expect(screen.getByText("Final Standings")).toBeInTheDocument();
+    expect(screen.queryByText("Current Standings")).not.toBeInTheDocument();
+    expect(screen.queryByText("Active")).not.toBeInTheDocument();
+    expect(screen.getByTestId("player-row-r2")).toHaveTextContent("1st");
+    expect(screen.getByTestId("player-row-r1")).toHaveTextContent("2nd");
+    expect(screen.getByTestId("player-row-r3")).toHaveTextContent("3rd");
+    expect(screen.getByTestId("player-row-r2")).toHaveTextContent("$142.50");
+  });
+
+  it("shows the places on a second staff device once another device finalizes (P3REV0-PARITY-01)", async () => {
+    let finalized = false;
+    server.use(
+      http.get("/api/tournaments/t1", () => HttpResponse.json(tournamentDto(finalized ? { status: "completed", finalizedAt: "2026-10-23T10:00:00.000Z" } : { status: "in_progress" }))),
+      http.get("/api/clubs/c1", () => HttpResponse.json(clubDto())),
+      http.get("/api/tournaments/t1/registrations", () => HttpResponse.json(finalized ? finished : field)),
+      http.get("/api/tournaments/t1/pending-actions", () => HttpResponse.json([])),
+    );
+    const { user, queryClient } = renderDesk();
+    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+    expect(await screen.findByText("Current Standings")).toBeInTheDocument();
+
+    finalized = true;
+    await act(() => queryClient.refetchQueries({ queryKey: qk.tournaments.detail("t1"), exact: true }));
+
+    expect(await screen.findByText("Final Standings")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("player-row-r2")).toHaveTextContent("1st"));
+    expect(screen.getByTestId("player-row-r2")).toHaveTextContent("$142.50");
+  });
+});
+
+describe("TournamentDetailsPage: Delete", () => {
+  it("deletes the tournament once the owner confirms, and returns to the list", async () => {
+    mockDesk();
+    let deleted = false;
+    server.use(
+      http.delete("/api/tournaments/t1", () => {
+        deleted = true;
+        return HttpResponse.json({ success: true, message: "Tournament deleted" });
+      }),
+      http.get("/api/tournaments", () => HttpResponse.json([])),
+    );
+    const { user, location, queryClient } = renderDesk();
+    // A leaderboard the deleted tournament's points counted towards, cached by another screen.
+    queryClient.setQueryData(qk.seasons.leaderboard("s1"), []);
+
+    await user.click(await screen.findByTestId("delete-tournament"));
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete Tournament" });
+    expect(deleted).toBe(false);
+    await user.click(within(dialog).getByRole("button", { name: "Delete tournament" }));
+
+    await waitFor(() => expect(location()).toBe("/tournaments"));
+    expect(deleted).toBe(true);
+    expect(await screen.findByText("Tournament deleted successfully")).toBeInTheDocument();
+    // The delete hook drops everything cached under the deleted tournament once the page is left (P3REV2-CQ-12).
+    expect(queryClient.getQueryCache().findAll({ queryKey: qk.tournaments.detail("t1") })).toEqual([]);
+    // Its results went with it, so the leaderboard is asked for afresh (P3REV-PARITY-DEL-01).
+    expect(queryClient.getQueryState(qk.seasons.leaderboard("s1"))?.isInvalidated).toBe(true);
+  });
+
+  it("offers Delete on a phone too, in the header's More menu", async () => {
+    phoneLayout();
+    mockDesk();
+    const { user } = renderDesk();
+
+    await user.click(await screen.findByRole("button", { name: "More actions" }));
+    const deleteItem = await screen.findByRole("menuitem", { name: "Delete" });
+    // Highlighted in its own tint, readable (the menu's gold or amethyst highlight was not: MA-09).
+    expect(deleteItem).toHaveClass("focus:bg-destructive/10", "focus:text-destructive");
+    await user.click(deleteItem);
+
+    expect(await screen.findByRole("alertdialog", { name: "Delete Tournament" })).toBeInTheDocument();
+  });
+
+  it("keeps the dialog open with the server's sentence when the delete is refused", async () => {
+    mockDesk();
+    server.use(http.delete("/api/tournaments/t1", () => apiError(403, "FORBIDDEN", "Only the club's owner or an admin can do that")));
+    const { user, location } = renderDesk();
+
+    await user.click(await screen.findByTestId("delete-tournament"));
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete Tournament" });
+    await user.click(within(dialog).getByRole("button", { name: "Delete tournament" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Only the club's owner or an admin can do that");
+    expect(location()).toBe("/admin/tournaments/t1");
+  });
+});
+
+describe("TournamentDetailsPage: standings", () => {
+  async function eliminate(user: ReturnType<typeof userEvent.setup>, registrationId: string) {
+    await user.click(await screen.findByTestId(`eliminate-player-${registrationId}`));
+    return screen.findByRole("dialog", { name: "Eliminate Player" });
+  }
+
+  it("puts each player's Eliminate on their own card on a phone, not off the side of a wide table (MA-02)", async () => {
+    phoneLayout();
+    mockDesk();
+    const { user } = renderDesk();
+    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+
+    const standings = await screen.findByRole("list", { name: "Standings" });
+    const card = within(standings).getByTestId("player-row-r1");
+    expect(card).toHaveTextContent("Ann");
+    expect(within(card).getByTestId("eliminate-player-r1")).toBeInTheDocument();
+    expect(within(standings).getAllByTestId("eliminate-player-r1")).toHaveLength(1);
+    expect(screen.queryByRole("table", { name: "Standings" })).not.toBeInTheDocument();
+  });
+
+  it("eliminates a player, crediting the knockout to another player still in", async () => {
+    mockDesk();
+    const sent = mockPut("/api/registrations/:id", () => HttpResponse.json(field[2]));
+    const { user } = renderDesk();
+    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+
+    const dialog = await eliminate(user, "r3");
+    await user.click(within(dialog).getByRole("combobox", { name: "Knocked out by (optional)" }));
+    expect(screen.queryByRole("option", { name: "Cat" })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("option", { name: "Bob" }));
+    await user.click(within(dialog).getByRole("button", { name: "Eliminate Player" }));
+
+    await waitFor(() => expect(sent).toEqual([{ isEliminated: true, eliminatedBy: "p-r2" }]));
+    expect(await screen.findByText("Player eliminated successfully")).toBeInTheDocument();
+  });
+
+  it("never sends a knockout chosen for a player whose elimination was dismissed (CA-08)", async () => {
+    mockDesk();
+    const sent = mockPut("/api/registrations/:id", () => HttpResponse.json(field[2]));
+    const { user } = renderDesk();
+    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+
+    const first = await eliminate(user, "r1");
+    await user.click(within(first).getByRole("combobox", { name: "Knocked out by (optional)" }));
+    await user.click(await screen.findByRole("option", { name: "Cat" }));
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Eliminate Player" })).not.toBeInTheDocument());
+
+    const second = await eliminate(user, "r3");
+    expect(within(second).getByRole("combobox", { name: "Knocked out by (optional)" })).toHaveTextContent("Select player (optional)");
+    await user.click(within(second).getByRole("button", { name: "Eliminate Player" }));
+
+    await waitFor(() => expect(sent).toEqual([{ isEliminated: true, eliminatedBy: null }]));
+  });
+
+  it("restores a player who was knocked out by mistake", async () => {
+    mockDesk({}, [field[0], field[1], registrationDto("r3", "Cat", 1, { isEliminated: true, eliminationTime: "2026-10-23T09:00:00.000Z" })]);
+    const sent = mockPut("/api/registrations/:id", () => HttpResponse.json(field[2]));
+    const { user } = renderDesk();
+    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+
+    await user.click(await screen.findByTestId("restore-player-r3"));
+
+    await waitFor(() => expect(sent).toEqual([{ isEliminated: false }]));
+    expect(await screen.findByText("Player restored successfully")).toBeInTheDocument();
+  });
+});
+
+describe("TournamentDetailsPage: the server's answer shows at once (P3REV-PERF-STANDINGS-STALE-AFTER-ACTION)", () => {
+  /** The players as first loaded; every later refresh stalls, as on slow venue Wi-Fi. */
+  function mockStalledRefresh(registrations: PublicRegistration[]) {
+    let asked = 0;
+    mockDesk({ status: "in_progress" }, registrations);
+    server.use(
+      http.get("/api/tournaments/t1/registrations", async () => {
+        asked += 1;
+        if (asked > 1) await delay("infinite");
+        return HttpResponse.json(registrations);
+      }),
+    );
+  }
+
+  it("turns an eliminated player's Eliminate into Restore before the refresh arrives", async () => {
+    mockStalledRefresh(field);
+    server.use(http.put("/api/registrations/r3", () => HttpResponse.json({ ...field[2], isEliminated: true, eliminationTime: "2026-10-23T09:00:00.000Z" })));
+    const { user } = renderDesk();
+    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+
+    await user.click(await screen.findByRole("button", { name: "Eliminate Cat" }));
+    const dialog = await screen.findByRole("dialog", { name: "Eliminate Player" });
+    await user.click(within(dialog).getByRole("button", { name: "Eliminate Player" }));
+
+    const restore = await screen.findByRole("button", { name: "Restore Cat" });
+    expect(screen.queryByRole("button", { name: "Eliminate Cat" })).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("player-row-r3")).getByText("Eliminated")).toBeInTheDocument();
+    // Focus stays with the player, whichever lands first: the dialog closing or the row changing.
+    await waitFor(() => expect(restore).toHaveFocus());
+  });
+
+  it("offers Eliminate again to a restored player before the refresh arrives", async () => {
+    const out = registrationDto("r3", "Cat", 1, { isEliminated: true, eliminationTime: "2026-10-23T09:00:00.000Z" });
+    mockStalledRefresh([field[0], field[1], out]);
+    server.use(http.put("/api/registrations/r3", () => HttpResponse.json({ ...out, isEliminated: false, eliminationTime: null })));
+    const { user } = renderDesk();
+    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+
+    await user.click(await screen.findByRole("button", { name: "Restore Cat" }));
+
+    const eliminateCat = await screen.findByRole("button", { name: "Eliminate Cat" });
+    expect(screen.queryByRole("button", { name: "Restore Cat" })).not.toBeInTheDocument();
+    await waitFor(() => expect(eliminateCat).toHaveFocus());
+  });
+
+  it("takes a removed entry off the standings before the refresh arrives", async () => {
+    mockStalledRefresh(field);
+    server.use(http.delete("/api/registrations/r3", () => new HttpResponse(null, { status: 204 })));
+    const { user } = renderDesk();
+    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+
+    await user.click(await screen.findByRole("button", { name: "Remove Cat's entry" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Remove entry" }));
+
+    await waitFor(() => expect(screen.queryByTestId("player-row-r3")).not.toBeInTheDocument());
+    expect(screen.getByTestId("player-row-r1")).toBeInTheDocument();
+  });
+});
+
+describe("TournamentDetailsPage: the pool", () => {
+  it("sets the prize pool by hand, and back to the calculated pool when cleared", async () => {
+    mockDesk();
+    const sent = mockPut("/api/tournaments/t1");
+    const { user } = renderDesk();
+
+    await user.click(await screen.findByTestId("edit-prize-pool"));
+    expect(screen.getByTestId("manual-pool-input")).toHaveAttribute("placeholder", "475.00");
+    await user.type(screen.getByTestId("manual-pool-input"), "300");
+    await user.click(screen.getByTestId("save-manual-pool"));
+    await waitFor(() => expect(sent).toEqual([{ manualPrizePool: "300.00" }]));
+
+    await user.click(await screen.findByTestId("edit-prize-pool"));
+    await user.click(screen.getByTestId("save-manual-pool"));
+    await waitFor(() => expect(sent).toEqual([{ manualPrizePool: "300.00" }, { manualPrizePool: null }]));
+  });
+
+  it("draws the manual pool box as every money box is, with its $ (P3REV5-CQ-11)", async () => {
+    mockDesk();
+    const { user } = renderDesk();
+
+    await user.click(await screen.findByTestId("edit-prize-pool"));
+
+    const box = screen.getByRole("textbox", { name: "Prize pool (blank for the calculated pool)" });
+    expect(box).toHaveAttribute("inputmode", "decimal");
+    expect(box.parentElement).toHaveTextContent("$");
+  });
+
+  it("refuses an amount that is not money before sending it", async () => {
+    mockDesk();
+    const sent = mockPut("/api/tournaments/t1");
+    const { user } = renderDesk();
+
+    await user.click(await screen.findByTestId("edit-prize-pool"));
+    await user.type(screen.getByTestId("manual-pool-input"), "-5");
+    await user.click(screen.getByTestId("save-manual-pool"));
+
+    expect(await screen.findByText("Enter an amount of 0 or more, with at most 2 decimal places")).toBeInTheDocument();
+    expect(sent).toEqual([]);
+  });
+
+  it("offers no pool edit once the pool is locked", async () => {
+    mockDesk({ prizePoolLocked: true });
+    renderDesk();
+
+    await screen.findByTestId("prize-pool");
+    expect(screen.queryByTestId("edit-prize-pool")).not.toBeInTheDocument();
+    expect(screen.getByTestId("edit-max-players")).toBeInTheDocument();
+  });
+});
+
+describe("TournamentDetailsPage: the Actions tab", () => {
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, "clipboard");
+  });
+
+  it("awards a high hand from its card, with the next prize worked out from the pot", async () => {
+    const entrants = field.map((registration) => ({ ...registration, enteringHighHands: true }));
+    mockDesk({ enableHighHand: true, highHandAmount: "10.00", highHandPayouts: 2 }, entrants);
+    const { user } = renderDesk();
+
+    await user.click(await screen.findByRole("tab", { name: "Actions" }));
+    await user.click(screen.getByTestId("award-high-hand-card"));
+
+    const dialog = await screen.findByRole("dialog", { name: "Assign High Hand Winner" });
+    // Three $10 entries, two prizes: the first winner gets $15, once the pot as it is now is in.
+    await waitFor(() => expect(within(dialog).getByTestId("high-hand-amount")).toHaveValue("15.00"));
+    expect(within(dialog).getByTestId("assign-high-hand")).not.toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("fetches the pot before showing the award as current, and says when it could not (P3REV-PERF-HIGHHAND-STALE-AMOUNT)", async () => {
+    const entrants = field.map((registration) => ({ ...registration, enteringHighHands: true }));
+    mockDesk({ enableHighHand: true, highHandAmount: "10.00", highHandPayouts: 2 }, entrants);
+    let asked = 0;
+    let answer: () => Response | Promise<Response> = () => HttpResponse.json(entrants);
+    server.use(
+      http.get("/api/tournaments/t1/registrations", () => {
+        asked += 1;
+        return answer();
+      }),
+    );
+    const { user } = renderDesk();
+    await user.click(await screen.findByRole("tab", { name: "Actions" }));
+    await screen.findByTestId("award-high-hand-card");
+    const before = asked;
+
+    // The refresh the dialog asks for is held, then fails.
+    const held: (() => void)[] = [];
+    const release = () => held.forEach((fail) => fail());
+    answer = () =>
+      new Promise<Response>((resolve) => {
+        held.push(() => resolve(apiError(500, "INTERNAL", "Something went wrong on our side. Please try again.")));
+      });
+    await user.click(screen.getByTestId("award-high-hand-card"));
+    const dialog = await screen.findByRole("dialog", { name: "Assign High Hand Winner" });
+
+    await waitFor(() => expect(asked).toBeGreaterThan(before));
+    expect(within(dialog).getByTestId("high-hand-amount")).toHaveValue("");
+    expect(within(dialog).getByText("Checking the pot as it is now…")).toBeInTheDocument();
+    expect(within(dialog).getByTestId("assign-high-hand")).toHaveAttribute("aria-disabled", "true");
+
+    release();
+    expect(await within(dialog).findByText(/may be out of date/)).toBeInTheDocument();
+    expect(within(dialog).getByTestId("high-hand-amount")).toHaveValue("15.00");
+
+    answer = () => HttpResponse.json(entrants);
+    await user.click(within(dialog).getByRole("button", { name: "Check again" }));
+    await waitFor(() => expect(within(dialog).queryByText(/may be out of date/)).not.toBeInTheDocument());
+    expect(within(dialog).getByTestId("assign-high-hand")).not.toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("never says the player link was copied when the browser refused", async () => {
+    mockDesk();
+    const { user } = renderDesk();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new DOMException("Denied", "NotAllowedError")) },
+    });
+
+    await user.click(await screen.findByRole("tab", { name: "Actions" }));
+    await user.click(screen.getByTestId("copy-player-link"));
+
+    expect(await screen.findByText("Couldn't copy the link")).toBeInTheDocument();
+    expect(screen.queryByText("Link copied")).not.toBeInTheDocument();
+  });
+
+  it("says the player link was copied in the words every copied link uses (P3REV3-CQ-08)", async () => {
+    mockDesk();
+    const { user } = renderDesk();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+
+    await user.click(await screen.findByRole("tab", { name: "Actions" }));
+    await user.click(screen.getByTestId("copy-player-link"));
+
+    expect(await screen.findByText("Link copied")).toBeInTheDocument();
+    expect(screen.getByText("Player actions link copied to the clipboard")).toBeInTheDocument();
+    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/tournaments/t1/actions`);
+  });
+
+  it("links to the request and payment desks", async () => {
+    mockDesk();
+    const { user } = renderDesk();
+
+    await user.click(await screen.findByRole("tab", { name: "Actions" }));
+
+    expect(screen.getByRole("link", { name: "Confirm Actions" })).toHaveAttribute("href", "/admin/actions/t1");
+    expect(screen.getByRole("link", { name: "Manage Registrations" })).toHaveAttribute("href", "/admin/registrations/t1");
+    expect(screen.getByRole("link", { name: "Player Actions" })).toHaveAttribute("href", "/tournaments/t1/actions");
+  });
+});
+
+describe("TournamentDetailsPage: for someone who does not run the club", () => {
+  it("shows the tournament without any staff control", async () => {
+    mockDesk({ viewer: { canManage: false, canOwn: false } });
+    const { user } = renderDesk();
+
+    await screen.findByTestId("prize-pool");
+    for (const testId of ["register-player", "edit-tournament", "delete-tournament", "end-tournament", "pause-tournament", "edit-max-players"]) {
+      expect(screen.queryByTestId(testId)).not.toBeInTheDocument();
+    }
+    await user.click(screen.getByRole("tab", { name: "Actions" }));
+    expect(screen.queryByTestId("prize-pool-lock-card")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("award-high-hand-card")).not.toBeInTheDocument();
+  });
+});
+
+describe("TournamentDetailsPage: the header on a laptop (lead's visual review, item 3)", () => {
+  it("keeps the TD's own actions on one row at 1280 px: the other screens and the settings are in the More menu", async () => {
+    screenWidth(1280);
+    mockDesk({ status: "in_progress" });
+    const { user } = renderDesk();
+
+    const more = await screen.findByRole("button", { name: "More actions" });
+    for (const testId of ["register-player", "pause-tournament", "end-tournament"]) expect(screen.getByTestId(testId)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Public View" })).not.toBeInTheDocument();
+    // A laptop still gets the wide tables; only the header's extras move.
+    await user.click(screen.getByRole("tab", { name: "Standings" }));
+    expect(await screen.findByRole("table", { name: "Standings" })).toBeInTheDocument();
+
+    await user.click(more);
+    const menu = await screen.findByRole("menu");
+    for (const name of ["Registrations", "Public View", "Edit", "Delete"]) expect(within(menu).getByRole("menuitem", { name })).toBeInTheDocument();
+  });
+
+  it("shows them as buttons on a screen wide enough for one row", async () => {
+    screenWidth(1920);
+    mockDesk({ status: "in_progress" });
+    renderDesk();
+
+    expect(await screen.findByRole("link", { name: "Public View" })).toHaveAttribute("href", "/tournament/t1");
+    expect(screen.getByTestId("edit-tournament")).toHaveRole("button");
+    expect(screen.queryByRole("button", { name: "More actions" })).not.toBeInTheDocument();
+  });
+});
+
+describe("TournamentDetailsPage: Edit", () => {
+  it("opens the tournament's settings from the header", async () => {
+    mockDesk();
+    server.use(http.get("/api/seasons", () => HttpResponse.json([])));
+    const { user } = renderDesk();
+
+    await user.click(await screen.findByTestId("edit-tournament"));
+
+    expect(await screen.findByRole("dialog", { name: "Edit Tournament" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Club")).toHaveValue("Central Stars");
+  });
+});
+
+describe("TournamentDetailsPage: the same places as the players' phones (P3REV5-CQ-01)", () => {
+  it("gives players still in no place and no leader's colour, and busted players the place they finished in", async () => {
+    mockDesk({ status: "in_progress" }, [
+      registrationDto("r1", "Ann", 1),
+      registrationDto("r2", "Bob", 1),
+      registrationDto("r3", "Cat", 1, { isEliminated: true, eliminationTime: "2026-10-23T09:00:00.000Z" }),
+    ]);
+    const { user } = renderDesk();
+    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+
+    const ann = await screen.findByTestId("player-row-r1");
+    expect(ann).toHaveTextContent("Still in");
+    expect(ann).not.toHaveTextContent(/^1/);
+    expect(within(screen.getByTestId("player-row-r2")).getByText("Still in")).toBeInTheDocument();
+    expect(within(screen.getByTestId("player-row-r3")).getByText("3")).toBeInTheDocument();
+    // In the colours the players' phones use, the app's one podium style (P3REV3-CQ-09).
+    expect(within(ann).getByTestId("place-badge")).toHaveClass("bg-status-live");
+    expect(within(screen.getByTestId("player-row-r3")).getByTestId("place-badge")).toHaveClass(...PODIUM[3].split(" "));
+  });
+
+  it("names a sign-up whose player is missing as every staff screen does (P3REV6-CQ-04)", async () => {
+    mockDesk({ status: "in_progress" }, [registrationDto("r1", "Ann", 1), registrationDto("r2", "", 1, { player: null })]);
+    const { user } = renderDesk();
+    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+
+    expect(await screen.findByTestId("player-row-r2")).toHaveTextContent("Unknown player");
+    expect(screen.getByRole("button", { name: "Eliminate Unknown player" })).toBeInTheDocument();
+  });
+});
+
+describe("TournamentDetailsPage: where focus goes (MA-P3REV1-02, -04, -07)", () => {
+  it("names each player's Eliminate and Restore, and keeps focus on that player once they are out and their row has moved", async () => {
+    let field = [registrationDto("r1", "Ann", 1), registrationDto("r2", "Bob", 1), registrationDto("r3", "Cat", 1)];
+    mockDesk({ status: "in_progress" }, field);
+    server.use(
+      http.get("/api/tournaments/t1/registrations", () => HttpResponse.json(field)),
+      http.put("/api/registrations/r1", () => {
+        field = [field[1], field[2], { ...field[0], isEliminated: true, eliminationTime: "2026-10-23T09:00:00.000Z" }];
+        return HttpResponse.json(field[2]);
+      }),
+    );
+    const { user } = renderDesk();
+    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+
+    await user.click(await screen.findByRole("button", { name: "Eliminate Ann" }));
+    const dialog = await screen.findByRole("dialog", { name: "Eliminate Player" });
+    await user.click(within(dialog).getByRole("button", { name: "Eliminate Player" }));
+
+    const restore = await screen.findByRole("button", { name: "Restore Ann" });
+    await waitFor(() => expect(restore).toHaveFocus());
+  });
+
+  it("gives focus back to the More menu after a dialog chosen from it closes, on a phone", async () => {
+    phoneLayout();
+    mockDesk();
+    const { user } = renderDesk();
+
+    await user.click(await screen.findByRole("button", { name: "More actions" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    await screen.findByRole("alertdialog", { name: "Delete Tournament" });
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "More actions" })).toHaveFocus());
+  });
+
+  it("gives focus back to the button that opened a dialog", async () => {
+    mockDesk();
+    const { user } = renderDesk();
+
+    const remove = await screen.findByTestId("delete-tournament");
+    await user.click(remove);
+    await screen.findByRole("alertdialog", { name: "Delete Tournament" });
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(remove).toHaveFocus());
+  });
+
+  it("puts focus back on Edit once the max players are saved", async () => {
+    mockDesk();
+    mockPut("/api/tournaments/t1");
+    const { user } = renderDesk();
+
+    await user.click(await screen.findByTestId("edit-max-players"));
+    await user.clear(screen.getByTestId("max-players-input"));
+    await user.type(screen.getByTestId("max-players-input"), "30{Enter}");
+
+    await waitFor(() => expect(screen.queryByTestId("max-players-input")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Edit max players" })).toHaveFocus();
+  });
+});
+
+
+describe("TournamentDetailsPage: a part priced at $0 (P3REV5-CQ-02)", () => {
+  it("lists no re-buy, add-on or high hand the players are never offered", async () => {
+    mockDesk({ rebuyAmount: "0.00", addonAmount: "0.00", enableHighHand: true, highHandAmount: "0.00" });
+    renderDesk();
+
+    expect(await screen.findByText("Max Players")).toBeInTheDocument();
+    expect(screen.queryByText("Re-buy")).not.toBeInTheDocument();
+    expect(screen.queryByText("Add-on")).not.toBeInTheDocument();
+    expect(screen.queryByText("High Hand Entry Fee")).not.toBeInTheDocument();
+  });
+
+  it("offers no Award High Hand on the Actions tab for a high hand with no price (P3REV3-CQ-03)", async () => {
+    mockDesk({ enableHighHand: true, highHandAmount: null });
+    const { user } = renderDesk();
+
+    await user.click(await screen.findByRole("tab", { name: "Actions" }));
+    expect(await screen.findByText("Confirm Actions")).toBeInTheDocument();
+    expect(screen.queryByTestId("award-high-hand-card")).not.toBeInTheDocument();
+  });
+});

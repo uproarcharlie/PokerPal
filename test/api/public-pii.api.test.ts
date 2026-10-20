@@ -51,6 +51,7 @@ const PROBES: Record<string, Probe> = {
   "GET /api/points-systems/:pointsSystemId/allocations": ({ pointsSystem }) => [`/api/points-systems/${pointsSystem.id}/allocations`],
   "GET /api/public/tournaments/:id/players": ({ live }) => [`/api/public/tournaments/${live.id}/players?q=PII`],
   "GET /api/tournaments": ({ club }) => ["/api/tournaments", `/api/tournaments?clubId=${club.id}`],
+  "GET /api/tournaments/counts": () => ["/api/tournaments/counts"],
   "GET /api/tournaments/:id": ({ live, finished }) => [`/api/tournaments/${live.id}`, `/api/tournaments/${finished.id}`],
   "GET /api/tournaments/:id/prize-pool": ({ live, finished }) => [
     `/api/tournaments/${live.id}/prize-pool`,

@@ -35,10 +35,7 @@ import {
   tournamentRegistrations,
   activityLog,
   type Club,
-  type Season,
-  type PointsSystem,
   type Player,
-  type Tournament,
   type TournamentRegistration,
 } from "../../shared/schema";
 import { connectSeedDatabase, guardSeedDatabase } from "./db";
@@ -76,7 +73,7 @@ function logSuccess(message: string) {
   log(`  ✓ ${message}`, colors.green);
 }
 
-function logData(label: string, data: any) {
+function logData(label: string, data: unknown) {
   log(`  ${label}: ${JSON.stringify(data, null, 2)}`, colors.yellow);
 }
 
@@ -89,11 +86,8 @@ async function runTournamentLifecycleTest() {
   const db = drizzle(pool);
 
   let createdClub: Club | undefined;
-  let createdSeason: Season | undefined;
-  let createdPointsSystem: PointsSystem;
-  let createdPlayers: Player[] = [];
-  let createdTournament: Tournament | undefined;
-  let registrations: TournamentRegistration[] = [];
+  const createdPlayers: Player[] = [];
+  const registrations: TournamentRegistration[] = [];
 
   try {
     // Step 1: Create Club
@@ -118,7 +112,6 @@ async function runTournamentLifecycleTest() {
       endDate: new Date("2025-05-31"),
       isActive: true,
     }).returning();
-    createdSeason = season;
     logSuccess("Season created");
     logData("Season", { id: season.id, name: season.name });
 
@@ -131,7 +124,6 @@ async function runTournamentLifecycleTest() {
       participationPoints: 10,
       knockoutPoints: 5,
     }).returning();
-    createdPointsSystem = pointsSystem;
     logSuccess("Points system created");
     logData("Points System", {
       id: pointsSystem.id,
@@ -209,7 +201,6 @@ async function runTournamentLifecycleTest() {
       maxPlayers: 10,
       useClubAddress: true,
     }).returning();
-    createdTournament = tournament;
     logSuccess("Tournament created");
     logData("Tournament", {
       id: tournament.id,
@@ -244,11 +235,9 @@ async function runTournamentLifecycleTest() {
 
     // Step 8: Start Tournament
     logStep(8, "Starting Tournament (Status: in_progress)");
-    const [updatedTournament] = await db.update(tournaments)
+    await db.update(tournaments)
       .set({ status: "in_progress" })
-      .where(eq(tournaments.id, tournament.id))
-      .returning();
-    createdTournament = updatedTournament;
+      .where(eq(tournaments.id, tournament.id));
 
     await db.insert(activityLog).values({
       tournamentId: tournament.id,
@@ -420,11 +409,6 @@ async function runTournamentLifecycleTest() {
 
     // Step 16: Verify Final State
     logStep(16, "Verifying Final Tournament State");
-
-    const finalTournament = await db.select()
-      .from(tournaments)
-      .where(eq(tournaments.id, tournament.id))
-      .limit(1);
 
     const finalRegistrations = await db.select()
       .from(tournamentRegistrations)

@@ -14,6 +14,7 @@ import {
   deleteTournament,
   getTournamentDetail,
   listTournaments,
+  tournamentCounts,
   updateTournament,
 } from "../services/tournaments";
 import type { RouteDeps } from "./index";
@@ -30,6 +31,11 @@ export function tournamentsRoutes({ env, limiters }: RouteDeps): Router {
 
   router.get("/api/tournaments", asyncHandler(async (req, res) => {
     res.json(await listTournaments(req, parseOrThrow(tournamentsQuerySchema, req.query)));
+  }));
+
+  // Before "/api/tournaments/:id", which would take "counts" for an id.
+  router.get("/api/tournaments/counts", asyncHandler(async (_req, res) => {
+    res.json(await tournamentCounts());
   }));
 
   router.get("/api/tournaments/:id", asyncHandler(async (req, res) => {

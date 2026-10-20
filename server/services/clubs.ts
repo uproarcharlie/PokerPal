@@ -10,7 +10,8 @@ import {
   type MemberCountsResponse,
   type UpdateClubInput,
 } from "@shared/api/clubs";
-import { safeHttpUrl, type Viewer } from "@shared/api/common";
+import type { Viewer } from "@shared/api/common";
+import { safeHttpUrl } from "@shared/domain/urls";
 import { pickFields, PUBLIC_CLUB_FIELDS, type ClubDto } from "@shared/api/public";
 import type { AppEnv } from "../config/env";
 import { db, type Executor } from "../db";

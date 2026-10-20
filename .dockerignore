@@ -10,8 +10,6 @@ dist
 .idea
 .claude
 **/.DS_Store
-.replit
-.local
 *.md
 npm-debug.log*
 *.tsbuildinfo
@@ -22,7 +20,6 @@ npm-debug.log*
 
 # Runtime data and assets that are not part of the build
 uploads
-attached_assets
 
 # Test artefacts
 tmp

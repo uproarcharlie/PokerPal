@@ -327,6 +327,34 @@ describe("GET /api/tournaments/:id", () => {
   });
 });
 
+describe("GET /api/tournaments/counts (P3REV3-CQ-12)", () => {
+  it("counts each club's tournaments, all and active, and each season's, for anyone, in one answer", async () => {
+    const club = await createClub();
+    const other = await createClub();
+    const season = await createSeason({ clubId: club.id });
+    for (const status of ["registration", "in_progress", "completed", "cancelled"] as const) {
+      await createTournament({ clubId: club.id, seasonId: season.id, status });
+    }
+    await createTournament({ clubId: club.id, status: "scheduled" });
+    await createTournament({ clubId: other.id, status: "completed" });
+
+    const response = await (await anon()).get("/api/tournaments/counts");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      clubs: { [club.id]: { total: 5, active: 2 }, [other.id]: { total: 1, active: 0 } },
+      seasons: { [season.id]: 4 },
+    });
+  });
+
+  it("answers with no counts at all before any tournament exists, never taking 'counts' for a tournament id", async () => {
+    const response = await (await anon()).get("/api/tournaments/counts");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ clubs: {}, seasons: {} });
+  });
+});
+
 describe("GET /api/tournaments", () => {
   it("lists every tournament with its registered count, oldest first, without the snapshot or who has paid", async () => {
     const club = await createClub();
@@ -442,6 +470,92 @@ describe("PUT /api/tournaments/:id", () => {
     const turnedOff = await staff.owner.agent.put(path).send({ enableHighHand: false });
     expect(turnedOff.status).toBe(200);
     expect(turnedOff.body.enableHighHand).toBe(false);
+  });
+
+  describe("never silently re-prices entries already recorded (P3REV0-PARITY-EDIT-REPRICE)", () => {
+    async function liveWithRebuys() {
+      const scenario = await staffedTournament({
+        status: "in_progress",
+        buyInAmount: "100.00",
+        rebuyAmount: "25.00",
+        addonAmount: "20.00",
+      });
+      for (const rebuys of [2, 1]) {
+        await createRegistration({ tournamentId: scenario.tournament.id, playerId: (await createPlayer()).id, rebuys, addons: 1 });
+      }
+      return { ...scenario, path: `/api/tournaments/${scenario.tournament.id}` };
+    }
+
+    it.each([
+      ["rebuyAmount", null, "REBUYS_RECORDED", "3 re-buys are recorded: take them off the players before removing the re-buy price. To stop taking more, lock the prize pool."],
+      ["rebuyAmount", "0", "REBUYS_RECORDED", "3 re-buys are recorded: take them off the players before removing the re-buy price. To stop taking more, lock the prize pool."],
+      ["addonAmount", null, "ADDONS_RECORDED", "2 add-ons are recorded: take them off the players before removing the add-on price. To stop taking more, lock the prize pool."],
+    ])("refuses removing %s (sent %s) while they are recorded, even when confirmed", async (field, value, code, error) => {
+      const { tournament, agent, path } = await liveWithRebuys();
+
+      const refused = await agent.put(path).send({ [field]: value, repriceEntries: true });
+
+      expect(refused.status).toBe(409);
+      expect(refused.body).toEqual({ error, code, details: { field, count: field === "rebuyAmount" ? 3 : 2 } });
+      expect(await tournamentRow(tournament.id)).toMatchObject({ rebuyAmount: "25.00", addonAmount: "20.00" });
+    });
+
+    it("asks before a new price re-prices recorded entries, says what moves, and saves once confirmed", async () => {
+      const { tournament, agent, path } = await liveWithRebuys();
+
+      const asked = await agent.put(path).send({ buyInAmount: "90", rebuyAmount: "20" });
+
+      expect(asked.status).toBe(409);
+      expect(asked.body).toEqual({
+        error:
+          "This re-prices what is already recorded: 2 buy-ins from $100 to $90 and 3 re-buys from $25 to $20. The prize pool and what players owe change with it.",
+        code: "ENTRIES_REPRICED",
+        details: {
+          changes: [
+            { field: "buyInAmount", count: 2, fromCents: 10_000, toCents: 9_000 },
+            { field: "rebuyAmount", count: 3, fromCents: 2_500, toCents: 2_000 },
+          ],
+        },
+      });
+      expect(await tournamentRow(tournament.id)).toMatchObject({ buyInAmount: "100.00", rebuyAmount: "25.00" });
+
+      const confirmed = await agent.put(path).send({ buyInAmount: "90", rebuyAmount: "20", repriceEntries: true });
+      expect(confirmed.status).toBe(200);
+      expect(await tournamentRow(tournament.id)).toMatchObject({ buyInAmount: "90.00", rebuyAmount: "20.00" });
+    });
+
+    it("lets a price change freely while nothing is recorded at it, and a resent price is no change", async () => {
+      const { tournament, agent } = await staffedTournament({ status: "registration", buyInAmount: "100.00", rebuyAmount: "25.00" });
+      await createRegistration({ tournamentId: tournament.id, playerId: (await createPlayer()).id });
+      const path = `/api/tournaments/${tournament.id}`;
+
+      expect((await agent.put(path).send({ rebuyAmount: null, buyInAmount: "100" })).status).toBe(200);
+      expect(await tournamentRow(tournament.id)).toMatchObject({ rebuyAmount: null, buyInAmount: "100.00" });
+    });
+
+    it("refuses removing the high-hand price while players are in it", async () => {
+      const { tournament, agent } = await staffedTournament({ enableHighHand: true, highHandAmount: "10.00" });
+      await createRegistration({ tournamentId: tournament.id, playerId: (await createPlayer()).id, enteringHighHands: true });
+
+      const refused = await agent.put(`/api/tournaments/${tournament.id}`).send({ highHandAmount: null });
+
+      expect(refused.status).toBe(409);
+      expect(refused.body).toMatchObject({ code: "HIGH_HAND_ENTRIES", details: { field: "highHandAmount", count: 1 } });
+    });
+
+    it("never asks to confirm a re-pricing that would then be refused: the refusal comes first", async () => {
+      const { tournament, agent } = await staffedTournament({ buyInAmount: "50.00", rakeOverride: "100.00" });
+      for (let i = 0; i < 4; i++) await createRegistration({ tournamentId: tournament.id, playerId: (await createPlayer()).id });
+
+      const refused = await agent.put(`/api/tournaments/${tournament.id}`).send({ buyInAmount: "20" });
+      const asked = await agent.put(`/api/tournaments/${tournament.id}`).send({ buyInAmount: "25" });
+
+      expect(refused.status).toBe(400);
+      expect(refused.body).toMatchObject({ code: "AP_EXCEEDS_GROSS", details: { grossCents: 8_000 } });
+      expect(asked.status).toBe(409);
+      expect(asked.body).toMatchObject({ code: "ENTRIES_REPRICED", details: { changes: [{ field: "buyInAmount", count: 4 }] } });
+      expect(await tournamentRow(tournament.id)).toMatchObject({ buyInAmount: "50.00", rakeOverride: "100.00" });
+    });
   });
 
   it.each(VISITORS)("answers a %s as the authorization rules say", async (visitor) => {
@@ -672,8 +786,8 @@ describe("PUT /api/tournaments/:id", () => {
       const { tournament, agent } = await staffedTournament({ buyInAmount: "50.00", rakeOverride: "100.00" });
       for (let i = 0; i < 4; i++) await createRegistration({ tournamentId: tournament.id, playerId: (await createPlayer()).id });
 
-      const tooLow = await agent.put(`/api/tournaments/${tournament.id}`).send({ buyInAmount: "20" });
-      const fine = await agent.put(`/api/tournaments/${tournament.id}`).send({ buyInAmount: "25" });
+      const tooLow = await agent.put(`/api/tournaments/${tournament.id}`).send({ buyInAmount: "20", repriceEntries: true });
+      const fine = await agent.put(`/api/tournaments/${tournament.id}`).send({ buyInAmount: "25", repriceEntries: true });
 
       expect(tooLow.status).toBe(400);
       expect(tooLow.body).toMatchObject({ code: "AP_EXCEEDS_GROSS", details: { grossCents: 8_000 } });

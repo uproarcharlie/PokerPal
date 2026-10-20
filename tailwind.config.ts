@@ -1,4 +1,6 @@
+import typography from "@tailwindcss/typography";
 import type { Config } from "tailwindcss";
+import animate from "tailwindcss-animate";
 
 export default {
   darkMode: ["class"],
@@ -36,6 +38,8 @@ export default {
         accent: {
           DEFAULT: "rgb(var(--accent) / <alpha-value>)",
           foreground: "rgb(var(--accent-foreground) / <alpha-value>)",
+          // The accent as text (prizes, podium points): the same hue, dark or light enough to read.
+          text: "rgb(var(--accent-text) / <alpha-value>)",
         },
         destructive: {
           DEFAULT: "rgb(var(--destructive) / <alpha-value>)",
@@ -43,6 +47,8 @@ export default {
         },
         border: "rgb(var(--border) / <alpha-value>)",
         input: "rgb(var(--input) / <alpha-value>)",
+        control: "rgb(var(--control-border) / <alpha-value>)",
+        placeholder: "rgb(var(--placeholder) / <alpha-value>)",
         ring: "rgb(var(--ring) / <alpha-value>)",
         chart: {
           "1": "rgb(var(--chart-1) / <alpha-value>)",
@@ -51,46 +57,23 @@ export default {
           "4": "rgb(var(--chart-4) / <alpha-value>)",
           "5": "rgb(var(--chart-5) / <alpha-value>)",
         },
-        sidebar: {
-          DEFAULT: "rgb(var(--sidebar) / <alpha-value>)",
-          foreground: "rgb(var(--sidebar-foreground) / <alpha-value>)",
-          primary: "rgb(var(--sidebar-primary) / <alpha-value>)",
-          "primary-foreground": "rgb(var(--sidebar-primary-foreground) / <alpha-value>)",
-          accent: "rgb(var(--sidebar-accent) / <alpha-value>)",
-          "accent-foreground": "rgb(var(--sidebar-accent-foreground) / <alpha-value>)",
-          border: "rgb(var(--sidebar-border) / <alpha-value>)",
-          ring: "rgb(var(--sidebar-ring) / <alpha-value>)",
-        },
+        status: Object.fromEntries(
+          ["scheduled", "registration", "live", "completed", "cancelled"].map((name) => [
+            name,
+            {
+              DEFAULT: `rgb(var(--status-${name}) / <alpha-value>)`,
+              foreground: `rgb(var(--status-${name}-foreground) / <alpha-value>)`,
+            },
+          ]),
+        ),
       },
       fontFamily: {
-        sans: ["Inter", "var(--font-sans)", "system-ui", "sans-serif"],
-        display: ["Poppins", "var(--font-sans)", "system-ui", "sans-serif"],
+        sans: ["var(--font-sans)"],
+        display: ["var(--font-display)"],
         serif: ["var(--font-serif)"],
         mono: ["var(--font-mono)"],
       },
-      keyframes: {
-        "accordion-down": {
-          from: {
-            height: "0",
-          },
-          to: {
-            height: "var(--radix-accordion-content-height)",
-          },
-        },
-        "accordion-up": {
-          from: {
-            height: "var(--radix-accordion-content-height)",
-          },
-          to: {
-            height: "0",
-          },
-        },
-      },
-      animation: {
-        "accordion-down": "accordion-down 0.2s ease-out",
-        "accordion-up": "accordion-up 0.2s ease-out",
-      },
     },
   },
-  plugins: [require("tailwindcss-animate"), require("@tailwindcss/typography")],
+  plugins: [animate, typography],
 } satisfies Config;
