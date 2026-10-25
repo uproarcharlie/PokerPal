@@ -51,13 +51,13 @@ async function expectEveryTabAccessible(page: Page, where: string): Promise<void
   }
 }
 
-/** Tonight's game with its seats drawn and the Central Stars clock running, the TV showing the money. */
+/** Tonight's game with its seats drawn and the Central Stars clock running, the TV showing the prize pool. */
 async function seatedAndTimed(request: APIRequestContext, demo: DemoClub): Promise<void> {
   await expectJson(await request.post(`/api/tournaments/${demo.live.id}/seating/setup`, { data: {} }), 201);
   const clock = {
     structure: presetStructure("central_stars_one_life_line"),
     presetKey: "central_stars_one_life_line",
-    displaySettings: { showPrizePool: "always", showAp: true },
+    displaySettings: { showPrizePool: "always" },
     baseHash: null,
   };
   await expectJson(await request.put(`/api/tournaments/${demo.live.id}/clock`, { data: clock }), 201);

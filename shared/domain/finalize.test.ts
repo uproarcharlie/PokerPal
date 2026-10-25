@@ -76,6 +76,100 @@ function okPlan(overrides: Partial<FinalizePlanInput> = {}) {
 const table = (result: ReturnType<typeof okPlan>) =>
   result.rows.map((row) => [row.registrationId, row.finalPosition, row.prizeAmount, row.pointsAwarded]);
 
+describe("buildFinalizePlan: only paid players (round 6)", () => {
+  /** field(6) with r05 and r02 unpaid: r05 busted after a $25 re-buy, r02 busted first; r06 won. */
+  function withUnpaid(): FinalizeRegistrationInput[] {
+    return field(6).map((r) =>
+      r.id === "r05"
+        ? { ...r, paymentConfirmed: false, rebuys: 1, registrationTime: new Date(Date.UTC(2026, 2, 1, 18, 5)) }
+        : r.id === "r02"
+          ? { ...r, paymentConfirmed: null, registrationTime: new Date(Date.UTC(2026, 2, 1, 18, 2)) }
+          : r,
+    );
+  }
+  const priced = () => tournament({ rebuyAmount: "25.00" });
+
+  it("refuses while anyone in the field has not paid, naming them in sign-up order with what they owe", () => {
+    const result = plan({ tournament: priced(), registrations: withUnpaid() });
+
+    expect(result).toMatchObject({ ok: false, problem: "UNPAID_PLAYERS" });
+    expect(result.unpaid).toEqual([
+      { registrationId: "r02", playerId: "p02", playerName: "Player 02", amountDueCents: 5_000 },
+      { registrationId: "r05", playerId: "p05", playerName: "Player 05", amountDueCents: 7_500 },
+    ]);
+    // Their money is not in the pool: four paid buy-ins of $50.
+    expect(result.prizePool.net).toBe(20_000);
+    expect(result.prizePool.counts).toMatchObject({ registrations: 4, rebuys: 0 });
+  });
+
+  it("asks for the finishing order first: it is needed either way", () => {
+    const registrations = withUnpaid().map((r) => (r.id === "r04" ? { ...r, isEliminated: false, eliminationTime: null } : r));
+    expect(plan({ registrations })).toMatchObject({ ok: false, problem: "ACTIVE_PLAYERS_NEED_ORDER" });
+    expect(plan({ registrations, finishOrder: ["r06", "r04"] })).toMatchObject({ ok: false, problem: "UNPAID_PLAYERS" });
+  });
+
+  it("leaves them out when told to: not ranked, paid or scored, and the snapshot says who", () => {
+    const result = okPlan({
+      tournament: priced(),
+      registrations: withUnpaid(),
+      pointsSystem: { participationPoints: 5, knockoutPoints: null },
+      allocations: [{ position: 1, positionEnd: null, points: 100 }],
+      excludeUnpaid: true,
+    });
+
+    expect(table(result)).toEqual([
+      ["r06", 1, "100.00", 100],
+      ["r04", 2, "60.00", 5],
+      ["r03", 3, "40.00", 5],
+      ["r01", 4, null, 5],
+    ]);
+    expect(result.snapshot.entrants).toBe(4);
+    expect(result.snapshot.pool.netCents).toBe(20_000);
+    expect(result.unpaid.map((player) => player.registrationId)).toEqual(["r02", "r05"]);
+    expect(result.warnings).toContain("2 players who have not paid are left out, not ranked, paid or scored: Player 02, Player 05");
+    expect(result.snapshot.warnings).toContain("2 players who have not paid are left out, not ranked, paid or scored: Player 02, Player 05");
+  });
+
+  it("orders only the paid players still in once the unpaid ones are left out", () => {
+    const registrations = withUnpaid().map((r) => (r.id === "r05" ? { ...r, isEliminated: false, eliminationTime: null } : r));
+    expect(plan({ registrations, finishOrder: ["r06", "r05"], excludeUnpaid: true })).toMatchObject({ ok: false, problem: "INVALID_FINISH_ORDER" });
+    // One paid player is still in: no order is needed.
+    const result = okPlan({ registrations, excludeUnpaid: true });
+    expect(result.activePlayers.map((player) => player.registrationId)).toEqual(["r06"]);
+    expect(result.rows[0]).toMatchObject({ registrationId: "r06", finalPosition: 1 });
+  });
+
+  it("pays more once a payment is confirmed: the player is ranked and the pool grows", () => {
+    const confirmed = withUnpaid().map((r) => (r.id === "r05" ? { ...r, paymentConfirmed: true } : r));
+    const result = okPlan({ tournament: priced(), registrations: confirmed, excludeUnpaid: true });
+
+    expect(result.prizePool.net).toBe(27_500);
+    expect(table(result).map(([id]) => id)).toEqual(["r06", "r05", "r04", "r03", "r01"]);
+    expect(result.unpaid.map((player) => player.registrationId)).toEqual(["r02"]);
+  });
+
+  it("clears what an earlier finalize stored for a player left out, and nothing for anyone else", () => {
+    const snapshot = okPlan().snapshot;
+    const registrations = withUnpaid().map((r, i) => ({ ...r, finalPosition: 6 - i, prizeAmount: i === 5 ? "200.00" : null, pointsAwarded: 1 }));
+    const result = okPlan({ tournament: tournament({ status: "completed", prizePoolSnapshot: snapshot }), registrations, excludeUnpaid: true });
+
+    expect(result.clearedRegistrationIds).toEqual(["r02", "r05"]);
+    expect(okPlan().clearedRegistrationIds).toEqual([]);
+  });
+
+  it("pays a correction of a tournament completed before snapshots from its paid players only", () => {
+    // Shown as it was paid (every entry counts), but a new finalize pays as today's rule has it.
+    const result = okPlan({ tournament: tournament({ status: "completed", prizePoolSnapshot: null }), registrations: withUnpaid(), excludeUnpaid: true });
+    expect(result.prizePool.net).toBe(20_000);
+  });
+
+  it("changes the plan hash when a player is left out or comes back paid", () => {
+    const left = okPlan({ registrations: withUnpaid(), excludeUnpaid: true });
+    const paid = okPlan({ registrations: withUnpaid().map((r) => ({ ...r, paymentConfirmed: true })) });
+    expect(planHashInput(left.prizePool.net, left.rows)).not.toBe(planHashInput(paid.prizePool.net, paid.rows));
+  });
+});
+
 describe("buildFinalizePlan: positions and prizes", () => {
   it("places the last player in first and the rest by elimination, paying 50/30/20 of the pool", () => {
     const result = okPlan();
@@ -160,14 +254,6 @@ describe("buildFinalizePlan: positions and prizes", () => {
     expect(result.warnings).not.toContain("The prize pool is $0 or less, so nobody is paid");
   });
 
-  it("counts unpaid registrations toward the pool, as today (D27), and warns about them", () => {
-    const registrations = field(4).map((r, i) => ({ ...r, paymentConfirmed: i >= 2 }));
-    const result = okPlan({ registrations });
-
-    expect(result.rows.slice(0, 3).map((row) => row.prizeAmount)).toEqual(["100.00", "60.00", "40.00"]);
-    expect(result.warnings).toContain("2 payments not confirmed");
-  });
-
   it("never ranks, pays, scores or counts the waiting list (round 5, item 15)", () => {
     // 4 played; 2 more signed up beyond Max players 4 and were never accepted.
     const registrations = [
@@ -180,7 +266,7 @@ describe("buildFinalizePlan: positions and prizes", () => {
     expect(result.prizePool.net).toBe(20_000);
     expect(result.snapshot.entrants).toBe(4);
     expect(result.warnings).toContain("2 sign-ups on the waiting list are not ranked, paid or counted in the pool");
-    expect(result.warnings).not.toContain("2 payments not confirmed");
+    expect(result.unpaid).toEqual([]);
   });
 
   it("warns when a % place and a $ place pay out of order at this pool (R5REV1-PAY-01)", () => {

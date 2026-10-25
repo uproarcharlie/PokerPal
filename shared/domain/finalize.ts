@@ -10,8 +10,11 @@
  * tournament chose (./prize-difference, round 5 item 16: kept by the club, added to 1st, shared across
  * the places, carried over, or added by the club): finalize pays exactly the prizes set, and the
  * snapshot records where the difference went. Places beyond the number of entrants are not paid (as
- * before; the warnings say how much). Unpaid registrations still count, but the waiting list (round 5, item 15:
- * sign-ups beyond Max players nobody accepted) never played: it is not ranked, paid, scored or counted.
+ * before; the warnings say how much). The waiting list (round 5, item 15: sign-ups beyond Max players
+ * nobody accepted) never played: it is not ranked, paid, scored or counted. Only paid players are in the
+ * pool (round 6), so a plan with players in the field whose payment is not confirmed is refused
+ * (UNPAID_PLAYERS) until the TD confirms them or leaves them out (`excludeUnpaid`): left out, they are
+ * not ranked, paid or scored either, and any result an earlier finalize stored for them is cleared.
  * A deal (./deal) replaces what the players still in are paid, sharing exactly what their places pay
  * together.
  */
@@ -22,14 +25,16 @@ import { carryTargetName, differenceSentence, type CarriedIn, type PrizeDifferen
 import { isPlayerActionType, PLAYER_ACTION_LABELS } from "./player-actions";
 import { pointsForFinish, type AllocationInput, type PointsRules, type PointsSystemInput } from "./points";
 import {
+  amountDueCents,
   computePrizePool,
+  hasPaid,
   type EntryInput,
   type NetSource,
   type PrizePoolBreakdown,
   type PrizePoolInput,
 } from "./prize-pool";
 import { rankFinishers, type FinisherInput, type FinishOrderProblem, type FinishOrderSource } from "./standings";
-import { fieldEntries } from "./waiting-list";
+import { bySignUp, fieldEntries } from "./waiting-list";
 
 export const FINALIZE_SNAPSHOT_VERSION = 1 as const;
 
@@ -115,6 +120,8 @@ export interface FinalizeRegistrationInput extends EntryInput, FinisherInput {
   finalPosition?: number | null;
   /** The points a previous finalize stored, compared with the new ones on a correction. */
   pointsAwarded?: number | null;
+  /** The prize a previous finalize stored. */
+  prizeAmount?: MoneyInput;
 }
 
 /** A player request still waiting for the TD (a pending action): finalize discards it. */
@@ -146,6 +153,11 @@ export interface FinalizePlanInput {
   deal?: DealInput;
   /** Where money carried over goes, as named (carryTargetName of the tournament's season); default "the next tournament". */
   carryTarget?: string;
+  /**
+   * Leave the players in the field whose payment is not confirmed out of the results (round 6): not
+   * ranked, paid or scored, like the waiting list. Without it, a plan with any is refused (UNPAID_PLAYERS).
+   */
+  excludeUnpaid?: boolean;
 }
 
 /** One registration as finalize writes it. */
@@ -166,6 +178,12 @@ export interface ActivePlayer {
   playerName: string;
 }
 
+/** A player in the field whose payment is not confirmed (round 6): what they owe, for the TD to take it or leave them out. */
+export interface UnpaidPlayer extends ActivePlayer {
+  /** amountDueCents: every buy-in, re-buy and add-on at the tournament's prices, and the high-hand entry. */
+  amountDueCents: Cents;
+}
+
 interface PlanCommon {
   prizePool: PrizePoolBreakdown;
   /** Players still in, in the order to suggest: as given, else as last finalized, else by id. */
@@ -175,13 +193,25 @@ interface PlanCommon {
   pendingRequestIds: string[];
   /** What a deal would share: the players still in and their places' payouts together; null with fewer than two in. */
   dealable: Dealable | null;
+  /** The players in the field whose payment is not confirmed, by sign-up order: left out with excludeUnpaid, else the plan is refused. */
+  unpaid: UnpaidPlayer[];
 }
 
-/** DEAL_INVALID: the deal given does not share exactly what the players still in would be paid (see `dealProblems`). */
-export type FinalizePlanProblem = FinishOrderProblem | "DEAL_INVALID";
+/**
+ * DEAL_INVALID: the deal given does not share exactly what the players still in would be paid (see
+ * `dealProblems`). UNPAID_PLAYERS: players in the field have not paid (`unpaid`), and the plan was not
+ * told to leave them out. A finishing order is checked first: it is needed either way.
+ */
+export type FinalizePlanProblem = FinishOrderProblem | "DEAL_INVALID" | "UNPAID_PLAYERS";
 
 export type FinalizePlan =
-  | (PlanCommon & { ok: true; rows: FinalizeRow[]; snapshot: PrizePoolSnapshot })
+  | (PlanCommon & {
+      ok: true;
+      rows: FinalizeRow[];
+      snapshot: PrizePoolSnapshot;
+      /** Registrations left out of the results (unpaid, waiting) that hold a place, prize or points from an earlier finalize: finalize clears them. */
+      clearedRegistrationIds: string[];
+    })
   | (PlanCommon & { ok: false; problem: FinalizePlanProblem; dealProblems?: DealProblem[] });
 
 const UNKNOWN_PLAYER = "Unknown player";
@@ -205,17 +235,21 @@ export function pointsRulesFor(input: Pick<FinalizePlanInput, "tournament" | "po
 
 export function buildFinalizePlan(input: FinalizePlanInput): FinalizePlan {
   const { tournament } = input;
-  const registrations = fieldEntries(input.registrations, tournament.maxPlayers);
-  const prizePool = computePrizePool(tournament, registrations);
+  const field = fieldEntries(input.registrations, tournament.maxPlayers);
   const nameOf = (playerId: string) => input.playerNames.get(playerId) ?? UNKNOWN_PLAYER;
-  const warnings = planWarnings(input, registrations, prizePool);
+  const unpaid = unpaidPlayers(tournament, field, nameOf);
+  // Who is ranked: the field, or with excludeUnpaid only its paid players.
+  const registrations = input.excludeUnpaid ? field.filter(hasPaid) : field;
+  // Paid players only, as today's rule has it, even when correcting a tournament completed before it.
+  const prizePool = computePrizePool(tournament, field.filter(hasPaid));
+  const warnings = planWarnings(input, registrations, unpaid, prizePool);
   const activePlayers = suggestedActivePlayers(registrations, input.finishOrder, nameOf);
   const pendingRequestIds = (input.pendingRequests ?? []).map((request) => request.id).sort();
 
   const ranked = rankFinishers(registrations, input.finishOrder);
   if (!ranked.ok) {
     const dealable = dealableBeforeOrder(prizePool, activePlayers);
-    return { ok: false, problem: ranked.problem, prizePool, activePlayers, warnings, pendingRequestIds, dealable };
+    return { ok: false, problem: ranked.problem, prizePool, activePlayers, warnings, pendingRequestIds, dealable, unpaid };
   }
 
   const points = pointsRulesFor(input);
@@ -238,12 +272,15 @@ export function buildFinalizePlan(input: FinalizePlanInput): FinalizePlan {
 
   const stillIn = new Set(activePlayers.map((player) => player.registrationId));
   const dealable = dealableOf(planned.filter((row) => stillIn.has(row.registrationId)));
+  if (unpaid.length > 0 && !input.excludeUnpaid) {
+    return { ok: false, problem: "UNPAID_PLAYERS", prizePool, activePlayers, warnings, pendingRequestIds, dealable, unpaid };
+  }
   let rows = planned;
   let deal: SnapshotDeal | undefined;
   if (input.deal) {
     const problems = dealProblems(dealable, input.deal);
     if (problems.length > 0) {
-      return { ok: false, problem: "DEAL_INVALID", dealProblems: problems, prizePool, activePlayers, warnings, pendingRequestIds, dealable };
+      return { ok: false, problem: "DEAL_INVALID", dealProblems: problems, prizePool, activePlayers, warnings, pendingRequestIds, dealable, unpaid };
     }
     const agreed = new Map(input.deal.amounts.map(({ registrationId, amountCents }) => [registrationId, amountCents]));
     rows = planned.map((row) => (agreed.has(row.registrationId) ? withAmount(row, agreed.get(row.registrationId) as Cents) : row));
@@ -304,7 +341,24 @@ export function buildFinalizePlan(input: FinalizePlanInput): FinalizePlan {
     warnings: [...warnings, ...pointsChangeWarnings(registrations, rows, tournament.status === "completed", nameOf)],
   };
 
-  return { ok: true, prizePool, activePlayers, warnings: snapshot.warnings, rows, snapshot, pendingRequestIds, dealable };
+  const ranks = new Set(rows.map((row) => row.registrationId));
+  const clearedRegistrationIds = input.registrations
+    .filter((r) => !ranks.has(r.id) && (r.finalPosition != null || toCents(r.prizeAmount) > 0 || r.pointsAwarded != null))
+    .map((r) => r.id)
+    .sort();
+  return { ok: true, prizePool, activePlayers, warnings: snapshot.warnings, rows, snapshot, pendingRequestIds, dealable, unpaid, clearedRegistrationIds };
+}
+
+/** The field's players whose payment is not confirmed, in sign-up order, with what each owes. */
+function unpaidPlayers(
+  tournament: FinalizeTournamentInput,
+  field: readonly FinalizeRegistrationInput[],
+  nameOf: (playerId: string) => string,
+): UnpaidPlayer[] {
+  return field
+    .filter((r) => !hasPaid(r))
+    .sort(bySignUp)
+    .map((r) => ({ registrationId: r.id, playerId: r.playerId, playerName: nameOf(r.playerId), amountDueCents: amountDueCents(tournament, r) }));
 }
 
 function snapshotDifference(difference: PrizeDifference, carryTarget: string | undefined): SnapshotDifference {
@@ -404,8 +458,13 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-/** The plan's warnings; `registrations` is the field (the waiting list left out). */
-function planWarnings(input: FinalizePlanInput, registrations: readonly FinalizeRegistrationInput[], pool: PrizePoolBreakdown): string[] {
+/** The plan's warnings; `registrations` are the players ranked (the field, less any unpaid players left out). */
+function planWarnings(
+  input: FinalizePlanInput,
+  registrations: readonly FinalizeRegistrationInput[],
+  unpaid: readonly UnpaidPlayer[],
+  pool: PrizePoolBreakdown,
+): string[] {
   const { tournament } = input;
   const warnings: string[] = [];
 
@@ -422,9 +481,14 @@ function planWarnings(input: FinalizePlanInput, registrations: readonly Finalize
   }
   if (!tournament.prizePoolLocked) warnings.push("The prize pool is not locked");
 
-  const unpaid = registrations.filter((r) => !r.paymentConfirmed).length;
-  if (unpaid > 0) warnings.push(`${plural(unpaid, "payment")} not confirmed`);
-  const waitingList = input.registrations.length - registrations.length;
+  // Players who have not paid and are not left out refuse the plan (`unpaid` lists them); left out, it says who.
+  if (unpaid.length > 0 && input.excludeUnpaid) {
+    const names = unpaid.map((player) => player.playerName);
+    const listed = names.length > 5 ? `${names.slice(0, 5).join(", ")} and ${names.length - 5} more` : names.join(", ");
+    const one = unpaid.length === 1;
+    warnings.push(`${plural(unpaid.length, "player")} who ${one ? "has" : "have"} not paid ${one ? "is" : "are"} left out, not ranked, paid or scored: ${listed}`);
+  }
+  const waitingList = input.registrations.length - registrations.length - (input.excludeUnpaid ? unpaid.length : 0);
   if (waitingList > 0) {
     warnings.push(`${plural(waitingList, "sign-up")} on the waiting list ${waitingList === 1 ? "is" : "are"} not ranked, paid or counted in the pool`);
   }

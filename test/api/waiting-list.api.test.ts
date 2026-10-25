@@ -134,13 +134,15 @@ describe("the tournaments list", () => {
 
 describe("what the waiting list is left out of", () => {
   it("the prize pool, the TV's entries, players left and chips", async () => {
-    const { tournament } = await fullField(["Carol", "Dan"]);
+    const { tournament, owner } = await fullField(["Carol", "Dan"]);
 
-    const pool = (await (await anon()).get(`/api/tournaments/${tournament.id}/prize-pool`)).body;
+    const pool = (await owner.get(`/api/tournaments/${tournament.id}/prize-pool`)).body;
+    const prizes = (await (await anon()).get(`/api/public/tournaments/${tournament.id}/prizes`)).body;
     const live = (await (await anon()).get(`/api/public/tournaments/${tournament.id}/display`)).body;
 
     expect(pool.breakdown.counts).toMatchObject({ registrations: 2, buyIns: 2 });
     expect(pool.breakdown.net).toBe(10_000);
+    expect(prizes.poolCents).toBe(10_000);
     expect(live.stats).toMatchObject({ entrants: 2, remaining: 2 });
   });
 

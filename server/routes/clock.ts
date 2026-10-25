@@ -4,13 +4,14 @@ import {
   clockConfigSchema,
   clockDisplaySettingsPatchSchema,
   earlyBirdsSchema,
+  SCREEN_DISPLAY_SETTINGS,
   type ClockActionInput,
   type ClockConfigInput,
   type ClockDisplaySettingsPatch,
   type EarlyBirdsInput,
 } from "@shared/api/clock";
 import { asyncHandler } from "../http/async-handler";
-import { clubFrom, requireClubManager, requireClubManagerOr } from "../http/authz";
+import { clubFrom, requireClubManager, requireClubManagerOr, type StandInCredential } from "../http/authz";
 import { validateBody } from "../http/validate";
 import {
   changeDisplaySettings,
@@ -25,15 +26,34 @@ import { CLOCK_KEY } from "../services/clock-key";
 import { setEarlyBirds } from "../services/early-birds";
 import { liveDisplay, publicSeasonLeaderboard } from "../services/live-display";
 
+const SCREEN_SETTINGS: ReadonlySet<string> = new Set(SCREEN_DISPLAY_SETTINGS);
+
+/** Whether a PATCH …/clock/display body changes only the TV's own settings (SCREEN_DISPLAY_SETTINGS). */
+function onlyScreenSettings(body: unknown): boolean {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return false;
+  const keys = Object.keys(body);
+  return keys.length > 0 && keys.every((key) => SCREEN_SETTINGS.has(key));
+}
+
+/**
+ * The clock key, for a change to the TV's own settings (round 6: the layer over the clock, the sounds,
+ * the edge margin), so a TV running the clock on its key can save its volume and margin from the TV.
+ * Whatever else the TV shows (the prize pool, the payouts, the figures, the QR code) stays the staff's.
+ */
+const SCREEN_CLOCK_KEY: StandInCredential = {
+  name: CLOCK_KEY.name,
+  accepts: async (req) => onlyScreenSettings(req.body) && (await CLOCK_KEY.accepts(req)),
+};
+
 /**
  * The tournament clock and the live display (phase4-contracts §3.2): the club staff's clock writes
  * and early birds under /api/tournaments/:id (open tournaments only: 409 TOURNAMENT_CLOSED), the
  * club's previous structures, and two public, PII-free, never-cached reads: the live display the TV,
  * the clock panel and the header chip poll, and the season leaderboard behind the TV's QR code.
- * Every clock write answers with the live display. The clock's actions also accept the venue TV's
- * clock key in place of a staff session (server/services/clock-key.ts); nothing else does. The
- * limiters are the app's: these paths count under `live` (the GETs) and `liveOps` (the writes), never
- * the venue's shared budget.
+ * Every clock write answers with the live display. The clock's actions, and changes to the TV's own
+ * display settings, also accept the venue TV's clock key in place of a staff session
+ * (server/services/clock-key.ts); nothing else does. The limiters are the app's: these paths count
+ * under `live` (the GETs) and `liveOps` (the writes), never the venue's shared budget.
  */
 export function clockRoutes(): Router {
   const router = Router();
@@ -93,7 +113,7 @@ export function clockRoutes(): Router {
 
   router.patch(
     "/api/tournaments/:id/clock/display",
-    requireClubManager(clubFrom.tournament()),
+    requireClubManagerOr(SCREEN_CLOCK_KEY, clubFrom.tournament()),
     validateBody(clockDisplaySettingsPatchSchema),
     asyncHandler<{ id: string }, unknown, ClockDisplaySettingsPatch>(async (req, res) => {
       res.json(await changeDisplaySettings(req, req.params.id, req.body));

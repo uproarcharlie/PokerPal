@@ -3,7 +3,7 @@
  * tournament row lock: SEC-06, security-09, data-integrity-10), the staff's updates (SEC-01, money-25),
  * atomic count changes (MONEY-21, money-12), payment confirmation and the payment-desk lists (money-18).
  */
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import session from "express-session";
 import request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -600,10 +600,10 @@ describe("PUT /api/registrations/:id", () => {
 
   it("logs a high-hand win with the award the server works out, and only the first time", async () => {
     const { tournament, agent } = await ownedTournament({ enableHighHand: true, highHandAmount: "20.00", highHandPayouts: 1 });
-    const { player, registration } = await registered(tournament.id, "Alice", { enteringHighHands: true });
-    await registered(tournament.id, "Bob", { enteringHighHands: true });
+    const { player, registration } = await registered(tournament.id, "Alice", { enteringHighHands: true, paymentConfirmed: true });
+    await registered(tournament.id, "Bob", { enteringHighHands: true, paymentConfirmed: true });
 
-    // The client's figure is never taken: the pot is 2 × $20.
+    // The client's figure is never taken: the pot is 2 × $20 (paid entries: round 6).
     const response = await agent.put(`/api/registrations/${registration.id}`).send({ highHandWinner: true, highHandAmount: 150 });
     const again = await agent.put(`/api/registrations/${registration.id}`).send({ highHandWinner: true });
 
@@ -630,7 +630,7 @@ describe("PUT /api/registrations/:id", () => {
   describe("high-hand awards add up to the high-hand pot (MONEY-36)", () => {
     it("splits the pot over the winners, the last taking the odd cents, and refuses one winner too many", async () => {
       const { tournament, agent } = await ownedTournament({ enableHighHand: true, highHandAmount: "3.33", highHandPayouts: 2 });
-      const entrants = await Promise.all(["Ann", "Bea", "Cy"].map((name) => registered(tournament.id, name, { enteringHighHands: true })));
+      const entrants = await Promise.all(["Ann", "Bea", "Cy"].map((name) => registered(tournament.id, name, { enteringHighHands: true, paymentConfirmed: true })));
       const award = (index: number) => agent.put(`/api/registrations/${entrants[index].registration.id}`).send({ highHandWinner: true });
 
       const first = await award(0);
@@ -644,11 +644,11 @@ describe("PUT /api/registrations/:id", () => {
 
     it("gives the last winner what is left when the pot grew between awards", async () => {
       const { tournament, agent } = await ownedTournament({ enableHighHand: true, highHandAmount: "10.00", highHandPayouts: 2 });
-      const ann = await registered(tournament.id, "Ann", { enteringHighHands: true });
-      const bea = await registered(tournament.id, "Bea", { enteringHighHands: true });
+      const ann = await registered(tournament.id, "Ann", { enteringHighHands: true, paymentConfirmed: true });
+      const bea = await registered(tournament.id, "Bea", { enteringHighHands: true, paymentConfirmed: true });
 
       const first = await agent.put(`/api/registrations/${ann.registration.id}`).send({ highHandWinner: true });
-      await registered(tournament.id, "Cy", { enteringHighHands: true });
+      await registered(tournament.id, "Cy", { enteringHighHands: true, paymentConfirmed: true });
       const second = await agent.put(`/api/registrations/${bea.registration.id}`).send({ highHandWinner: true });
 
       expect([first.body.highHandAmount, second.body.highHandAmount]).toEqual(["10.00", "20.00"]);
@@ -656,8 +656,8 @@ describe("PUT /api/registrations/:id", () => {
 
     it("clears the amount of an award taken back, and holds a hand-set amount to the pot like any change to it (P2REV4-CQ2-01)", async () => {
       const { tournament, agent } = await ownedTournament({ enableHighHand: true, highHandAmount: "10.00", highHandPayouts: 2 });
-      const ann = await registered(tournament.id, "Ann", { enteringHighHands: true });
-      const bea = await registered(tournament.id, "Bea", { enteringHighHands: true });
+      const ann = await registered(tournament.id, "Ann", { enteringHighHands: true, paymentConfirmed: true });
+      const bea = await registered(tournament.id, "Bea", { enteringHighHands: true, paymentConfirmed: true });
       const annPath = `/api/registrations/${ann.registration.id}`;
       expect((await agent.put(annPath).send({ highHandWinner: true })).body.highHandAmount).toBe("10.00");
 
@@ -685,6 +685,76 @@ describe("PUT /api/registrations/:id", () => {
       const takenBack = await agent.put(annPath).send({ highHandWinner: false });
       expect(takenBack.body).toMatchObject({ highHandWinner: false, highHandAmount: null });
     });
+
+    it("takes a payment after every prize is awarded, says what it left unawarded, and lets the TD add it to the winner (R6REV0-MONEY-01)", async () => {
+      const { tournament, agent } = await ownedTournament({ enableHighHand: true, highHandAmount: "10.00", highHandPayouts: 1 });
+      const ann = await registered(tournament.id, "Ann", { enteringHighHands: true, paymentConfirmed: true });
+      await registered(tournament.id, "Bea", { enteringHighHands: true, paymentConfirmed: true });
+      const late = await registered(tournament.id, "Cy", { enteringHighHands: true });
+      const later = await registered(tournament.id, "Dee", { enteringHighHands: true });
+      const annPath = `/api/registrations/${ann.registration.id}`;
+      expect((await agent.put(annPath).send({ highHandWinner: true })).body.highHandAmount).toBe("20.00");
+
+      // Cy pays at the desk: their $10 is in the pot, and nobody is due it yet.
+      const confirmed = await agent.patch(`/api/registrations/${late.registration.id}/confirm-payment`);
+      expect([confirmed.status, confirmed.body.paymentConfirmed, confirmed.body.highHandUnawardedCents]).toEqual([200, true, 1_000]);
+      // Dee's payment ticked from the registration's own update is taken too.
+      const viaUpdate = await agent.put(`/api/registrations/${later.registration.id}`).send({ paymentConfirmed: true });
+      expect([viaUpdate.status, viaUpdate.body.paymentConfirmed]).toEqual([200, true]);
+      expect((await registrationRow(ann.registration.id)).highHandAmount).toBe("20.00");
+
+      // The TD adds the $20 paid in since to Ann's prize: the awards add up to the $40 pot again.
+      expect((await agent.put(annPath).send({ highHandAmount: "40.00" })).body.highHandAmount).toBe("40.00");
+      const again = await agent.patch(`/api/registrations/${late.registration.id}/confirm-payment`);
+      expect(again.body.highHandUnawardedCents).toBe(0);
+    });
+
+    it("still refuses to take back a payment the awards already made need, while the game is open (round 6)", async () => {
+      const { tournament, agent } = await ownedTournament({ enableHighHand: true, highHandAmount: "10.00", highHandPayouts: 1 });
+      const ann = await registered(tournament.id, "Ann", { enteringHighHands: true, paymentConfirmed: true });
+      const bea = await registered(tournament.id, "Bea", { enteringHighHands: true, paymentConfirmed: true });
+      expect((await agent.put(`/api/registrations/${ann.registration.id}`).send({ highHandWinner: true })).body.highHandAmount).toBe("20.00");
+
+      const takenBack = await agent.put(`/api/registrations/${bea.registration.id}`).send({ paymentConfirmed: false });
+
+      expect([takenBack.status, takenBack.body]).toEqual([
+        409,
+        { error: "The high-hand awards already made ($20) would be more than the $10 pot: take an award back first", code: "HIGH_HAND_OVER_POOL" },
+      ]);
+      expect((await registrationRow(bea.registration.id)).paymentConfirmed).toBe(true);
+    });
+
+    it("takes any payment after the game whatever its high-hand pot, which is paid out (R6REV0-MONEY-01)", async () => {
+      // Finalized (it has a snapshot) before only paid entries counted: $60 awarded from all 6 entries, 4 of them paid.
+      const { tournament, agent } = await ownedTournament({ enableHighHand: true, highHandAmount: "10.00", highHandPayouts: 1, status: "completed" });
+      await testDb().update(tournaments).set({ prizePoolSnapshot: sql`'{"v":1}'::jsonb` }).where(eq(tournaments.id, tournament.id));
+      await registered(tournament.id, "Ann", { enteringHighHands: true, paymentConfirmed: true, highHandWinner: true, highHandAmount: "60.00" });
+      const paid = await Promise.all(["Bea", "Cy", "Dee"].map((name) => registered(tournament.id, name, { enteringHighHands: true, paymentConfirmed: true })));
+      const owing = await registered(tournament.id, "Eve", { enteringHighHands: true });
+      const anotherOwing = await registered(tournament.id, "Fay", { enteringHighHands: true });
+
+      const confirmed = await agent.patch(`/api/registrations/${owing.registration.id}/confirm-payment`);
+      const viaUpdate = await agent.put(`/api/registrations/${anotherOwing.registration.id}`).send({ paymentConfirmed: true });
+      const takenBack = await agent.put(`/api/registrations/${paid[0].registration.id}`).send({ paymentConfirmed: false });
+
+      expect([confirmed.status, confirmed.body.highHandUnawardedCents]).toEqual([200, 0]);
+      expect([viaUpdate.status, takenBack.status]).toEqual([200, 200]);
+      expect((await registrationsOf(tournament.id)).filter((entry) => entry.paymentConfirmed).length).toBe(5);
+    });
+  });
+
+  it("refuses to take back a payment that a manual AP total needs: it would be more than the paid entries took in (round 6)", async () => {
+    const { tournament, agent } = await ownedTournament({ buyInAmount: "50.00", rakeOverride: "80.00" });
+    const [ann, bea] = await Promise.all(["Ann", "Bea"].map((name) => registered(tournament.id, name, { paymentConfirmed: true })));
+
+    const refused = await agent.put(`/api/registrations/${ann.registration.id}`).send({ paymentConfirmed: false });
+
+    expect([refused.status, refused.body]).toEqual([
+      400,
+      { error: "The manual Rake total ($80) would be more than the $50 taken in: lower the Rake first", code: "AP_EXCEEDS_GROSS", details: { grossCents: 5_000 } },
+    ]);
+    expect((await registrationRow(ann.registration.id)).paymentConfirmed).toBe(true);
+    expect((await agent.put(`/api/registrations/${bea.registration.id}`).send({ paymentConfirmed: true })).status).toBe(200);
   });
 
   it("never writes finalize's results, another tournament or another player, and refuses an empty update", async () => {
@@ -910,7 +980,7 @@ describe("PATCH /api/registrations/:id/confirm-payment", () => {
 
     expect(response.status).toBe(200);
     // Round 5: no table is in play, so auto-seat had nothing to do.
-    expect(response.body).toEqual({ ...withPlayer(registration, player), paymentConfirmed: true, seating: null });
+    expect(response.body).toEqual({ ...withPlayer(registration, player), paymentConfirmed: true, seating: null, highHandUnawardedCents: 0 });
     expect(await activityFor(tournament.id)).toEqual([logEntry("payment_confirmed", "Payment confirmed for Alice", player)]);
   });
 
@@ -1038,18 +1108,22 @@ describe("pending and confirmed registrations (the payment desk)", () => {
     ]);
   });
 
-  it("charges a ticked high-hand entry exactly as the high-hand pot counts it, even once high hands are switched off (P2REV4-CQ-08)", async () => {
+  it("charges a ticked high-hand entry exactly as the high-hand pot counts it once paid, even once high hands are switched off (P2REV4-CQ-08)", async () => {
     const { tournament, agent } = await ownedTournament({ buyInAmount: "30.00", enableHighHand: false, highHandAmount: "20.00" });
     const { registration } = await registered(tournament.id, "Alice", { enteringHighHands: true });
+    const { registration: bob } = await registered(tournament.id, "Bob", { enteringHighHands: true });
 
     const owed = async () =>
       (await agent.get(`/api/tournaments/${tournament.id}/pending-registrations`)).body.map((row: { amountOwed: number }) => row.amountOwed);
-    const pot = async () => (await (await anon()).get(`/api/tournaments/${tournament.id}/prize-pool`)).body.breakdown.highHand.gross;
+    const pot = async () => (await agent.get(`/api/tournaments/${tournament.id}/prize-pool`)).body.breakdown.highHand.gross;
 
+    // Owed, and in the pot only once paid (round 6): Bob's $20 is in as his payment is confirmed.
+    expect([await owed(), await pot()]).toEqual([[50, 50], 0]);
+    expect((await agent.patch(`/api/registrations/${bob.id}/confirm-payment`)).status).toBe(200);
     expect([await owed(), await pot()]).toEqual([[50], 2_000]);
-    // Unticking the entry takes it out of both.
+    // Unticking the entry takes it out of what is owed.
     expect((await agent.put(`/api/registrations/${registration.id}`).send({ enteringHighHands: false })).status).toBe(200);
-    expect([await owed(), await pot()]).toEqual([[30], 0]);
+    expect([await owed(), await pot()]).toEqual([[30], 2_000]);
   });
 
   it.each(["pending-registrations", "confirmed-registrations"])("%s is for the club's staff only (SEC-09)", async (list) => {
@@ -1167,7 +1241,7 @@ describe("high-hand awards keep fitting the pot when it changes (MONEY-P2REV-05)
   async function awarded(payouts = 1) {
     const { tournament, agent } = await ownedTournament({ enableHighHand: true, highHandAmount: "10.00", highHandPayouts: payouts });
     const entrants = [];
-    for (const name of ["Ann", "Bea", "Cy"]) entrants.push(await registered(tournament.id, name, { enteringHighHands: true }));
+    for (const name of ["Ann", "Bea", "Cy"]) entrants.push(await registered(tournament.id, name, { enteringHighHands: true, paymentConfirmed: true }));
     const award = await agent.put(`/api/registrations/${entrants[0].registration.id}`).send({ highHandWinner: true });
     expect(award.body.highHandAmount).toBe(payouts === 1 ? "30.00" : "15.00");
     return { tournament, agent, entrants };
@@ -1186,10 +1260,14 @@ describe("high-hand awards keep fitting the pot when it changes (MONEY-P2REV-05)
     expect((await registrationRow(entrants[1].registration.id)).enteringHighHands).toBe(true);
   });
 
-  it("refuses a new entrant, or a new fee, once every prize is awarded, so no money is left that nobody can win (HIGH_HAND_AWARDED)", async () => {
+  /** Registers a player as the club's staff, paid at the door: their high-hand entry is in the pot at once (round 6). */
+  const paidEntrant = async (agent: request.Agent, tournament: Pick<Tournament, "id">) =>
+    agent.post(`/api/tournaments/${tournament.id}/registrations`).send({ playerId: (await createPlayer()).id, enteringHighHands: true, paymentConfirmed: true });
+
+  it("refuses a new paid entrant, or a new fee, once every prize is awarded, so no money is left that nobody can win (HIGH_HAND_AWARDED)", async () => {
     const { tournament, agent } = await awarded();
 
-    const late = await signUp(tournament, { playerId: (await createPlayer()).id, enteringHighHands: true });
+    const late = await paidEntrant(agent, tournament);
     const fee = await agent.put(`/api/tournaments/${tournament.id}`).send({ highHandAmount: "15.00" });
 
     expect([late.body.code, fee.body.code]).toEqual(["HIGH_HAND_AWARDED", "HIGH_HAND_AWARDED"]);
@@ -1199,7 +1277,7 @@ describe("high-hand awards keep fitting the pot when it changes (MONEY-P2REV-05)
   it("lets the pot grow while prizes are still to come, the next award taking the growth", async () => {
     const { tournament, agent, entrants } = await awarded(2);
 
-    expect((await signUp(tournament, { playerId: (await createPlayer()).id, enteringHighHands: true })).status).toBe(201);
+    expect((await paidEntrant(agent, tournament)).status).toBe(201);
     const second = await agent.put(`/api/registrations/${entrants[1].registration.id}`).send({ highHandWinner: true });
 
     expect(second.body.highHandAmount).toBe("25.00");
@@ -1219,8 +1297,8 @@ describe("a manual AP total never ends up above what came in (P2REV1-04, spec D1
 
   it("refuses removing an entry that would take the gross below it, and keeps the entry", async () => {
     const { tournament, agent } = await apTournament();
-    for (const name of ["Ann", "Bea"]) await registered(tournament.id, name);
-    const cy = await registered(tournament.id, "Cy"); // $60 in
+    for (const name of ["Ann", "Bea"]) await registered(tournament.id, name, { paymentConfirmed: true });
+    const cy = await registered(tournament.id, "Cy", { paymentConfirmed: true }); // $60 in, paid
 
     const response = await agent.delete(`/api/registrations/${cy.registration.id}`);
 
@@ -1235,7 +1313,7 @@ describe("a manual AP total never ends up above what came in (P2REV1-04, spec D1
 
   it("refuses lowering buy-ins, re-buys or add-ons with PUT past it, but not a change that keeps the gross above it", async () => {
     const { tournament, agent } = await apTournament();
-    const ann = await registered(tournament.id, "Ann", { buyIns: 3, rebuys: 1 }); // $80 in
+    const ann = await registered(tournament.id, "Ann", { buyIns: 3, rebuys: 1, paymentConfirmed: true }); // $80 in, paid
 
     const fine = await agent.put(`/api/registrations/${ann.registration.id}`).send({ rebuys: 0 }); // $60
     const tooFar = await agent.put(`/api/registrations/${ann.registration.id}`).send({ buyIns: 2 }); // $40
@@ -1248,7 +1326,7 @@ describe("a manual AP total never ends up above what came in (P2REV1-04, spec D1
 
   it("refuses a negative /counts change past it, leaving the count as it was", async () => {
     const { tournament, agent } = await apTournament();
-    const ann = await registered(tournament.id, "Ann", { buyIns: 2, rebuys: 1 }); // $60 in
+    const ann = await registered(tournament.id, "Ann", { buyIns: 2, rebuys: 1, paymentConfirmed: true }); // $60 in, paid
 
     const response = await agent.post(`/api/registrations/${ann.registration.id}/counts`).send({ rebuys: -1 }); // $40
 
@@ -1262,9 +1340,9 @@ describe("a manual AP total never ends up above what came in (P2REV1-04, spec D1
 describe("a tied high hand is split (TN2-04)", () => {
   it("shares the winner's prize half each, adds a prize, and logs the split", async () => {
     const { tournament, agent } = await ownedTournament({ enableHighHand: true, highHandAmount: "10.00", highHandPayouts: 1 });
-    const ann = await registered(tournament.id, "Ann", { enteringHighHands: true });
-    const bea = await registered(tournament.id, "Bea", { enteringHighHands: true });
-    await registered(tournament.id, "Cy", { enteringHighHands: true });
+    const ann = await registered(tournament.id, "Ann", { enteringHighHands: true, paymentConfirmed: true });
+    const bea = await registered(tournament.id, "Bea", { enteringHighHands: true, paymentConfirmed: true });
+    await registered(tournament.id, "Cy", { enteringHighHands: true, paymentConfirmed: true });
     await agent.put(`/api/registrations/${ann.registration.id}`).send({ highHandWinner: true });
 
     const tooMany = await agent.put(`/api/registrations/${bea.registration.id}`).send({ highHandWinner: true });
@@ -1286,7 +1364,7 @@ describe("a tied high hand is split (TN2-04)", () => {
   it("audits a tie, which changes the tournament's prize count, and keeps that count one the API accepts back (CQ-P2-04)", async () => {
     const { tournament, agent } = await ownedTournament({ enableHighHand: true, highHandAmount: "10.00", highHandPayouts: 4 });
     const entries = [];
-    for (const name of ["Ann", "Bea", "Cy", "Dee", "Eve"]) entries.push(await registered(tournament.id, name, { enteringHighHands: true }));
+    for (const name of ["Ann", "Bea", "Cy", "Dee", "Eve"]) entries.push(await registered(tournament.id, name, { enteringHighHands: true, paymentConfirmed: true }));
     for (const entry of entries.slice(0, 4)) {
       expect((await agent.put(`/api/registrations/${entry.registration.id}`).send({ highHandWinner: true })).status).toBe(200);
     }

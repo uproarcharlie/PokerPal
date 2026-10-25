@@ -75,7 +75,7 @@ describe("ApAdjustDialog", () => {
     await user.click(within(reasons).getByRole("button", { name: "Low turnout" }));
     expect(within(reasons).getByRole("button", { name: "Low turnout" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("textbox", { name: "Reason (optional)" })).toHaveValue("Low turnout");
-    expect(screen.getByText("Shown in the public activity feed.")).toBeInTheDocument();
+    expect(screen.getByText("Only the club's staff see it, in the activity feed.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(sent.body).toEqual({ mode: "ap_override", amount: "20.00", reason: "Low turnout" }));

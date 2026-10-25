@@ -7,7 +7,7 @@
  * adding up to 100%, so every build since Phase 2 reads it). Every screen, the TV, the preview and
  * finalize pay it through computePrizePool. The places are paid as set (round 5, item 16): a leftover
  * goes where the TD chose (tournaments.prize_difference; the club keeps it unless told otherwise) and a
- * shortfall is added by the club. A change (structure, places or that choice) is logged publicly with
+ * shortfall is added by the club. A change (structure, places or that choice) is logged to the staff's feed with
  * where the difference goes and the reason, and audited; sending what is stored writes nothing.
  */
 import type { Request } from "express";

@@ -8,13 +8,14 @@ import { useToast } from "@/hooks/use-toast";
 import { errorMessage, hasErrorCode } from "@/lib/api/http";
 import { formatMoney } from "@/lib/format";
 import { clubTake } from "@/lib/prize-pool";
-import { liveSummary, PoolSummary } from "@/features/prize-pool/components/public/pool-summary";
+import { liveSummary, PoolSummary } from "@/features/prize-pool/components/pool-summary";
 import type { FinalizePreviewDto, FinalizePreviewInput } from "@shared/api/finalize";
 import { tournamentDeskQueries } from "../../staff-api";
 import { useFinalizeTournament } from "../../staff-hooks";
 import { useDealDraft } from "./deal";
 import { DealPendingNote, DealSection } from "./deal-editor";
 import { FinishOrderList, moved, PLAN_CHANGED_NOTICE, PlanTable, PlanWarnings, refusalText, sameOrder } from "./finalize-plan";
+import { UnpaidPlayers } from "./unpaid-players";
 
 interface FinalizeDialogProps {
   open: boolean;
@@ -26,8 +27,10 @@ interface FinalizeDialogProps {
  * End Tournament: previews the plan on the server (the same one finalize writes), asks for the
  * finishing order of the players still in and, if they made one, their deal, then finalizes with the
  * preview's plan hash so nothing that changed in between is paid by surprise (409 PLAN_CHANGED shows
- * the new plan instead). A deal is previewed once it adds up, so the plan shown is the one paid. Full
- * screen on a phone, its Finalize button kept in view under the plan.
+ * the new plan instead). A deal is previewed once it adds up, so the plan shown is the one paid. Only
+ * paid players are in the pool (round 6): anyone in the field who has not paid is named first, to
+ * confirm or leave out, and Finalize waits for that. Full screen on a phone, its Finalize button kept
+ * in view under the plan.
  */
 export function FinalizeDialog({ open, onOpenChange, tournamentId }: FinalizeDialogProps) {
   return (
@@ -50,9 +53,14 @@ function FinalizeDialogBody({ tournamentId, onClose }: { tournamentId: string; o
   // Registration ids of the players still in, best first; null until the server suggests one.
   const [order, setOrder] = useState<string[] | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Leave the players who have not paid out of the results (round 6), once the TD says so.
+  const [leaveOutUnpaid, setLeaveOutUnpaid] = useState(false);
   const deal = useDealDraft();
 
-  const input: FinalizePreviewInput = order ? { finishOrder: order, ...(deal.deal ? { deal: deal.deal } : {}) } : {};
+  const input: FinalizePreviewInput = {
+    ...(order ? { finishOrder: order, ...(deal.deal ? { deal: deal.deal } : {}) } : {}),
+    ...(leaveOutUnpaid ? { excludeUnpaid: true } : {}),
+  };
   const preview = useQuery({ ...tournamentDeskQueries.finalizePreview(tournamentId, input), placeholderData: keepPreviousData });
   const plan = preview.data;
   const current = plan && !preview.isPlaceholderData ? plan : undefined;
@@ -88,7 +96,12 @@ function FinalizeDialogBody({ tournamentId, onClose }: { tournamentId: string; o
   const finalize = useFinalizeTournament(tournamentId, input);
   const confirm = (planHash: string) =>
     finalize.mutate(
-      { finishOrder: picking ? shownOrder : undefined, expectedPlanHash: planHash, ...(deal.deal ? { deal: deal.deal } : {}) },
+      {
+        finishOrder: picking ? shownOrder : undefined,
+        expectedPlanHash: planHash,
+        ...(deal.deal ? { deal: deal.deal } : {}),
+        ...(leaveOutUnpaid ? { excludeUnpaid: true } : {}),
+      },
       {
         onSuccess: (result) => {
           onClose();
@@ -99,15 +112,17 @@ function FinalizeDialogBody({ tournamentId, onClose }: { tournamentId: string; o
             setNotice(PLAN_CHANGED_NOTICE);
             return;
           }
-          if (hasErrorCode(error, "ACTIVE_PLAYERS_NEED_ORDER", "INVALID_FINISH_ORDER", "DEAL_INVALID")) void preview.refetch();
+          if (hasErrorCode(error, "ACTIVE_PLAYERS_NEED_ORDER", "INVALID_FINISH_ORDER", "DEAL_INVALID", "UNPAID_PLAYERS")) void preview.refetch();
           setNotice(errorMessage(error));
         },
       },
     );
 
   const alreadyFinalized = plan?.requiresForce === true;
-  // A missing or stale finishing order is fixed above as soon as it arrives; anything else is shown.
-  const refusal = current && !current.ok && !alreadyFinalized && !(picking && needsOrder(current)) ? refusalText(current) : undefined;
+  // A missing or stale finishing order is fixed above as soon as it arrives, and unpaid players have their
+  // own panel; anything else is shown.
+  const refusal =
+    current && !current.ok && !alreadyFinalized && !(picking && needsOrder(current)) && current.code !== "UNPAID_PLAYERS" ? refusalText(current) : undefined;
   const canConfirm = current !== undefined && current.ok && !!current.planHash && !alreadyFinalized && !preview.isFetching && deal.ready;
 
   return (
@@ -141,6 +156,20 @@ function FinalizeDialogBody({ tournamentId, onClose }: { tournamentId: string; o
             </div>
             {/* Where the money the prizes leave (or need) goes: kept, carried over, added (round 5, item 16). */}
             <PoolSummary figures={liveSummary(plan.prizePool.breakdown, plan.prizePool.rakeLabel, plan.prizePool.carryTarget)} testId="finalize-summary" />
+
+            {!alreadyFinalized ? (
+              <UnpaidPlayers
+                tournamentId={tournamentId}
+                unpaid={plan.unpaid}
+                leftOut={leaveOutUnpaid}
+                onLeaveOut={(leftOut) => {
+                  setNotice(null);
+                  setLeaveOutUnpaid(leftOut);
+                }}
+                onConfirmed={() => void preview.refetch()}
+                disabled={finalize.isPending}
+              />
+            ) : null}
 
             {picking && !alreadyFinalized ? (
               <div className="space-y-2">

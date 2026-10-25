@@ -146,7 +146,8 @@ function PayoutsForm({ tournament, prizePool, onClose }: PayoutsFormProps) {
   // A percentage is of the pool (a manual one, else what is available); the prizes are measured against what is available.
   const money = editorMoney(prizePool.breakdown);
   const pool = money.poolCents;
-  const entrants = prizePool.breakdown.counts.registrations;
+  // Only paid players are in the pool (round 6): they are who the places are paid to.
+  const paidPlayers = prizePool.breakdown.counts.registrations;
   const unchanged = sameAsStored(values, tournament);
 
   // A place's Remove takes its own button away: focus goes to the place now in its spot, the one above, or Add a place.
@@ -214,7 +215,7 @@ function PayoutsForm({ tournament, prizePool, onClose }: PayoutsFormProps) {
   const rootError = form.formState.errors.root?.message;
   // Worked out from the boxes as they are: a refusal of the places together goes once they add up.
   const wholeError = form.formState.isSubmitted && structure === "custom" ? placesProblem(values) : undefined;
-  const unpaidNote = unpaidPlacesNote(structure === "custom" ? rows.length : PAYOUT_STRUCTURES[structure].length, entrants);
+  const unpaidNote = unpaidPlacesNote(structure === "custom" ? rows.length : PAYOUT_STRUCTURES[structure].length, paidPlayers);
   return (
     <Form {...form}>
       <form onSubmit={submit} noValidate className="flex min-h-0 flex-1 flex-col" data-testid="payout-editor">
@@ -341,7 +342,7 @@ function PayoutsForm({ tournament, prizePool, onClose }: PayoutsFormProps) {
                 <FormControl>
                   <Input {...field} maxLength={200} className="h-11" placeholder="Or type a reason" />
                 </FormControl>
-                <FormDescription>Shown in the public activity feed.</FormDescription>
+                <FormDescription>Only the club&apos;s staff see it, in the activity feed.</FormDescription>
                 <FormMessage />
               </FormItem>
             )}

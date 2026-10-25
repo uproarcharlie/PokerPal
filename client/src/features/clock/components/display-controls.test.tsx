@@ -33,7 +33,7 @@ function derivedAt(levelIndex: number, status: "running" | "idle" = "running"): 
 
 type Layer = ClockDisplaySettings["overlay"];
 
-function showControls(derived = derivedAt(1), screenTools = tools(), undo: ClockUndoDto | null = null, overlay: Layer = "none", canChangeDisplay = true) {
+function showControls(derived = derivedAt(1), screenTools = tools(), undo: ClockUndoDto | null = null, overlay: Layer = "none") {
   const sent = recordClockActions(() => liveDisplayDto({ clock: runningClock(Date.now(), { levelIndex: derived.levelIndex }), viewer: { canControl: true } }));
   const layers = recordRequests(
     [["patch", "/api/tournaments/t1/clock/display"]],
@@ -47,7 +47,7 @@ function showControls(derived = derivedAt(1), screenTools = tools(), undo: Clock
     useEffect(() => {
       setLayer.current = setShown;
     }, []);
-    return <DisplayControls tournamentId="t1" derived={derived} undo={undo} overlay={shown} canChangeDisplay={canChangeDisplay} tools={screenTools} />;
+    return <DisplayControls tournamentId="t1" derived={derived} undo={undo} overlay={shown} tools={screenTools} />;
   }
   const view = renderWithApp(
     <>
@@ -290,33 +290,5 @@ describe("the TV's staff controls", () => {
   it("names the toggle by what it will do", () => {
     showControls(derivedAt(0, "idle"));
     expect(screen.getByRole("button", { name: "Start" })).toBeInTheDocument();
-  });
-
-  describe("on a screen running the clock on its clock key alone (it may not change the TV display)", () => {
-    it("runs the clock, but changes no layer or margin: the keys say where that is done, and the bar offers neither layer", async () => {
-      const { sent, layers } = showControls(derivedAt(1), tools(), null, "seating", false);
-      const keys = user();
-      await keys.keyboard(" ");
-      await vi.waitFor(() => expect(sent).toEqual([{ action: "toggle", alsoStartTournament: false, expectedStatus: "running" }]));
-      for (const key of ["s", "$", "{Escape}", "e"]) await keys.keyboard(key);
-
-      expect((await screen.findAllByText("Changed from the Clock tab")).length).toBeGreaterThan(0);
-      expect(layers).toEqual([]);
-      expect(screen.queryByRole("button", { name: "Seats" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Payouts" })).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Screen" })).toBeInTheDocument();
-    });
-
-    it("lets the screen's settings dialog only show the tournament's settings, and lists no key that would change them", async () => {
-      const screenTools = tools();
-      showControls(derivedAt(1), screenTools, null, "none", false);
-      expect(screenTools.screen.offerChanges).not.toHaveBeenCalled();
-
-      await user().keyboard("?");
-      const help = await screen.findByRole("dialog", { name: "Keyboard shortcuts" });
-      expect(help).toHaveTextContent(shortcutList(false, false).map((shortcut) => `${shortcut.keys}${shortcut.does}`).join(""));
-      for (const key of ["S", "$", "E", "Esc"]) expect(shortcutList(false, false).some((shortcut) => shortcut.keys === key)).toBe(false);
-      expect(shortcutList(true, false).find((shortcut) => shortcut.keys === "Esc")?.does).toBe("Leave full screen");
-    });
   });
 });

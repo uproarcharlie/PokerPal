@@ -9,8 +9,10 @@ export interface DashboardStatsDto {
   totalPlayers: number;
   /**
    * Whole dollars: cancelled tournaments are left out; a completed one counts what it paid (snapshot,
-   * or stored prizes for legacy rows); any other counts max(0, computePrizePool(...).net). One query
-   * for all registrations (perf-20); rake per pot and fixed rake per entry, as finalize (money-14).
+   * or stored prizes for legacy rows); any other counts max(0, computePrizePool(...).net), which counts
+   * paid players only (round 6: poolEntries; a completed one without a snapshot keeps counting every
+   * entry, as it always has). One query for all registrations (perf-20); rake per pot and fixed rake
+   * per entry, as finalize (money-14).
    */
   totalPrizePool: number;
   /** Clubs in scope. */

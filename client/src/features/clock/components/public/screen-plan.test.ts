@@ -52,11 +52,7 @@ function worstCase(width: number, height: number, overrides: Partial<PlanInput> 
         { place: "2nd", amount: "$37,037" },
         { place: "3rd", amount: "$24,691" },
       ],
-      lines: [
-        { label: "Carried over from Central Stars Thursday Night Deepstack Championship", amount: "$1,234" },
-        { label: "Carried over to Winter 2026 Central Stars League", amount: "$987" },
-      ],
-      ap: { label: "AP", amount: "$12,345" },
+      carried: "Includes $2,221 carried over from Central Stars Thursday Night Deepstack Championship and Central Stars Wednesday Turbo",
       note: null,
     },
     qrCaption: "Scan for the Winter 2026 Central Stars League leaderboard",
@@ -117,21 +113,25 @@ describe("the TV clock's screen plan: one screen, never scrolling (round 5, item
     const upright = planScreen(worstCase(390, 844));
     expect(upright.layout).toBe("portrait");
     expect(upright.tiles.shown).toBeGreaterThanOrEqual(2);
-    // The pool comes before the QR code, the QR code before the places and the AP.
+    // The pool comes before the QR code, the QR code before the places and the money carried in.
     expect(upright.money?.pool).toBe(true);
   });
 
-  it.each(SCREENS)("lists the pool's breakdown after the places and before the AP on $name (round 5, item 16)", ({ width, height }) => {
+  it.each(SCREENS)("says what was carried in only after every place on $name (round 6)", ({ width, height }) => {
     const plan = planScreen(worstCase(width, height));
     if (!plan.money) return;
-    if (plan.money.lines > 0) expect(plan.money.payouts).toBe(3);
-    if (plan.money.ap) expect(plan.money.lines).toBe(2);
+    if (plan.money.carried) expect(plan.money.payouts).toBe(3);
   });
 
-  it("shows the whole breakdown with the pool on a TV, in type the room can read", () => {
+  it("shows the places and the money carried in with the pool on a TV, in type the room can read", () => {
     const plan = planScreen(worstCase(1920, 1080));
-    expect(plan.money).toMatchObject({ pool: true, payouts: 3, lines: 2 });
+    expect(plan.money).toMatchObject({ pool: true, payouts: 3, carried: true });
     expect(plan.money?.small).toBeGreaterThanOrEqual(0.03 * plan.height - 0.01);
+  });
+
+  it("plans no room for the club's take: the TV is never sent one (round 6)", () => {
+    const plan = planScreen(worstCase(1920, 1080));
+    expect(Object.keys(plan.money ?? {}).sort()).toEqual(["amount", "carried", "gap", "label", "note", "padX", "padY", "payouts", "pool", "row", "small"]);
   });
 
   it("drops the QR code and the places before the pool, and the figures before the players, when there is no room", () => {

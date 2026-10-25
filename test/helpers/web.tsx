@@ -13,6 +13,7 @@ import { AppProviders } from "@/app/providers";
 import type { Impersonator } from "@/contexts/auth-context";
 import { dismissToast } from "@/hooks/use-toast";
 import { createQueryClient } from "@/lib/api/query-client";
+import type { SignedOutMeResponse } from "@shared/api/auth";
 import type { ErrorCode } from "@shared/api/errors";
 import { server } from "../msw/server";
 
@@ -96,9 +97,9 @@ export function mockSignedIn(user: MockUser, { impersonator = null }: { imperson
   );
 }
 
-/** GET /api/auth/me answers 401, as it does for a visitor. */
+/** GET /api/auth/me answers that nobody is signed in, as it does for a visitor. */
 export function mockSignedOut(): void {
-  server.use(http.get("/api/auth/me", () => apiError(401, "UNAUTHENTICATED", "Not signed in")));
+  server.use(http.get("/api/auth/me", () => HttpResponse.json({ user: null } satisfies SignedOutMeResponse)));
 }
 
 /** An error body as the API's central handler sends it. */

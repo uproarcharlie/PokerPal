@@ -19,6 +19,8 @@ describe("Privacy (CC-06)", () => {
     expect(screen.getByText(/your phone number, so a club can recognise you/)).toBeInTheDocument();
     expect(screen.getByText(/Your phone number is seen only by the staff of the club you first played at/)).toBeInTheDocument();
     expect(screen.getByText(/Under the Privacy Act 2020 you can ask/)).toBeInTheDocument();
+    // Round 6: the visit counter the site's security headers now let run.
+    expect(screen.getByText(/Cloudflare Web Analytics, which sets no cookies and does not identify you/)).toBeInTheDocument();
     expect(document.title).toBe("Privacy | LovePoker.club");
   });
 

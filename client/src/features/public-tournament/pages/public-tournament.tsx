@@ -2,13 +2,10 @@ import { useParams } from "wouter";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { PublicPointsAllocation, PublicPointsSystem, PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
-import { carryTargetName } from "@shared/domain/prize-difference";
-import { rakeLabel } from "@shared/domain/prize-pool";
 import { isClosedStatus } from "@shared/domain/tournaments";
 import { usePageMeta } from "@/app/page-meta";
 import { ClubThemeScope } from "@/features/branding/components/public/club-theme-scope";
 import { useClub } from "@/features/clubs/hooks";
-import { frozenSummary, liveSummary, type PoolSummaryFigures } from "@/features/prize-pool/components/public/pool-summary";
 import { usePointsAllocations, usePointsSystem, useSeason } from "@/features/seasons/hooks";
 import { ActivityFeed } from "@/features/tournaments/components/activity-feed";
 import { useRegistrations, useTournament } from "@/features/tournaments/hooks";
@@ -19,7 +16,6 @@ import { TabHost } from "@/components/shared/tab-host";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { clubTimeZone } from "@/lib/format";
 import { liveRegistrationsInterval, liveTournamentInterval } from "@/lib/live-refresh";
-import { tournamentMoney, type TournamentMoney } from "@/lib/prize-pool";
 import { EntryDetails } from "../components/entry-details";
 import { TournamentLiveLinks } from "../components/live-links";
 import { TOURNAMENT_PAGE_STATES } from "../components/page-shell";
@@ -28,9 +24,12 @@ import { StandingsPanel } from "../components/standings-panel";
 import { TournamentHeader } from "../components/tournament-header";
 import { TournamentStats } from "../components/tournament-stats";
 import { qk } from "@/lib/api/query-keys";
+import { publicTournamentQueries } from "../api";
+import { usePublicPrizes } from "../hooks";
 import { lineupOf } from "../waiting-list";
 
 const PLAYERS_FAILED = "The players could not be loaded";
+const PRIZES_FAILED = "The prize pool could not be loaded";
 
 /**
  * The rules a place's points are worked out with, once both halves (the system and its allocations)
@@ -48,17 +47,6 @@ function pointsRulesOf(
   return system.isError || allocations.isError ? "failed" : "loading";
 }
 
-/**
- * The pool's honest breakdown for the players (round 5, item 16): as finalize froze it once paid, else
- * live from the same shared maths the server pays with; none for a cancelled or unrecorded tournament.
- */
-function poolSummaryOf(tournament: TournamentDetailDto, money: TournamentMoney, label: string, seasonName: string | undefined): PoolSummaryFigures | null {
-  const snapshot = money.display.source === "snapshot" ? tournament.prizePoolSnapshot : null;
-  if (snapshot) return frozenSummary(snapshot.pool, label);
-  if (money.display.source !== "live") return null;
-  return liveSummary(money.breakdown, label, carryTargetName(seasonName));
-}
-
 interface TournamentViewProps {
   tournament: TournamentDetailDto;
   registrationsQuery: UseQueryResult<PublicRegistration[]>;
@@ -72,13 +60,13 @@ function TournamentView({ tournament, registrationsQuery }: TournamentViewProps)
   const pointsSystem = usePointsSystem(tournament.pointsSystemId);
   const allocations = usePointsAllocations(tournament.pointsSystemId);
 
-  const registrations = registrationsQuery.data;
-  // The same shared functions finalize pays with, so this page shows what the TD sees and what is paid.
-  const money = registrations ? tournamentMoney(tournament, registrations) : undefined;
+  // Worked out by the server from who has paid, as finalize pays (round 6): the page is never sent the
+  // club's takings, so it shows the pool and the places as they are, never what the club keeps.
+  const prizes = usePublicPrizes(tournament.id, { follow: tournament });
   const locked = tournament.prizePoolLocked === true;
   const pointsRules = pointsRulesOf(tournament, pointsSystem, allocations);
   // The high-hand pot is money too: shown when the pool is, while the game is on.
-  const highHandPotCents = money && locked && !closed ? money.breakdown.highHand.net : null;
+  const highHandPotCents = prizes.data && locked && !closed ? prizes.data.highHandPotCents : null;
 
   return (
     <div className="min-h-dvh bg-background">
@@ -89,6 +77,7 @@ function TournamentView({ tournament, registrationsQuery }: TournamentViewProps)
           follows={[
             { queryKey: qk.tournaments.detail(tournament.id), interval: liveTournamentInterval(tournament) },
             { queryKey: qk.tournaments.registrations(tournament.id), interval: liveRegistrationsInterval(tournament) },
+            { queryKey: publicTournamentQueries.prizes(tournament.id).queryKey, interval: liveRegistrationsInterval(tournament) },
           ]}
           timeZone={clubTimeZone(club)}
           className="mb-4"
@@ -114,26 +103,24 @@ function TournamentView({ tournament, registrationsQuery }: TournamentViewProps)
                     </Card>
                   ) : null}
                   <EntryDetails tournament={tournament} highHandPotCents={highHandPotCents} />
-                  <QueryState query={registrationsQuery} loading={<LoadingRows rows={4} />} errorTitle={PLAYERS_FAILED}>
-                    {(list) =>
-                      money ? (
-                        <PrizeStructureCard
-                          money={money}
-                          // The places it pays are worked out from the field: the waiting list does not play (round 5, item 15).
-                          registrations={lineupOf(list, tournament.maxPlayers).field}
-                          trackPoints={tournament.trackPoints === true}
-                          pointsRules={pointsRules}
-                          onRetryPoints={() => {
-                            if (pointsSystem.isError) void pointsSystem.refetch();
-                            if (allocations.isError) void allocations.refetch();
-                          }}
-                          locked={locked}
-                          deal={tournament.prizePoolSnapshot?.deal ?? null}
-                          // Once the club is known, so its AP label is not first shown as "Rake".
-                          summary={club ? poolSummaryOf(tournament, money, rakeLabel(club), season?.name) : null}
-                        />
-                      ) : null
-                    }
+                  <QueryState query={prizes} loading={<LoadingRows rows={4} />} errorTitle={PRIZES_FAILED}>
+                    {(paid) => (
+                      <QueryState query={registrationsQuery} loading={<LoadingRows rows={4} />} errorTitle={PLAYERS_FAILED}>
+                        {(list) => (
+                          <PrizeStructureCard
+                            prizes={paid}
+                            // Who finished where, of the field: the waiting list does not play (round 5, item 15).
+                            registrations={lineupOf(list, tournament.maxPlayers).field}
+                            trackPoints={tournament.trackPoints === true}
+                            pointsRules={pointsRules}
+                            onRetryPoints={() => {
+                              if (pointsSystem.isError) void pointsSystem.refetch();
+                              if (allocations.isError) void allocations.refetch();
+                            }}
+                          />
+                        )}
+                      </QueryState>
+                    )}
                   </QueryState>
                 </div>
               ),

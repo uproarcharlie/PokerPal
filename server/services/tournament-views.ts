@@ -4,8 +4,8 @@
  * import each other in a cycle.
  */
 import type { Viewer } from "@shared/api/common";
-import { PUBLIC_SNAPSHOT_FIELDS } from "@shared/api/finalize";
-import { pickFields, PUBLIC_TOURNAMENT_FIELDS } from "@shared/api/public";
+import { pickFields, PUBLIC_TOURNAMENT_FIELDS, TOURNAMENT_TAKINGS_FIELDS } from "@shared/api/public";
+import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { CLOSED_STATUSES, type TournamentStatus } from "@shared/domain/tournaments";
 import { formatMoney, toCents, type MoneyInput } from "@shared/domain/money";
 import {
@@ -18,22 +18,26 @@ import {
 import type { Tournament } from "@shared/schema";
 import { conflict, type HttpError } from "../http/errors";
 
-/** A tournament as anyone may see it: no audit user ids, no snapshot. */
-export const toPublicTournament = (row: Tournament) => pickFields(row, PUBLIC_TOURNAMENT_FIELDS);
+/**
+ * A tournament as its viewer may see it: no audit user ids, no snapshot, and the club's takings (its AP
+ * rates, a manual AP total, why the pool was adjusted, where a prize difference goes) only for someone
+ * who runs the club (`canManage`; round 6).
+ */
+export const toPublicTournament = (row: Tournament, canManage: boolean) => ({
+  ...pickFields(row, PUBLIC_TOURNAMENT_FIELDS),
+  ...(canManage ? pickFields(row, TOURNAMENT_TAKINGS_FIELDS) : {}),
+});
 
 /**
- * The finalize snapshot as `viewer` may see it: whole for someone who runs the club, else without its
- * warnings, which are staff bookkeeping (unconfirmed payments, discarded player requests).
+ * The finalize snapshot, for someone who runs the club only: it records what the club took, kept and
+ * carried over, and the TD's bookkeeping (unconfirmed payments, discarded player requests). Everyone
+ * else reads what was paid, and the deal, from the public prize pool (./public-prizes; round 6).
  */
-function snapshotFor(row: Tournament, viewer: Viewer) {
-  const snapshot = row.prizePoolSnapshot;
-  if (!snapshot) return null;
-  return viewer.canManage ? snapshot : pickFields(snapshot, PUBLIC_SNAPSHOT_FIELDS);
-}
+const snapshotFor = (row: Tournament, viewer: Viewer): TournamentDetailDto["prizePoolSnapshot"] => (viewer.canManage ? row.prizePoolSnapshot : null);
 
 /** GET /api/tournaments/:id and every staff response about one tournament (`TournamentDetailDto`). */
 export const toTournamentDetail = (row: Tournament, viewer: Viewer) => ({
-  ...toPublicTournament(row),
+  ...toPublicTournament(row, viewer.canManage),
   prizePoolSnapshot: snapshotFor(row, viewer),
   viewer,
 });

@@ -6,6 +6,7 @@
 import type { PublicSeasonLeaderboardDto } from "@shared/api/live-display";
 import type { ApUpdateResponse, PrizePoolDto } from "@shared/api/prize-pool";
 import type { PublicRegistration } from "@shared/api/public";
+import type { ManagedRegistration } from "@shared/api/registrations";
 import type { TournamentDetailDto, TournamentStatus } from "@shared/api/tournaments";
 import { computePrizePool, payoutsForDisplay } from "@shared/domain/prize-pool";
 import { leaderboardEntryDto, MANAGER_VIEW, registrationDto, tournamentDto } from "./dto";
@@ -33,11 +34,15 @@ export function apTournament(overrides: Partial<TournamentDetailDto> = {}): Tour
   });
 }
 
-/** `count` players with one buy-in each; the first `rebuys` re-bought once and the first `addons` took the add-on. */
-export function entrants(count: number, { rebuys = 0, addons = 0 }: { rebuys?: number; addons?: number } = {}): PublicRegistration[] {
-  return Array.from({ length: count }, (_, index) =>
-    registrationDto(`r${index + 1}`, `Player ${index + 1}`, { rebuys: index < rebuys ? 1 : 0, addons: index < addons ? 1 : 0 }),
-  );
+/**
+ * `count` paid players (as the club's staff see them) with one buy-in each; the first `rebuys` re-bought
+ * once and the first `addons` took the add-on.
+ */
+export function entrants(count: number, { rebuys = 0, addons = 0 }: { rebuys?: number; addons?: number } = {}): ManagedRegistration[] {
+  return Array.from({ length: count }, (_, index) => ({
+    ...registrationDto(`r${index + 1}`, `Player ${index + 1}`, { rebuys: index < rebuys ? 1 : 0, addons: index < addons ? 1 : 0 }),
+    paymentConfirmed: true,
+  }));
 }
 
 /** GET /api/tournaments/:id/prize-pool for `tournament` and `registrations`, labelled "AP" unless overridden. */
@@ -57,7 +62,7 @@ export function prizePoolDto(
     breakdown,
     display: payoutsForDisplay(tournament, breakdown, registrations),
     adjustment: tournament.prizePoolAdjustedAt
-      ? { reason: tournament.prizePoolAdjustmentReason, adjustedAt: tournament.prizePoolAdjustedAt }
+      ? { reason: tournament.prizePoolAdjustmentReason ?? null, adjustedAt: tournament.prizePoolAdjustedAt }
       : null,
     carryTarget: "the next tournament",
     ...overrides,

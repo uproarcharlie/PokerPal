@@ -10,11 +10,11 @@ const tournament = {
   payoutStructure: "standard",
   prizePoolSnapshot: null,
 };
-/** Five buy-ins at $100 with $5 AP each: a $475 pool. */
+/** Five paid buy-ins at $100 with $5 AP each: a $475 pool. */
 const registrations = [
-  { id: "r1", buyIns: 2 },
-  { id: "r2", buyIns: 2 },
-  { id: "r3", buyIns: 1 },
+  { id: "r1", buyIns: 2, paymentConfirmed: true },
+  { id: "r2", buyIns: 2, paymentConfirmed: true },
+  { id: "r3", buyIns: 1, paymentConfirmed: true },
 ];
 
 const amounts = (rows: { position: number; amountCents: number }[]) => rows.map((row) => [row.position, row.amountCents]);

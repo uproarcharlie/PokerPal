@@ -1,11 +1,13 @@
 /**
  * What only the player-facing tournament pages read and send: the club-scoped "find yourself" search,
- * and the three public writes (sign-up, registration, a player's request). The tournament, its club,
- * season and points rules come from their own features' queries. Types come only from shared/api.
+ * the prize pool as the players see it, and the three public writes (sign-up, registration, a player's
+ * request). The tournament, its club, season and points rules come from their own features' queries.
+ * Types come only from shared/api.
  */
 import { queryOptions } from "@tanstack/react-query";
 import type { CreatePendingActionInput, PendingActionDto } from "@shared/api/pending-actions";
 import type { CreatePlayerInput, CreatePlayerResponse } from "@shared/api/players";
+import type { PublicPrizesDto } from "@shared/api/live-display";
 import type { PublicPlayer } from "@shared/api/public";
 import type { PublicRegistrationInput, RegistrationCreatedDto } from "@shared/api/registrations";
 import { apiGet, apiSend, segment, withQuery } from "@/lib/api/http";
@@ -18,6 +20,16 @@ export const publicTournamentQueries = {
       queryKey: qk.tournaments.playerSearch(tournamentId, q),
       queryFn: ({ signal }) =>
         apiGet<PublicPlayer[]>(withQuery(`/api/public/tournaments/${segment(tournamentId)}/players`, { q }), { signal }),
+    }),
+  /**
+   * The prize pool, the places and the money carried in, worked out by the server (round 6: the public
+   * are never sent the club's takings to work them out from). Under the prize pool's key, so every
+   * change to the tournament's money or results refreshes it with the staff's.
+   */
+  prizes: (tournamentId: string) =>
+    queryOptions({
+      queryKey: [...qk.tournaments.prizePool(tournamentId), "public"] as const,
+      queryFn: ({ signal }) => apiGet<PublicPrizesDto>(`/api/public/tournaments/${segment(tournamentId)}/prizes`, { signal }),
     }),
 };
 

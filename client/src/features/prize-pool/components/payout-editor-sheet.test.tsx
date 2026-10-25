@@ -326,11 +326,11 @@ describe("PayoutEditorSheet", () => {
     expect(screen.getByTestId("payout-sum")).toHaveTextContent("$360 left over is kept by the club");
   });
 
-  it("says when more places are paid than players have entered", async () => {
+  it("says when more places are paid than players have paid", async () => {
     server.use(http.get("/api/tournaments/t1/prize-pool", () => HttpResponse.json(prizePoolDto(apTournament(), entrants(2)))));
     const { user } = renderSheet();
 
     await user.click(await screen.findByRole("radio", { name: /^Top 5/ }));
-    expect(screen.getByText("Only 2 players have entered: places below 2nd are paid only if more players enter.")).toBeInTheDocument();
+    expect(screen.getByText("Only 2 players have paid: places below 2nd are paid only once more players pay.")).toBeInTheDocument();
   });
 });

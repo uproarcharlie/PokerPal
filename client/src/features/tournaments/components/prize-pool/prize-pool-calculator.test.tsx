@@ -14,8 +14,9 @@ function renderCalculator(
   highHandAwardsCents?: number[],
   carryTarget?: string,
 ) {
-  const breakdown = computePrizePool(t, rows);
-  const registrations = rows.map((row, i) => ({ id: row.id ?? `r${i}`, ...row }));
+  // Paid unless a row says otherwise: only paid players are in a pool (round 6).
+  const registrations = rows.map((row, i) => ({ id: row.id ?? `r${i}`, paymentConfirmed: true, ...row }));
+  const breakdown = computePrizePool(t, registrations);
   const display = payoutsForDisplay(t, breakdown, registrations);
   return render(
     <PrizePoolCalculator
@@ -122,6 +123,21 @@ describe("PrizePoolCalculator", () => {
 
     renderCalculator(highHand, players, undefined, [5_000, 5_001]);
     expect(screen.getByTestId("high-hand-next-award")).toHaveTextContent("All prizes awarded");
+  });
+
+  it("says what a payment taken after the last award left in the pot, and where to give it out (R6REV0-MONEY-01)", () => {
+    // 9 paid × $5 = $45, but the one prize was awarded at $40, before the ninth payment was confirmed.
+    const highHand = { ...tournament, enableHighHand: true, highHandAmount: "5.00", highHandRakeType: "none", highHandPayouts: 1 };
+    const players = Array.from({ length: 9 }, () => ({ buyIns: 1, enteringHighHands: true }));
+
+    const { unmount } = renderCalculator(highHand, players, undefined, [4_000]);
+    expect(screen.getByTestId("high-hand-next-award")).toHaveTextContent("All prizes awarded");
+    expect(screen.getByTestId("high-hand-unawarded")).toHaveTextContent("$5");
+    expect(screen.getByText("Paid in after the last award: add it to a winner's prize from Award High Hand.")).toBeInTheDocument();
+    unmount();
+
+    renderCalculator(highHand, players, undefined, [4_500]);
+    expect(screen.queryByTestId("high-hand-unawarded")).not.toBeInTheDocument();
   });
 
   it("names every rate the AP comes from, not just the buy-in's (MONEY-REV-04)", () => {

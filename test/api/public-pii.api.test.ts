@@ -1,17 +1,20 @@
 /**
- * No public read gives away anyone's contact details or account ids (contract §1.4, SEC-09). Every
- * GET route that mounts no guard is requested, as nobody, a signed-in stranger, the club's owner and a
+ * No public read gives away anyone's contact details or account ids (contract §1.4, SEC-09), nor what
+ * the club takes (round 6, the owner: "Don't show the rake or what is kept by the club"). Every GET
+ * route that mounts no guard is requested, as nobody, a signed-in stranger, the club's owner and a
  * platform admin, in a club whose staff and players all have emails, phones and accounts, after a
- * live and a finished tournament's worth of activity made through the API. Each body is walked with
- * `findForbiddenKeys` (JSON text inside strings included) and searched for every one of those emails,
- * phones and user ids. The route list comes from the router stack (test/helpers/routes.ts), so a new
- * public read without a probe here fails the inventory test.
+ * live and a finished tournament's worth of activity made through the API (AP rates, a manual AP total
+ * with its reason, a finalize). Each body is walked with `findForbiddenKeys` and `findTakingsKeys`
+ * (JSON text inside strings included) and searched for every one of those emails, phones and user ids.
+ * The takings may reach only the club's own staff, and only on the reads their screens edit them from
+ * (STAFF_TAKINGS_READS); the TV, the public prize pool and every other read carry none, whoever looks.
+ * The route list comes from the router stack (test/helpers/routes.ts), so a new public read without a
+ * probe here fails the inventory test.
  */
 import { eq } from "drizzle-orm";
 import type request from "supertest";
 import { beforeAll, describe, expect, it } from "vitest";
-import { PUBLIC_SNAPSHOT_FIELDS } from "@shared/api/finalize";
-import { findForbiddenKeys } from "@shared/api/public";
+import { findForbiddenKeys, findTakingsKeys } from "@shared/api/public";
 import { presetStructure } from "@shared/domain/blind-structures";
 import { users, type Club, type Player, type PointsSystem, type Season, type Tournament } from "@shared/schema";
 import { createPlayer, createSeason, createUser } from "../factories";
@@ -59,14 +62,14 @@ const PROBES: Record<string, Probe> = {
     `/api/public/tournaments/${live.id}/seating`,
     `/api/public/tournaments/${finished.id}/seating`,
   ],
+  "GET /api/public/tournaments/:id/prizes": ({ live, finished }) => [
+    `/api/public/tournaments/${live.id}/prizes`,
+    `/api/public/tournaments/${finished.id}/prizes`,
+  ],
   "GET /api/public/seasons/:id/leaderboard": ({ season }) => [`/api/public/seasons/${season.id}/leaderboard`],
   "GET /api/tournaments": ({ club }) => ["/api/tournaments", `/api/tournaments?clubId=${club.id}`],
   "GET /api/tournaments/counts": () => ["/api/tournaments/counts"],
   "GET /api/tournaments/:id": ({ live, finished }) => [`/api/tournaments/${live.id}`, `/api/tournaments/${finished.id}`],
-  "GET /api/tournaments/:id/prize-pool": ({ live, finished }) => [
-    `/api/tournaments/${live.id}/prize-pool`,
-    `/api/tournaments/${finished.id}/prize-pool`,
-  ],
   "GET /api/tournaments/:id/registrations": ({ live, finished }) => [
     `/api/tournaments/${live.id}/registrations`,
     `/api/tournaments/${finished.id}/registrations`,
@@ -82,6 +85,20 @@ const SELF_READS = ["GET /api/auth/me"];
 
 /** Who looks: nobody, someone with no role at the club, its owner (who sees staff-only activity), and an admin. */
 const VIEWERS: readonly Visitor[] = ["anonymous", "stranger", "owner", "admin"];
+
+/** Who may be sent the club's takings on a read their staff screens edit them from. */
+const RUNS_THE_CLUB: ReadonlySet<Visitor> = new Set<Visitor>(["owner", "admin"]);
+
+/**
+ * The public reads that carry the club's takings to its own staff (the tournament form, the staff-only
+ * activity) and to nobody else. Every other read, the TV and the public prize pool among them, carries
+ * none to anyone; the staff's prize-pool breakdown (the AP panel, the payout editor) is staff-only.
+ */
+const STAFF_TAKINGS_READS: ReadonlySet<string> = new Set([
+  "GET /api/tournaments",
+  "GET /api/tournaments/:id",
+  "GET /api/tournaments/:tournamentId/activity",
+]);
 
 let world: World;
 
@@ -175,6 +192,7 @@ async function buildWorld(): Promise<World> {
     manager.agent.put(`/api/tournaments/${live.id}/clock`).send({
       structure: presetStructure("central_stars_one_life_line"),
       presetKey: "central_stars_one_life_line",
+      // "Show the AP" as a TV set up before round 6 sent it: retired, it shows nothing.
       displaySettings: { showPrizePool: "always", showAp: true, qrTarget: "seats" },
       baseHash: null,
     }),
@@ -216,7 +234,7 @@ describe("public reads", () => {
     expect(reads.map((route) => route.key).sort()).toEqual([...Object.keys(PROBES), ...SELF_READS].sort());
   });
 
-  describe.each(Object.entries(PROBES))("%s", (_key, probe) => {
+  describe.each(Object.entries(PROBES))("%s", (key, probe) => {
     it.each(VIEWERS)("shows %s no email, phone, user id or other forbidden key", async (viewer) => {
       const agent = await agentFor(viewer, world.staff);
 
@@ -231,26 +249,59 @@ describe("public reads", () => {
         expect(world.secrets.filter((secret) => text.includes(secret)), url).toEqual([]);
       }
     });
+
+    it.each(VIEWERS)("shows %s nothing of what the club takes, keeps, adds or carries over, unless they run it (round 6)", async (viewer) => {
+      const staffRead = STAFF_TAKINGS_READS.has(key) && RUNS_THE_CLUB.has(viewer);
+      if (staffRead) return;
+      const agent = await agentFor(viewer, world.staff);
+
+      for (const url of probe(world)) {
+        const response = await agent.get(url);
+
+        expect(response.status, url).toBe(200);
+        expect(findTakingsKeys(response.body), url).toEqual([]);
+        // Nor the reason given for the manual AP total, in any words.
+        expect(JSON.stringify(response.body), url).not.toContain("Low turnout");
+      }
+    });
   });
 
   it("include the finished tournament's results, so the scan covered them", async () => {
     const anonymous = await agentFor("anonymous", world.staff);
 
-    const [detail, leaderboard, activity] = await Promise.all([
+    const [detail, prizes, leaderboard, activity] = await Promise.all([
       anonymous.get(`/api/tournaments/${world.finished.id}`),
+      anonymous.get(`/api/public/tournaments/${world.finished.id}/prizes`),
       anonymous.get(`/api/seasons/${world.season.id}/leaderboard`),
       anonymous.get(`/api/tournaments/${world.live.id}/activity`),
     ]);
 
-    expect(detail.body).toMatchObject({ status: "completed", prizePoolSnapshot: expect.any(Object) });
-    // The finalize warnings are the TD's bookkeeping (unconfirmed payments, discarded requests): staff only (P2REV1-MONEY-02).
-    expect(detail.body.prizePoolSnapshot).not.toHaveProperty("warnings");
-    // Every public field, but the deal (round 5): this one was finalized without one.
-    expect(Object.keys(detail.body.prizePoolSnapshot).sort()).toEqual(PUBLIC_SNAPSHOT_FIELDS.filter((field) => field !== "deal").sort());
+    // The finalize snapshot records the club's takings and the TD's bookkeeping: staff only (round 6, P2REV1-MONEY-02).
+    expect(detail.body).toMatchObject({ status: "completed", prizePoolSnapshot: null });
+    // What was paid comes from the public prize pool instead.
+    expect(prizes.body).toMatchObject({ source: "snapshot", payouts: expect.arrayContaining([expect.objectContaining({ position: 1 })]) });
+    expect(prizes.body.poolCents).toBeGreaterThan(0);
     expect(leaderboard.body.length).toBeGreaterThanOrEqual(3);
-    expect(activity.body.map((entry: { eventType: string }) => entry.eventType)).toEqual(
-      expect.arrayContaining(["elimination", "prize_pool_adjusted"]),
-    );
+    // The night is in the feed, but not the TD's AP total and its reason.
+    const events = activity.body.map((entry: { eventType: string }) => entry.eventType);
+    expect(events).toContain("elimination");
+    expect(events).not.toContain("prize_pool_adjusted");
+  });
+
+  it("show the club's own staff the takings they edit: the AP rates, the manual AP total and its reason", async () => {
+    const owner = await agentFor("owner", world.staff);
+
+    const [detail, prizes, activity] = await Promise.all([
+      owner.get(`/api/tournaments/${world.live.id}`),
+      owner.get(`/api/public/tournaments/${world.live.id}/prizes`),
+      owner.get(`/api/tournaments/${world.live.id}/activity`),
+    ]);
+
+    expect(detail.body).toMatchObject({ rakeType: "percentage", rakeAmount: "10.00", rakeOverride: "20.00", prizePoolAdjustmentReason: "Low turnout" });
+    expect(activity.body.map((entry: { eventType: string }) => entry.eventType)).toContain("prize_pool_adjusted");
+    // The public prize pool is the same for everyone, the TD looking at the public page included.
+    expect(findTakingsKeys(prizes.body)).toEqual([]);
+    expect(prizes.body).toEqual((await (await agentFor("anonymous", world.staff)).get(`/api/public/tournaments/${world.live.id}/prizes`)).body);
   });
 });
 
@@ -285,7 +336,8 @@ describe("GET /api/auth/me (the caller's own account)", () => {
   it("tells an anonymous caller nothing", async () => {
     const response = await (await agentFor("anonymous", world.staff)).get("/api/auth/me");
 
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ user: null });
     expect(world.secrets.filter((secret) => JSON.stringify(response.body).includes(secret))).toEqual([]);
   });
 

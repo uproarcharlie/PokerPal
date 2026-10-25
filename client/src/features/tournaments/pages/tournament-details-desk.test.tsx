@@ -6,6 +6,7 @@ import { server } from "@test/msw/server";
 import { apiError, mockSignedIn, renderWithApp } from "@test/helpers/web";
 import { clubDto, mockDeskLiveReads, phoneLayout, recordBodies, registrationDto, screenWidth, tournamentDto } from "@test/helpers/f1-tournaments";
 import type { PublicRegistration } from "@shared/api/public";
+import type { ManagedRegistration } from "@shared/api/registrations";
 import type { SeatMoveDto, TableAdviceDto } from "@shared/api/seating";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { PODIUM } from "@/components/shared/podium";
@@ -18,7 +19,10 @@ import { mockSeating, recordWrite, seatingDto, seatingMutation, seatMove, seatRe
 import { SEATING_BADGE_REFRESH_MS } from "@/features/seating/staff-hooks";
 import TournamentDetailsPage from "./tournament-details";
 
-const field = [registrationDto("r1", "Ann", 2), registrationDto("r2", "Bob", 2), registrationDto("r3", "Cat", 1)];
+/** All paid, as the club's staff get them: only paid players are in the pool (round 6). */
+const field: ManagedRegistration[] = [registrationDto("r1", "Ann", 2), registrationDto("r2", "Bob", 2), registrationDto("r3", "Cat", 1)].map(
+  (registration) => ({ ...registration, paymentConfirmed: true }),
+);
 
 /** The table advisor's "balance them" for these moves (SeatingDto.advisor, round 5). */
 const balanceAdvice = (moves: SeatMoveDto[]): TableAdviceDto => ({
@@ -405,10 +409,10 @@ describe("TournamentDetailsPage: standings", () => {
 });
 
 describe("TournamentDetailsPage: the waiting list on a laptop (round 5, item 15)", () => {
-  /** A field of three, full (nobody has paid yet), and Dee behind it. */
-  const signUps: PublicRegistration[] = [
-    ...field.map((registration) => ({ ...registration, waitingListPosition: null })),
-    registrationDto("r4", "Dee", 1, { waitingListPosition: 1 }),
+  /** A field of three, full (Cat has not paid yet), and Dee behind it. */
+  const signUps: ManagedRegistration[] = [
+    ...field.map((registration) => ({ ...registration, waitingListPosition: null, paymentConfirmed: registration.id !== "r3" })),
+    { ...registrationDto("r4", "Dee", 1, { waitingListPosition: 1 }), paymentConfirmed: false },
   ];
 
   it("counts the field against Max players, the waiting list apart, and leaves its players out of the pool, the standings and the eliminator list", async () => {
@@ -417,8 +421,9 @@ describe("TournamentDetailsPage: the waiting list on a laptop (round 5, item 15)
 
     expect(await screen.findByTestId("players-count")).toHaveTextContent("3/3");
     expect(screen.getByTestId("waiting-list-count")).toHaveTextContent("+1 on the waiting list");
-    // Five buy-ins at $100 less $5 AP each: Dee's buy-in is not in it (shared/domain poolEntries).
-    expect(screen.getByTestId("prize-pool")).toHaveTextContent("$475");
+    // Ann's and Bob's four paid buy-ins at $100 less $5 AP each: neither Cat's (not paid yet) nor Dee's is in it (poolEntries).
+    expect(screen.getByTestId("prize-pool")).toHaveTextContent("$380");
+    expect(screen.getByTestId("paid-players-note")).toHaveTextContent("Prize pool from 2 paid players · 1 not paid yet (not in the pool)");
 
     await user.click(screen.getByRole("tab", { name: "Standings" }));
     const standings = await screen.findByRole("table", { name: "Standings" });
@@ -426,7 +431,7 @@ describe("TournamentDetailsPage: the waiting list on a laptop (round 5, item 15)
     const list = within(screen.getByTestId("waiting-list"));
     expect(list.getByTestId("waiting-r4")).toHaveTextContent("#1");
     expect(list.getByTestId("waiting-r4")).toHaveTextContent("Dee");
-    // Nobody has paid: there is still room to accept, so no "full" line.
+    // Two of three accepted: there is still room to accept, so no "full" line.
     expect(list.queryByTestId("waiting-list-full")).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId("eliminate-player-r3"));

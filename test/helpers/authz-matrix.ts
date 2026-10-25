@@ -60,11 +60,15 @@ export const single = (expect: Statuses, call: Case["call"]): Case[] => [{ expec
 export const tournamentIn = (club: Club, overrides: Partial<NewTournament> = {}) =>
   createTournament({ clubId: club.id, status: "registration", rebuyAmount: "50.00", addonAmount: "25.00", ...overrides });
 
-export async function registeredPlayer(tournament: Tournament, overrides: { isEliminated?: boolean; minutesIn?: number } = {}) {
+export async function registeredPlayer(
+  tournament: Tournament,
+  overrides: { isEliminated?: boolean; minutesIn?: number; paymentConfirmed?: boolean } = {},
+) {
   const player = await createPlayer();
   const registration = await createRegistration({
     tournamentId: tournament.id,
     playerId: player.id,
+    paymentConfirmed: overrides.paymentConfirmed ?? false,
     isEliminated: overrides.isEliminated ?? false,
     eliminationTime: overrides.isEliminated ? new Date(Date.UTC(2026, 2, 1, 19, overrides.minutesIn ?? 30)) : null,
   });

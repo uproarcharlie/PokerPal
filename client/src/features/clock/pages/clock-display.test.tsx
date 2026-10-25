@@ -251,13 +251,12 @@ describe("the TV clock", () => {
     expect(screen.queryByTestId("display-qr")).not.toBeInTheDocument();
   });
 
-  it("shows the prize pool (marked est.), the top places and the AP once they may be shown", async () => {
+  it("shows the prize pool (marked est.) and the top places once they may be shown, and never the AP (round 6)", async () => {
     serveDisplay({
       money: {
         show: true,
         estimated: true,
         netCents: 190_000,
-        apCents: 10_000,
         payouts: [
           { position: 1, amountCents: 95_000 },
           { position: 2, amountCents: 57_000 },
@@ -271,7 +270,8 @@ describe("the TV clock", () => {
     expect(within(money).getByText("est.")).toBeInTheDocument();
     expect(within(money).getByText("$1,900")).toBeInTheDocument();
     expect(within(within(money).getByRole("list", { name: "Payouts" })).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["1st$950", "2nd$570", "3rd$380"]);
-    expect(within(money).getByText("AP").nextSibling).toHaveTextContent("$100");
+    expect(within(money).queryByText(/\bAP\b|Rake|kept|added by/i)).not.toBeInTheDocument();
+    expect(within(money).queryByTestId("display-carried-in")).not.toBeInTheDocument();
   });
 
   it("says what of the pool no place is paid while fewer players are in than the places it pays (MONEY-AP-05)", async () => {
@@ -287,41 +287,50 @@ describe("the TV clock", () => {
     expect(within(screen.getByRole("region", { name: "Payouts" })).getByText(note)).toBeInTheDocument();
   });
 
-  it("says nothing is unpaid when every place is paid, and what the club adds to a guaranteed pool", async () => {
-    serveDisplay({ money: { show: true, estimated: false, netCents: 60_000, apCents: 0, clubAddedCents: 10_000, payouts: [{ position: 1, amountCents: 60_000 }] } });
+  it("counts the paid players while some of the room has not paid, and never says more players must enter (R6REV0-MONEY-02)", async () => {
+    // 12 playing, 2 paid: the pool pays two places, and the 3rd place's $100 waits for the payments.
+    serveDisplay({
+      stats: { entrants: 12, remaining: 12 },
+      clock: runningClock(Date.now(), { displaySettings: { ...clockDto().displaySettings, overlay: "payouts" } }),
+      money: { show: true, estimated: true, netCents: 50_000, payouts: [{ position: 1, amountCents: 25_000 }, { position: 2, amountCents: 15_000 }] },
+    });
+    showPage();
+    const note = "Only 2 paid players: $100 of the pool is not paid out yet.";
+    expect(await within(await screen.findByTestId("display-money")).findByTestId("display-unpaid")).toHaveTextContent(note);
+    expect(within(screen.getByRole("region", { name: "Payouts" })).getByText(note)).toBeInTheDocument();
+  });
+
+  it("says nothing is unpaid when every place is paid", async () => {
+    serveDisplay({ money: { show: true, estimated: false, netCents: 60_000, payouts: [{ position: 1, amountCents: 60_000 }], carriedIn: [] } });
     showPage();
     const money = await screen.findByTestId("display-money");
     expect(within(money).queryByTestId("display-unpaid")).not.toBeInTheDocument();
-    expect(within(money).getByTestId("display-ap")).toHaveTextContent("Added by the club$100");
-    expect(within(money).queryByText("AP")).not.toBeInTheDocument();
   });
 
-  it("says beside the pool where the difference went: kept by the club, carried in and over (round 5, item 16)", async () => {
+  it("says under the places what was carried in from earlier games, and nothing else of the pool's make-up (round 6)", async () => {
     serveDisplay({
       money: {
         show: true,
         estimated: false,
         netCents: 60_000,
-        apCents: 8_000,
         payouts: [{ position: 1, amountCents: 60_000 }],
-        lines: [
-          { kind: "carried_in", label: "Carried over from Test Wednesday", cents: 5_000 },
-          { kind: "carried_over", label: "Carried over to Winter League", cents: 12_000 },
+        carriedIn: [
+          { fromName: "Test Wednesday", amountCents: 5_000 },
+          { fromName: "Test Thursday", amountCents: 2_500 },
         ],
       },
     });
     showPage();
     const money = await screen.findByTestId("display-money");
-    const lines = within(money).getByRole("list", { name: "Prize pool breakdown" });
-    expect(within(lines).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["Carried over from Test Wednesday$50", "Carried over to Winter League$120"]);
-    expect(within(money).getByTestId("display-ap")).toHaveTextContent("AP$80");
+    expect(within(money).getByTestId("display-carried-in")).toHaveTextContent("Includes $75 carried over from Test Wednesday and Test Thursday");
+    expect(within(money).queryByRole("list", { name: "Prize pool breakdown" })).not.toBeInTheDocument();
   });
 
-  it("says nothing more beside the pool when the prizes are what is available", async () => {
-    serveDisplay({ money: { show: true, estimated: false, netCents: 60_000, payouts: [{ position: 1, amountCents: 60_000 }], lines: [] } });
+  it("says nothing more beside the pool when nothing was carried in", async () => {
+    serveDisplay({ money: { show: true, estimated: false, netCents: 60_000, payouts: [{ position: 1, amountCents: 60_000 }], carriedIn: [] } });
     showPage();
     const money = await screen.findByTestId("display-money");
-    expect(within(money).queryByTestId("display-pool-lines")).not.toBeInTheDocument();
+    expect(within(money).queryByTestId("display-carried-in")).not.toBeInTheDocument();
   });
 
   it("says the pool is shown once it is locked, while it is not", async () => {
@@ -667,7 +676,7 @@ describe("the TV clock", () => {
     serveDisplay({
       tournament: { prizePoolLocked: true },
       clock: runningClock(Date.now(), { displaySettings: { ...settings, showPayouts: false } }),
-      money: { show: true, estimated: false, netCents: 50_000, netSource: "calculated", payouts: null },
+      money: { show: true, estimated: false, netCents: 50_000, payouts: null },
     });
     showPage();
     const overlay = await screen.findByRole("region", { name: "Payouts" });

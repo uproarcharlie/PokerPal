@@ -2,11 +2,12 @@
  * A tournament's activity feed, GET /api/tournaments/:id/activity (server/routes/activity.ts): public,
  * newest first with ties broken by id, at most `limit` entries, each with only its player's public
  * fields (SEC-09) and in one query (perf-23). Staff bookkeeping (payment confirmations, AP rate
- * changes) is shown only to people who can manage the tournament's club.
+ * changes) and the changes to the prize money that say what the club takes, keeps, adds or carries over
+ * (round 6) are shown only to people who can manage the tournament's club.
  */
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
-import { findForbiddenKeys, PUBLIC_ACTIVITY_FIELDS } from "@shared/api/public";
+import { findForbiddenKeys, findTakingsKeys, PUBLIC_ACTIVITY_FIELDS } from "@shared/api/public";
 import { activityLog, tournamentRegistrations, type ActivityLog } from "@shared/schema";
 import { createClub, createPlayer, createRegistration, createTournament, createUser } from "../factories";
 import { anon, asJson, resetDb, testDb, UNKNOWN_ID } from "../helpers";
@@ -143,6 +144,23 @@ describe("GET /api/tournaments/:id/activity", () => {
     }
   });
 
+  it("shows the changes to the prize money and the payouts only to the club's staff: they say what the club takes and keeps (round 6)", async () => {
+    const staff = await clubWithStaff();
+    const tournament = await createTournament({ clubId: staff.club.id });
+    await log(tournament.id, "registration", "2026-03-01T18:00:00Z");
+    await log(tournament.id, "prize_pool_adjusted", "2026-03-01T18:05:00Z", {
+      description: "AP set manually to $20 (the rates give $40) - Low turnout",
+      eventData: JSON.stringify({ mode: "ap_override", amountCents: 2_000, reason: "Low turnout" }),
+    });
+    await log(tournament.id, "payouts_changed", "2026-03-01T18:10:00Z", { description: "Payouts changed to Custom: 1st $300; $44 left over: the club keeps it" });
+    await log(tournament.id, "prize_pool_locked", "2026-03-01T18:15:00Z");
+    const types = async (agent: { get: (url: string) => PromiseLike<{ body: FeedEntry[] }> }) =>
+      (await agent.get(`/api/tournaments/${tournament.id}/activity`)).body.map((entry) => entry.eventType);
+
+    for (const agent of [await anon(), staff.stranger.agent]) expect(await types(agent)).toEqual(["prize_pool_locked", "registration"]);
+    expect(await types(staff.manager.agent)).toEqual(["prize_pool_locked", "payouts_changed", "prize_pool_adjusted", "registration"]);
+  });
+
   it("shows what the director's actions logged, most recent first, and nothing from other tournaments", async () => {
     const staff = await clubWithStaff();
     const tournament = await createTournament({ clubId: staff.club.id, status: "registration" });
@@ -163,14 +181,16 @@ describe("GET /api/tournaments/:id/activity", () => {
     expect((await agent.post(`/api/tournaments/${tournament.id}/finalize`)).status).toBe(200);
 
     const entries = await feed(tournament.id);
+    const forStaff = (await agent.get(`/api/tournaments/${tournament.id}/activity`)).body as FeedEntry[];
 
     expect(entries.map(({ eventType, description }) => [eventType, description])).toEqual([
       ["status_change", "Tournament finalized - positions, prizes, and points assigned"],
-      ["prize_pool_adjusted", "Rake set manually to $5 (the rates give $0) - Low turnout"],
       ["prize_pool_locked", "Prize pool has been locked - no further registrations, rebuys, or addons allowed"],
       ["status_change", "Tournament status changed to In Progress"],
     ]);
+    expect(forStaff.map(({ eventType }) => eventType)).toContain("prize_pool_adjusted");
     expect(findForbiddenKeys(entries)).toEqual([]);
+    expect(findTakingsKeys(entries)).toEqual([]);
     expect(JSON.stringify(entries)).not.toContain(staff.owner.user.id);
   });
 

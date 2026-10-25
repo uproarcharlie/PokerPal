@@ -8,7 +8,8 @@ import type { PrizePoolBreakdown } from "@shared/domain/prize-pool";
 /**
  * A pool's honest breakdown in one line (round 5, item 16): "Prize pool $1,000 · AP $200 · Kept by the
  * club $50", "… · Carried over to Winter League $50", "… · Added by the club $100". The same words on
- * the TD's pages, the public tournament page and the TV. Public-safe: no zod, no staff code.
+ * every staff screen (the prize structure card, the paid pool, End Tournament). Staff-only (round 6):
+ * the AP and what the club keeps are never on a public page or the TV.
  */
 export interface PoolSummaryFigures {
   netCents: Cents;

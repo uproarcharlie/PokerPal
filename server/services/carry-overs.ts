@@ -6,7 +6,7 @@
  * (applyCarryOver) and can take it out again while that tournament is open (removeCarryOver). The
  * tournament's carried_in lists what its pool holds, written in the same transaction as the row's
  * applied_to_tournament_id, so every screen's computePrizePool counts it ("Carried over from …").
- * Both are logged publicly; who did it is on the row (applied_by).
+ * Both are logged to the staff's feed (round 6: the public never see what is carried); who did it is on the row (applied_by).
  */
 import type { Request } from "express";
 import type { CarryOverDto, CarryOversDto } from "@shared/api/prize-pool";

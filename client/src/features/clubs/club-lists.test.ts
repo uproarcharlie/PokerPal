@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { tournamentItem } from "@test/helpers/f3-clubs";
 import { timeZoneGroups, timeZoneLabel } from "./time-zones";
-import { groupForPublicPage } from "./tournament-lists";
+import { fieldCountText, groupForPublicPage } from "./tournament-lists";
 
 describe("time zones", () => {
   it("offer New Zealand's first, then the nearby ones, then every other zone once", () => {
@@ -36,5 +36,16 @@ describe("a club's tournaments", () => {
       upcoming: ["sooner", "later"],
       past: ["recent", "old"],
     });
+  });
+
+  it("count the field against Max players, the waiting list behind it while open, never \"19 / 18\" (round 6, B4)", () => {
+    const counted = (status: string, registeredCount: number, waitingListCount: number) =>
+      fieldCountText(tournamentItem({ status, registeredCount, waitingListCount, maxPlayers: 18 }));
+
+    expect(counted("registration", 19, 1)).toBe("18 / 18 players · 1 waiting");
+    expect(counted("in_progress", 20, 2)).toBe("18 / 18 players · 2 waiting");
+    expect(counted("scheduled", 12, 0)).toBe("12 / 18 players");
+    // Nobody waits for a game that is over.
+    expect(counted("completed", 19, 1)).toBe("18 / 18 players");
   });
 });

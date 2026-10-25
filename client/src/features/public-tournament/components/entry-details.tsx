@@ -17,7 +17,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 
 interface EntryDetailsProps {
   tournament: TournamentDetailDto;
-  /** The high-hand pot to show (computePrizePool's), or null while the club keeps the money hidden. */
+  /** The high-hand pot to show (the server's), or null while the club keeps the money hidden. */
   highHandPotCents: Cents | null;
 }
 

@@ -4,6 +4,7 @@ import { asyncHandler } from "../http/async-handler";
 import { isAdmin, viewerFor } from "../http/authz";
 import { parseOrThrow } from "../http/validate";
 import { searchPlayers, type PlayerSearchScope } from "../services/players";
+import { publicPrizes } from "../services/public-prizes";
 import { requireTournament } from "../services/tournaments";
 
 /** Anonymous reads under /api/public. */
@@ -23,6 +24,16 @@ export function publicRoutes(): Router {
     const { canManage } = await viewerFor(req, tournament.clubId);
     const scope: PlayerSearchScope = isAdmin(req.user) ? "all" : canManage ? "known" : { clubId: tournament.clubId };
     res.json(await searchPlayers({ q: query.q, limit: query.limit, scope }));
+  }));
+
+  /**
+   * The prize pool as the players see it (round 6): the pool, the places and the money carried in,
+   * worked out on the server with no takings in it; the same body for every viewer. The public page
+   * polls it like the tournament, never cached.
+   */
+  router.get("/api/public/tournaments/:id/prizes", asyncHandler(async (req, res) => {
+    const prizes = await publicPrizes(req.params.id);
+    res.set("Cache-Control", "no-store").json(prizes);
   }));
 
   return router;

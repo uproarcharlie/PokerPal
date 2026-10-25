@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 import type { Club, Player } from "../schema";
 import {
   findForbiddenKeys,
+  findTakingsKeys,
+  FORBIDDEN_TAKINGS_KEYS,
   pickFields,
   PUBLIC_CLUB_FIELDS,
   PUBLIC_PLAYER_FIELDS,
   PUBLIC_REGISTRATION_FIELDS,
   PUBLIC_TOURNAMENT_FIELDS,
   publicPlayerSearchQuerySchema,
+  TOURNAMENT_TAKINGS_FIELDS,
 } from "./public";
 
 describe("findForbiddenKeys", () => {
@@ -49,6 +52,23 @@ describe("public projections", () => {
     const club = { id: "c1", name: "Central Stars", slug: "central-stars", ownerId: "u1" } as unknown as Club;
 
     expect(pickFields(club, PUBLIC_CLUB_FIELDS)).not.toHaveProperty("ownerId");
+  });
+});
+
+describe("the club's takings (round 6)", () => {
+  it("are found at any depth, JSON text included, by findTakingsKeys", () => {
+    const body = { tournament: { rakeType: "fixed", name: "Friday" }, money: [{ apCents: 500 }], eventData: JSON.stringify({ difference: { keptByClubCents: 5_000 } }) };
+
+    expect(findTakingsKeys(body)).toEqual(["tournament.rakeType", "money[0].apCents", "eventData<json>.difference", "eventData<json>.difference.keptByClubCents"]);
+    expect(findTakingsKeys({ club: { rakeLabel: "AP" }, poolCents: 47_500, carriedIn: [{ fromName: "Week 3", amountCents: 100 }] })).toEqual([]);
+  });
+
+  it("are never in the public tournament fields, and every takings column is a forbidden key", () => {
+    expect(PUBLIC_TOURNAMENT_FIELDS.filter((field) => (TOURNAMENT_TAKINGS_FIELDS as readonly string[]).includes(field))).toEqual([]);
+    for (const list of [PUBLIC_PLAYER_FIELDS, PUBLIC_CLUB_FIELDS, PUBLIC_TOURNAMENT_FIELDS, PUBLIC_REGISTRATION_FIELDS]) {
+      expect(findTakingsKeys(Object.fromEntries(list.map((key) => [key, 1])))).toEqual([]);
+    }
+    expect(FORBIDDEN_TAKINGS_KEYS).toEqual(expect.arrayContaining([...TOURNAMENT_TAKINGS_FIELDS]));
   });
 });
 

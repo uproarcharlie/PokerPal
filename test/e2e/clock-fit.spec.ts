@@ -4,8 +4,8 @@
  * phone either way up), in every state (running, paused, on a break, the last level, not started, not
  * set up yet, finished, the seats and payouts overlays, every optional figure and the level's number
  * switched on, a club with no logo, a small old logo), with the worst a night throws at it: a
- * 60-character name, 1,000,000/2,000,000 blinds with an ante, 200 entries, three paid places, the AP
- * and the QR code. The TVs are also checked in full screen (requestFullscreen), every part inside the
+ * 60-character name, 1,000,000/2,000,000 blinds with an ante, 200 entries, three paid places, money
+ * carried in from two earlier games and the QR code. The TVs are also checked in full screen (requestFullscreen), every part inside the
  * tournament's edge margin for overscan, and for the club's logo: about 15% of the height over the
  * clock in play, about 30% as the centrepiece before the start, on a break and once it is over, a
  * small logo never past twice its size (round 5, items 21, 22 and 24). The production build draws it;
@@ -78,7 +78,7 @@ function clockFor(state: State, now: number): ClockDto | null {
     structure: STRUCTURE,
     structureHash: "0badf00d",
     presetKey: null,
-    displaySettings: { ...DEFAULT_DISPLAY_SETTINGS, showPrizePool: "always", showPayouts: true, showAp: true, overlay, ...(state === "every figure" ? EVERY_FIGURE : {}) },
+    displaySettings: { ...DEFAULT_DISPLAY_SETTINGS, showPrizePool: "always", showPayouts: true, overlay, ...(state === "every figure" ? EVERY_FIGURE : {}) },
     undo: null,
     updatedAt: new Date(now - 60_000).toISOString(),
   };
@@ -106,23 +106,19 @@ function displayFor(state: State): LiveDisplayDto {
     money: {
       show: true,
       estimated: true,
-      rakeLabel: "AP",
       netCents: 12_345_600,
-      netSource: "calculated",
-      apCents: 1_234_500,
-      clubAddedCents: null,
       payouts: [
         { position: 1, amountCents: 6_172_800 },
         { position: 2, amountCents: 3_703_700 },
         { position: 3, amountCents: 2_469_100 },
       ],
-      lines: [
-        { kind: "carried_in", label: "Carried over from Central Stars Thursday Night Deepstack Championship", cents: 123_400 },
-        { kind: "carried_over", label: "Carried over to Winter 2026 Central Stars League", cents: 98_700 },
+      carriedIn: [
+        { fromName: "Central Stars Thursday Night Deepstack Championship", amountCents: 123_400 },
+        { fromName: "Central Stars Wednesday Turbo", amountCents: 98_700 },
       ],
     },
     qr: { target: "season", path: "/season/s1" },
-    viewer: { canControl: false, canChangeDisplay: false, clockKeyIssuedAt: null, clockKeyExpiresAt: null },
+    viewer: { canControl: false, clockKeyIssuedAt: null, clockKeyExpiresAt: null },
   };
 }
 
@@ -155,7 +151,7 @@ async function serve(page: Page, state: () => State): Promise<void> {
       const { pathname } = new URL(route.request().url());
       if (pathname === "/api/public/tournaments/t1/display") return route.fulfill({ json: displayFor(state()) });
       if (pathname === "/api/public/tournaments/t1/seating") return route.fulfill({ json: seating() });
-      if (pathname === "/api/auth/me") return route.fulfill({ status: 401, json: { error: "Not signed in" } });
+      if (pathname === "/api/auth/me") return route.fulfill({ json: { user: null } });
       return route.fulfill({ status: 404, json: { error: "Not found" } });
     },
   );

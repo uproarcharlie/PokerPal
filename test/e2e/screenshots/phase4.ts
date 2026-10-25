@@ -184,7 +184,7 @@ async function buildNight(request: APIRequestContext): Promise<Night> {
   const clock = {
     structure: presetStructure("central_stars_one_life_line"),
     presetKey: "central_stars_one_life_line",
-    displaySettings: { showPrizePool: "always", showPayouts: true, showAp: true, showAverageStack: true, qrTarget: "season" },
+    displaySettings: { showPrizePool: "always", showPayouts: true, showAverageStack: true, qrTarget: "season" },
     baseHash: null,
   };
   await expectJson(await request.put(`/api/tournaments/${tonight.id}/clock`, { data: clock }), 201);

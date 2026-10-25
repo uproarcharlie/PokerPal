@@ -59,7 +59,7 @@ export const editorMoney = (breakdown: Pick<PrizePoolBreakdown, "manualPrizePool
   availableCents: breakdown.netAfterAp,
 });
 
-/** Why the TD changed the payouts: one tap each, or typed. Shown in the public activity feed. */
+/** Why the TD changed the payouts: one tap each, or typed. Shown in the activity feed to the club's staff only (round 6). */
 export const PAYOUT_REASONS = ["Short field", "Bigger field", "Correction"] as const;
 
 const NUMBER_TEXT = /^\d+(\.\d+)?$/;
@@ -245,11 +245,15 @@ export function payoutsSaveCheck(difference: Pick<PrizeDifference, "cents" | "av
   };
 }
 
-/** Why the places beyond the players entered are not paid yet, or null when everyone placed can be paid. */
-export function unpaidPlacesNote(places: number, entrants: number): string | null {
-  if (entrants <= 0 || entrants >= places) return null;
-  const players = `${entrants} ${entrants === 1 ? "player has" : "players have"}`;
-  return `Only ${players} entered: places below ${placeName(entrants)} are paid only if more players enter.`;
+/**
+ * Why the places beyond the paid players are not paid yet, or null when everyone placed can be paid.
+ * Only paid players are in the pool (round 6), so a player who has entered but not paid fills no place
+ * until their payment is confirmed (R6REV0-MONEY-02).
+ */
+export function unpaidPlacesNote(places: number, paidPlayers: number): string | null {
+  if (paidPlayers <= 0 || paidPlayers >= places) return null;
+  const players = `${paidPlayers} ${paidPlayers === 1 ? "player has" : "players have"}`;
+  return `Only ${players} paid: places below ${placeName(paidPlayers)} are paid only once more players pay.`;
 }
 
 /** Whether the payouts sent would pay what is paid now: the same structure and choice, and for Custom the same places. */

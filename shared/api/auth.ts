@@ -80,7 +80,7 @@ export interface AuthUserResponse {
   user: SessionUser;
 }
 
-/** GET /api/auth/me */
+/** GET /api/auth/me, signed in. */
 export interface AuthMeResponse {
   user: SessionUser;
   /** The admin behind the session while they impersonate `user`; null otherwise (SEC-13). */
@@ -88,6 +88,18 @@ export interface AuthMeResponse {
   /** Clubs the user owns or manages. An admin may manage every club; check `user.role` for that. */
   managedClubIds: string[];
 }
+
+/**
+ * GET /api/auth/me when nobody is signed in (200, not 401: asking is not an error, and every public page
+ * asks, so a 401 put an error in the browser's console on each one). Also the answer once a session has
+ * ended (its user deleted or deactivated, its impersonating admin no longer one).
+ */
+export interface SignedOutMeResponse {
+  user: null;
+}
+
+/** GET /api/auth/me */
+export type MeResponse = AuthMeResponse | SignedOutMeResponse;
 
 /** POST /api/auth/logout, /change-password */
 export interface MessageResponse {

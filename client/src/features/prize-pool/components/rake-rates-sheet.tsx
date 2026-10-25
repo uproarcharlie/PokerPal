@@ -10,7 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/api/http";
 import { formatMoney } from "@/lib/format";
 import { formResolver, showServerFieldErrors } from "@/lib/forms";
-import { tournamentMoney } from "@/lib/prize-pool";
+import { poolPlayersOf, tournamentMoney } from "@/lib/prize-pool";
 import { useRegistrations } from "@/features/tournaments/hooks";
 import { RakeFields, type RakeRateValues } from "@/features/tournaments/components/tournament-form/rake-fields";
 import { RATE_MESSAGES, rakeTypeOf, rateAmountText } from "@/features/tournaments/tournament-form";
@@ -260,7 +260,7 @@ function RatesForm({ tournament, registrations, label, onClose }: RatesFormProps
           after={after}
           before={before}
           label={label}
-          entrants={registrations.length}
+          players={poolPlayersOf(before, tournament, registrations)}
           locked={tournament.prizePoolLocked === true}
           waiting="Fix the rates above to see the prize pool."
         />

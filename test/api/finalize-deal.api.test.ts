@@ -9,7 +9,7 @@ import { asc, eq } from "drizzle-orm";
 import type request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { DealRequest, FinalizePreviewDto } from "@shared/api/finalize";
-import { findForbiddenKeys } from "@shared/api/public";
+import { findForbiddenKeys, findTakingsKeys } from "@shared/api/public";
 import { activityLog, auditLog, tournamentRegistrations, tournaments, type TournamentRegistration } from "@shared/schema";
 import { createPlayer, createRegistration, createTournament, type NewTournament } from "../factories";
 import { anon, resetDb, testDb } from "../helpers";
@@ -186,10 +186,11 @@ describe("finalize with a deal", () => {
       { action: "tournament.finalize", actorUserId: staff.owner.user.id, data: { netCents: 60_000, planHash, deal: response.body.snapshot.deal } },
     ]);
 
-    // The deal and its reason are public, as the feed is.
-    const publicView = await (await anon()).get(`/api/tournaments/${tournament.id}`);
-    expect(publicView.body.prizePoolSnapshot.deal).toEqual(response.body.snapshot.deal);
+    // The deal and its reason are public, as the feed is: the public read them with the prizes (round 6: the snapshot is the staff's).
+    const publicView = await (await anon()).get(`/api/public/tournaments/${tournament.id}/prizes`);
+    expect(publicView.body.deal).toEqual(response.body.snapshot.deal);
     expect(findForbiddenKeys(publicView.body)).toEqual([]);
+    expect(findTakingsKeys(publicView.body)).toEqual([]);
   });
 
   it("refuses a wrong deal with 409 DEAL_INVALID, its problems and what may be shared, and writes nothing", async () => {

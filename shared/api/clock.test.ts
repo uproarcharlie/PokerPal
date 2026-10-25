@@ -12,6 +12,7 @@ import {
   type ClockDisplaySettings,
   earlyBirdsSchema,
   resolveDisplaySettings,
+  SCREEN_DISPLAY_SETTINGS,
   structureGeneratorSchema,
 } from "./clock";
 
@@ -100,7 +101,6 @@ describe("display settings", () => {
     expect(DEFAULT_DISPLAY_SETTINGS).toEqual({
       showPrizePool: "when_locked",
       showPayouts: true,
-      showAp: false,
       showAverageStack: true,
       qrTarget: "season",
       overlay: "none",
@@ -125,17 +125,18 @@ describe("display settings", () => {
   it("are read back field by field, never throwing", () => {
     expect(resolveDisplaySettings(null)).toEqual(DEFAULT_DISPLAY_SETTINGS);
     expect(resolveDisplaySettings("junk")).toEqual(DEFAULT_DISPLAY_SETTINGS);
-    expect(resolveDisplaySettings({ showAp: true, qrTarget: "nowhere", overlay: "seating", extra: 1 })).toEqual({
+    expect(resolveDisplaySettings({ showPayouts: false, qrTarget: "nowhere", overlay: "seating", extra: 1 })).toEqual({
       ...DEFAULT_DISPLAY_SETTINGS,
-      showAp: true,
+      showPayouts: false,
       overlay: "seating",
     });
     expect(resolveDisplaySettings({ soundVolume: 1.5, edgeMargin: 3, showLevel: "yes" })).toEqual(DEFAULT_DISPLAY_SETTINGS);
   });
 
-  it("read a clock stored before the round 5 settings with each new one at its default", () => {
-    const phase4 = { showPrizePool: "always", showPayouts: false, showAp: true, showAverageStack: true, qrTarget: "seats", overlay: "none" };
-    expect(resolveDisplaySettings(phase4)).toEqual({ ...DEFAULT_DISPLAY_SETTINGS, ...phase4 });
+  it("read a clock stored before the round 5 settings with each new one at its default, and the retired AP switch gone (round 6)", () => {
+    const { showAp: _retired, ...kept } = { showPrizePool: "always", showPayouts: false, showAp: true, showAverageStack: true, qrTarget: "seats", overlay: "none" };
+    expect(resolveDisplaySettings({ ...kept, showAp: true })).toEqual({ ...DEFAULT_DISPLAY_SETTINGS, ...kept });
+    expect(DEFAULT_DISPLAY_SETTINGS).not.toHaveProperty("showAp");
   });
 
   it("are patched one or more at a time, refusing unknown or empty patches", () => {
@@ -147,6 +148,16 @@ describe("display settings", () => {
     expect(clockDisplaySettingsPatchSchema.safeParse({ soundVolume: -0.1 }).success).toBe(false);
     expect(clockDisplaySettingsPatchSchema.safeParse({ edgeMargin: 10 }).success).toBe(false);
     expect(clockDisplaySettingsPatchSchema.safeParse({ showEarlyBirds: "on" }).success).toBe(false);
+  });
+
+  it("take the retired AP switch from a page loaded before round 6, and leave it out", () => {
+    expect(clockDisplaySettingsPatchSchema.parse({ showAp: true, overlay: "payouts" })).toEqual({ overlay: "payouts" });
+    expect(clockDisplaySettingsPatchSchema.parse({ showAp: false })).toEqual({});
+    expect(clockDisplaySettingsPatchSchema.safeParse({ showAp: "yes" }).success).toBe(false);
+  });
+
+  it("name the TV's own settings, which the clock key may change: the layer, the sounds and the edge margin", () => {
+    expect([...SCREEN_DISPLAY_SETTINGS].sort()).toEqual(["edgeMargin", "overlay", "soundBreak", "soundCountdown", "soundLevel", "soundMinute", "soundVolume"]);
   });
 });
 

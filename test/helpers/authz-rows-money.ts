@@ -11,6 +11,12 @@ import { UNKNOWN_ID } from "./values";
 const custom = { payoutStructure: "custom", places: [{ kind: "percent", percent: 60 }, { kind: "amount", amount: "40.00" }], reason: "Short field" };
 
 export const MONEY_ROUTE_ROWS: Record<string, RouteRow> = {
+  // Round 6: the staff's breakdown carries the AP and what the club keeps; the public read /api/public/tournaments/:id/prizes.
+  "GET /api/tournaments/:id/prize-pool": {
+    guards: ["club-manager:Tournament"],
+    cases: single(staffOf(200), async ({ club }) => ({ path: `/api/tournaments/${(await tournamentIn(club)).id}/prize-pool` })),
+    missing: () => ({ path: `/api/tournaments/${UNKNOWN_ID}/prize-pool` }),
+  },
   "PUT /api/tournaments/:id/prize-pool/payouts": {
     guards: ["club-manager:Tournament"],
     cases: single(staffOf(200), async ({ club }) => ({

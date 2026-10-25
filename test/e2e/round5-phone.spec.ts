@@ -18,94 +18,21 @@
  * With SCREENSHOTS_DIR set, each step also saves its screen there (PLANNING/screens-round5 for the
  * round's review), named as in round5's integration brief.
  */
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { devices, type APIRequestContext, type BrowserContextOptions, type Page } from "@playwright/test";
+import type { APIRequestContext, Page } from "@playwright/test";
 import type { ClockDto } from "../../shared/api/clock";
 import type { LiveDisplayDto } from "../../shared/api/live-display";
 import type { PrizePoolDto } from "../../shared/api/prize-pool";
-import type { StaffPlayer } from "../../shared/api/players";
-import type { ClubDto, PublicRegistration } from "../../shared/api/public";
+import type { ClubDto } from "../../shared/api/public";
 import type { SeatingDto } from "../../shared/api/seating";
 import type { TournamentDetailDto } from "../../shared/api/tournaments";
-import { presetStructure } from "../../shared/domain/blind-structures";
 import { CENTRAL_STARS_THEME, themeVariables } from "../../shared/domain/theme";
-import { createClub, createTournament, expectJson, registerPlayer, registrationsOf, signUp, uniquePhone, uniqueToken } from "./support/api";
+import { createTournament, registrationsOf, signUp, uniquePhone, uniqueToken } from "./support/api";
 import { logoSvg, uploadImage } from "./support/demo";
 import { expect, test } from "./support/fixtures";
+import { centralStars, enter, get, PHONE, post, put, regulars, screenOf, settled, setUpClock, shot } from "./support/phone";
 import { toast } from "./support/ui";
 
-const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
-const SCREENS = process.env.SCREENSHOTS_DIR ? path.resolve(REPO_ROOT, process.env.SCREENSHOTS_DIR) : null;
-
-// The browser type is the project's (Chromium, with the fake camera); a device may not choose another.
-const { defaultBrowserType: _browser, ...pixel7 } = devices["Pixel 7"];
-/** A 390 × 844 phone (an iPhone 12–14's screen) with a phone's touch and user agent. */
-const PHONE: BrowserContextOptions = { ...pixel7, viewport: { width: 390, height: 844 }, screen: { width: 390, height: 844 } };
 test.use(PHONE);
-/** A laptop or a TV: a mouse, no touch, 1× pixels (contexts opened in a test take its `use` options unless told otherwise). */
-const { defaultBrowserType: _desktopBrowser, ...desktopChrome } = devices["Desktop Chrome"];
-const screenOf = (width: number, height: number): BrowserContextOptions => ({ ...desktopChrome, viewport: { width, height }, screen: { width, height } });
-
-/**
- * Waits for what animates in (Radix, the toasts) and every colour transition (a club's colours arriving)
- * to end, so what is read or pictured is what is finally on screen. A spinner animates for ever: only
- * animations that end are waited for.
- */
-async function settled(page: Page): Promise<void> {
-  await page.evaluate(() =>
-    Promise.all(
-      document
-        .getAnimations()
-        .filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity)
-        .map((animation) => animation.finished.catch(() => undefined)),
-    ),
-  );
-}
-
-/** Saves the screen as `<name>.png` in SCREENSHOTS_DIR, when it is set. */
-async function shot(page: Page, name: string): Promise<void> {
-  if (!SCREENS) return;
-  await settled(page);
-  await page.screenshot({ path: path.join(SCREENS, `${name}.png`) });
-}
-
-const post = async <T>(request: APIRequestContext, url: string, data: object, status = 200) => expectJson<T>(await request.post(url, { data }), status);
-const put = async <T>(request: APIRequestContext, url: string, data: object) => expectJson<T>(await request.put(url, { data }), 200);
-const get = async <T>(request: APIRequestContext, url: string) => expectJson<T>(await request.get(url), 200);
-
-/**
- * Central Stars as the boot seeds leave it on production: its AP label, 9-seat rectangles and (unless
- * `colours` is false, for a test that chooses them in club settings) its blue and gold.
- */
-async function centralStars(request: APIRequestContext, token: string, { colours = true } = {}): Promise<ClubDto> {
-  const club = await createClub(request, `Central Stars ${token}`);
-  return put<ClubDto>(request, `/api/clubs/${club.id}`, {
-    defaultSeatsPerTable: 9,
-    defaultTableShape: "rectangle",
-    rakeLabel: "AP",
-    ...(colours ? { theme: CENTRAL_STARS_THEME } : {}),
-  });
-}
-
-/** The club's regulars, by name: it is their home club, so its QR page's search finds them. */
-async function regulars(request: APIRequestContext, clubId: string, names: readonly string[]): Promise<StaffPlayer[]> {
-  const players: StaffPlayer[] = [];
-  for (const name of names) players.push(await post<StaffPlayer>(request, "/api/players", { name, phone: uniquePhone(), clubId }, 201));
-  return players;
-}
-
-async function enterPaid(request: APIRequestContext, tournamentId: string, players: readonly StaffPlayer[]): Promise<PublicRegistration[]> {
-  const entries: PublicRegistration[] = [];
-  for (const player of players) entries.push(await registerPlayer(request, tournamentId, player.id, { paymentConfirmed: true }));
-  return entries;
-}
-
-/** The Central Stars "One Life Line" clock, set up (not started) by the club's staff. */
-async function setUpClock(request: APIRequestContext, tournamentId: string): Promise<void> {
-  const clock = { structure: presetStructure("central_stars_one_life_line"), presetKey: "central_stars_one_life_line", baseHash: null };
-  await expectJson(await request.put(`/api/tournaments/${tournamentId}/clock`, { data: clock }), 201);
-}
 
 const seatingOf = (request: APIRequestContext, tournamentId: string) => get<SeatingDto>(request, `/api/tournaments/${tournamentId}/seating`);
 /** Players at each table still in play, fullest first. */
@@ -129,7 +56,7 @@ test("(a) 2 starting tables fill with late QR sign-ups seated by themselves, the
     club.id,
     Array.from({ length: 16 }, (_, index) => `Regular ${String.fromCharCode(65 + index)} ${token}`),
   );
-  await enterPaid(page.request, tournament.id, players);
+  await enter(page.request, tournament.id, players);
   // A regular who has not come tonight yet: they find themselves by name on the QR page later.
   const [lateRegular] = await regulars(page.request, club.id, [`Hemi Walker ${token}`]);
   await put(page.request, `/api/tournaments/${tournament.id}`, { status: "in_progress" });
@@ -282,7 +209,7 @@ test("(b) the desk on a phone: a 3-tap bust with Undo, a re-buy approved, the cl
   });
   const names = ["Aroha", "Ben", "Chloe", "Dev", "Ella", "Finn", "Grace", "Hemi"].map((name) => `${name} ${token}`);
   const players = await regulars(page.request, club.id, names);
-  const entries = await enterPaid(page.request, tournament.id, players);
+  const entries = await enter(page.request, tournament.id, players);
   const entryOf = (index: number) => entries[index]!;
   await put(page.request, `/api/tournaments/${tournament.id}`, { status: "in_progress" });
   await post(page.request, `/api/tournaments/${tournament.id}/seating/setup`, {}, 201);
@@ -389,6 +316,8 @@ test("(b) the desk on a phone: a 3-tap bust with Undo, a re-buy approved, the cl
     await second.getByRole("button", { name: "Fixed amount" }).click();
     await editor.getByLabel("2nd place", { exact: true }).fill("100");
     await expect(editor.getByTestId("payout-pays-2")).toContainText("$100 (fixed)");
+    // What the places leave over is the club's unless the TD says otherwise (round 5, item 16): here 1st gets it.
+    await expect(editor.getByRole("radio", { name: /^Club keeps it/ })).toBeChecked();
     await editor.getByRole("radio", { name: /^Add it to 1st/ }).click();
     await expect(editor.getByTestId("payout-sum")).toContainText("left over goes to 1st");
     await editor.getByRole("button", { name: "Short field" }).click();
@@ -488,7 +417,7 @@ test("(c) Central Stars' colours, chosen in club settings, on its public pages, 
     buyInAmount: "100.00",
     maxPlayers: 27,
   });
-  await enterPaid(page.request, tournament.id, await regulars(page.request, club.id, ["Aroha", "Ben", "Chloe"].map((name) => `${name} ${token}`)));
+  await enter(page.request, tournament.id, await regulars(page.request, club.id, ["Aroha", "Ben", "Chloe"].map((name) => `${name} ${token}`)));
   await put(page.request, `/api/tournaments/${tournament.id}`, { status: "in_progress" });
   await setUpClock(page.request, tournament.id);
   await post(page.request, `/api/tournaments/${tournament.id}/clock/actions`, { action: "start" });
@@ -553,7 +482,7 @@ test("(d) the AP on a phone: fixed by hand for a low turnout in a full-screen sh
     payoutStructure: "standard",
     maxPlayers: 27,
   });
-  await enterPaid(page.request, tournament.id, await regulars(page.request, club.id, ["Aroha", "Ben", "Chloe", "Dev", "Ella", "Finn", "Grace", "Hemi"].map((name) => `${name} ${token}`)));
+  await enter(page.request, tournament.id, await regulars(page.request, club.id, ["Aroha", "Ben", "Chloe", "Dev", "Ella", "Finn", "Grace", "Hemi"].map((name) => `${name} ${token}`)));
   await put(page.request, `/api/tournaments/${tournament.id}`, { status: "in_progress" });
   const panel = page.getByTestId("ap-panel");
   const net = async () => (await get<PrizePoolDto>(page.request, `/api/tournaments/${tournament.id}/prize-pool`)).breakdown.net;
@@ -604,7 +533,7 @@ test("(e) the waiting list on a phone: a QR sign-up past Max players waits as #1
   const club = await centralStars(page.request, token);
   const tournament = await createTournament(page.request, { clubId: club.id, name: `Full House ${token}`, buyInAmount: "40.00", maxPlayers: 3 });
   const names = ["Aroha", "Ben", "Chloe"].map((name) => `${name} ${token}`);
-  await enterPaid(page.request, tournament.id, await regulars(page.request, club.id, names));
+  await enter(page.request, tournament.id, await regulars(page.request, club.id, names));
   const latecomer = `Dee Late ${token}`;
   const entryOf = async (name: string) => (await registrationsOf(page.request, tournament.id)).find((entry) => entry.player?.name === name);
 

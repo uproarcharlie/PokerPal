@@ -9,7 +9,7 @@ import { formatMoney, ordinal } from "@/lib/format";
 import { undistributedNote } from "@/lib/prize-pool";
 import { cn } from "@/lib/utils";
 import { EditPayoutsButton } from "@/features/prize-pool/components/payout-editor-sheet";
-import { frozenSummary, liveSummary, PoolSummary } from "@/features/prize-pool/components/public/pool-summary";
+import { frozenSummary, liveSummary, PoolSummary } from "@/features/prize-pool/components/pool-summary";
 import { usePrizePool } from "@/features/prize-pool/hooks";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { describeDeal } from "@shared/domain/deal";
@@ -17,7 +17,10 @@ import { DEFAULT_RAKE_LABEL, paidPercentage, type PayoutDisplay, type PayoutDisp
 
 interface PrizeStructureCardProps {
   display: PayoutDisplay;
-  /** How many players are entered: places beyond them are not paid while the game runs. */
+  /**
+   * The players in the field, paid or not. Places beyond the paid players are not paid while the game
+   * runs (round 6), and the places listed are then one per paid player.
+   */
   entrants: number;
   /** The high-hand entry fee, when the tournament has a high hand. */
   highHandAmount: string | null;
@@ -29,9 +32,12 @@ interface PrizeStructureCardProps {
   tournament?: TournamentDetailDto;
 }
 
-/** "Prize pool $1,000 · AP $200 · Kept by the club $50": live from the server's pool, or as finalize froze it. */
+/**
+ * "Prize pool $1,000 · AP $200 · Kept by the club $50": live from the server's pool, or as finalize froze
+ * it. The club's staff only (round 6): nobody else is sent the breakdown or the snapshot.
+ */
 function useSummary(display: PayoutDisplay, tournament: TournamentDetailDto | undefined) {
-  const prizePool = usePrizePool(tournament?.id ?? "", { follow: tournament });
+  const prizePool = usePrizePool(tournament?.id ?? "", { follow: tournament, enabled: tournament?.viewer.canManage === true });
   const snapshot = display.source === "snapshot" ? tournament?.prizePoolSnapshot : null;
   if (snapshot) return frozenSummary(snapshot.pool, prizePool.data?.rakeLabel ?? DEFAULT_RAKE_LABEL);
   if (display.source !== "live" || !prizePool.data) return null;
@@ -71,7 +77,7 @@ function ShareNote({ payout, dealt }: { payout: PayoutDisplayRow; dealt: Readonl
 export function PrizeStructureCard({ display, entrants, highHandAmount, tournament }: PrizeStructureCardProps) {
   const rows = display.rows;
   const paidShare = paidPercentage(rows);
-  const undistributed = undistributedNote(display, entrants);
+  const undistributed = undistributedNote(display, { paid: display.rows.length, field: entrants }, tournament?.viewer.canManage ? "staff" : "room");
   const deal = display.source === "snapshot" ? tournament?.prizePoolSnapshot?.deal : undefined;
   const dealt = new Set(deal?.players.map((player) => player.registrationId) ?? []);
   const summary = useSummary(display, tournament);

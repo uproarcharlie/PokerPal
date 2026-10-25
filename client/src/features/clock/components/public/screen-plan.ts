@@ -7,11 +7,11 @@
  * known before it is drawn, and the parts are given room in a fixed priority. Always: the countdown,
  * the blinds and ante (the level's number too, where the TD shows it), and what comes next. Then: the
  * time to the break, the players, the average stack, the prize pool and the QR code. Then the rest
- * (other figures the TD switched on, the places, the AP, the club's name), each only while there is
- * room. A TV's countdown takes about a third of the screen's height, and no word on it is smaller than
- * 3% of the height. The club's logo is centred over it all (round 5, item 24): about 15% of the height
- * in play, and the centrepiece, about 30%, while the clock has not started, on a break and once the
- * game is over (the centre text). Pure: no DOM.
+ * (other figures the TD switched on, the places, the money carried into the pool, the club's name),
+ * each only while there is room. A TV's countdown takes about a third of the screen's height, and no
+ * word on it is smaller than 3% of the height. The club's logo is centred over it all (round 5, item
+ * 24): about 15% of the height in play, and the centrepiece, about 30%, while the clock has not
+ * started, on a break and once the game is over (the centre text). Pure: no DOM.
  */
 
 /** A figure tile ("Players 18 / 20"), in the order of priority. */
@@ -46,9 +46,8 @@ export interface MoneyText {
   pool: { label: string; amount: string } | null;
   /** Every place offered ("1st", "$500"), best first. */
   payouts: Array<{ place: string; amount: string }>;
-  /** The pool's breakdown under the places ("Kept by the club", "$50"; round 5, item 16). */
-  lines: Array<{ label: string; amount: string }>;
-  ap: { label: string; amount: string } | null;
+  /** Under the places: "Includes $200 carried over from Week 3" (carriedInNote), or null. */
+  carried: string | null;
   /** What of the pool no place pays yet, or that the pool is shown once locked. */
   note: string | null;
 }
@@ -136,9 +135,8 @@ export interface TilePlan {
 export interface MoneyPlan {
   pool: boolean;
   payouts: number;
-  /** How many of the pool's breakdown lines fit, in order. */
-  lines: number;
-  ap: boolean;
+  /** The money carried in fits under the places. */
+  carried: boolean;
   note: boolean;
   label: number;
   amount: number;
@@ -394,8 +392,8 @@ interface ColumnPlan {
 
 /**
  * The money and the QR code in a column `width` wide and `room` tall, by priority: the pool, the QR
- * code (at least 15% of the height, else left out), the places one by one, the pool's breakdown line
- * by line, the AP, then the note.
+ * code (at least 15% of the height, else left out), the places one by one, the money carried in, then
+ * the note.
  */
 function planMoneyColumn(money: MoneyText | null, qrCaption: string | null, width: number, room: number, H: number, qrMax: number, k = 1): ColumnPlan {
   const padY = 0.012 * H;
@@ -431,28 +429,24 @@ function planMoneyColumn(money: MoneyText | null, qrCaption: string | null, widt
   }
 
   let payouts = 0;
-  let lines = 0;
+  let carried = false;
   if (pool && money) {
     while (payouts < money.payouts.length && used + row * LINE.row <= room) {
       used += row * LINE.row;
       payouts++;
     }
-    // One row each: a long label is cut short, the amount always shown.
-    while (lines < money.lines.length && used + small * LINE.row <= room) {
-      used += small * LINE.row;
-      lines++;
-    }
+    // Up to two rows: a longer one is cut short.
+    const carriedHeight = money.carried ? small * LINE.row * Math.min(2, linesOf(money.carried, small, inner)) : 0;
+    carried = money.carried !== null && used + carriedHeight <= room;
+    if (carried) used += carriedHeight;
   }
-  const apHeight = label * LINE.label + 0.05 * H * k * 1.1 + 2 * padY;
-  const ap = Boolean(money?.ap) && fits(apHeight);
-  if (ap) add(apHeight);
   const noteHeight = money?.note ? small * LINE.row * Math.min(3, linesOf(money.note, small, inner)) + (pool ? 0 : 2 * padY) : 0;
   const note = Boolean(money?.note) && (pool ? used + noteHeight <= room : fits(noteHeight));
   if (note) used += pool ? noteHeight : (used > 0 ? gap : 0) + noteHeight;
 
-  const shown = pool || ap || note;
+  const shown = pool || note;
   return {
-    money: money && shown ? { pool, payouts, lines, ap, note, label, amount, row, small, padX, padY, gap } : null,
+    money: money && shown ? { pool, payouts, carried, note, label, amount, row, small, padX, padY, gap } : null,
     qr,
     used,
   };

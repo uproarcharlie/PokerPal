@@ -1,5 +1,5 @@
 import type { ClockDisplaySettings } from "@shared/api/clock";
-import type { LiveDisplayDto } from "@shared/api/live-display";
+import { carriedInNote, type LiveDisplayDto } from "@shared/api/live-display";
 import type { Cents } from "@shared/domain/money";
 import { formatMoney, ordinal } from "@/lib/format";
 import { undistributedNote } from "@/lib/prize-pool";
@@ -21,9 +21,14 @@ export function unpaidCents(money: Pick<Money, "netCents" | "payouts">): Cents {
   return Math.max(0, money.netCents - money.payouts.reduce((sum, payout) => sum + payout.amountCents, 0));
 }
 
-/** The admin and public pages' wording for it (lib/prize-pool), for the room: null when every dollar is paid (MONEY-AP-05). */
+/**
+ * The admin and public pages' wording for it (lib/prize-pool), for the room: null when every dollar is
+ * paid (MONEY-AP-05). Places beyond the paid players in the pool are not paid, so while part of it goes
+ * unpaid the places listed are one per paid player; `entrants` is everyone playing (the Players tile),
+ * so the room is told the money comes with the payments when some have not paid (R6REV0-MONEY-02).
+ */
 export function unpaidNote(money: Pick<Money, "netCents" | "payouts">, entrants: number): string | null {
-  return undistributedNote({ source: "live", undistributedCents: unpaidCents(money) }, entrants);
+  return undistributedNote({ source: "live", undistributedCents: unpaidCents(money) }, { paid: money.payouts?.length ?? 0, field: entrants });
 }
 
 /** Said where the pool would be while the TD shows it only once it is locked. */
@@ -31,20 +36,18 @@ export const POOL_HIDDEN_NOTE = "The prize pool is shown once it is locked";
 
 /**
  * What the money panel says, for the screen to plan its room: the pool ("est." while it can still
- * change), the top places, the pool's breakdown (what was carried in, what the club keeps, what is
- * carried over, what the club adds), the club's take under its own name ("AP") or what the club adds
- * to a guaranteed pool, and what of the pool no place pays yet; null when there is nothing to say.
+ * change), the top places, the money carried in from an earlier game ("Includes $200 carried over
+ * from Week 3"), and what of the pool no place pays yet (`entrants`: everyone playing); null when there
+ * is nothing to say. Never what the club takes (round 6): the server sends the TV none of it.
  */
-export function moneyText(money: Money, entrants: number, showPrizePool: ClockDisplaySettings["showPrizePool"] | null): MoneyText | null {
+export function moneyText(money: Money, showPrizePool: ClockDisplaySettings["showPrizePool"] | null, entrants: number): MoneyText | null {
   const hiddenUntilLocked = !money.show && showPrizePool !== "never";
   const shown = money.show && money.netCents !== null;
-  const ap = money.apCents !== null ? { label: money.clubAddedCents !== null ? "Added by the club" : money.rakeLabel, amount: formatMoney(money.clubAddedCents ?? money.apCents) } : null;
-  if (!shown && !hiddenUntilLocked && !ap) return null;
+  if (!shown && !hiddenUntilLocked) return null;
   return {
     pool: shown ? { label: money.estimated ? "Prize pool est." : "Prize pool", amount: formatMoney(money.netCents ?? 0) } : null,
     payouts: shown ? (money.payouts ?? []).slice(0, PAYOUTS_SHOWN).map((payout) => ({ place: ordinal(payout.position), amount: formatMoney(payout.amountCents) })) : [],
-    lines: shown ? (money.lines ?? []).map((line) => ({ label: line.label, amount: formatMoney(line.cents) })) : [],
-    ap,
+    carried: shown ? carriedInNote(money.carriedIn ?? []) : null,
     note: shown ? unpaidNote(money, entrants) : hiddenUntilLocked ? POOL_HIDDEN_NOTE : null,
   };
 }
@@ -59,14 +62,12 @@ interface DisplayMoneyProps {
 }
 
 /**
- * The prize pool, the top places that fit, the pool's breakdown (and what of the pool no place is paid
- * yet), and the club's take under its own name ("AP"), or what the club adds to a guaranteed pool, when
- * the TD chose to show it. All amounts are the server's.
+ * The prize pool, the top places that fit, the money carried in from an earlier game, and what of the
+ * pool no place is paid yet. All amounts are the server's.
  */
 export function DisplayMoney({ money, text, plan, className }: DisplayMoneyProps) {
   const pad = `${px(plan.padY)} ${px(plan.padX)}`;
   const payouts = text.payouts.slice(0, plan.payouts);
-  const lines = text.lines.slice(0, plan.lines);
   return (
     <section aria-label="Prize pool" className={cn("flex min-w-0 flex-col", className)} style={{ gap: px(plan.gap) }} data-testid="display-money">
       {plan.pool && text.pool ? (
@@ -88,15 +89,10 @@ export function DisplayMoney({ money, text, plan, className }: DisplayMoneyProps
               ))}
             </ol>
           ) : null}
-          {lines.length > 0 ? (
-            <ul role="list" aria-label="Prize pool breakdown" style={{ fontSize: px(plan.small), lineHeight: LINE.row }} data-testid="display-pool-lines">
-              {lines.map((line, index) => (
-                <li key={`${index}-${line.label}`} className="flex justify-between gap-4 tabular-nums">
-                  <span className="min-w-0 truncate font-semibold text-muted-foreground">{line.label}</span>
-                  <span className="shrink-0 font-bold text-foreground">{line.amount}</span>
-                </li>
-              ))}
-            </ul>
+          {plan.carried && text.carried ? (
+            <p className="line-clamp-2 font-semibold text-muted-foreground" style={{ fontSize: px(plan.small), lineHeight: LINE.row }} data-testid="display-carried-in">
+              {text.carried}
+            </p>
           ) : null}
           {plan.note && text.note ? (
             <p className="line-clamp-3 font-semibold text-muted-foreground" style={{ fontSize: px(plan.small), lineHeight: LINE.row }} data-testid="display-unpaid">
@@ -108,17 +104,6 @@ export function DisplayMoney({ money, text, plan, className }: DisplayMoneyProps
         <p className="line-clamp-3 rounded-lg border border-dashed border-border font-semibold text-muted-foreground" style={{ fontSize: px(plan.small), lineHeight: LINE.row, padding: pad }}>
           {text.note}
         </p>
-      ) : null}
-      {plan.ap && text.ap ? (
-        // A pool guaranteed above what came in leaves the club no AP: the room is told what the club adds instead.
-        <div className="rounded-lg border border-border bg-card/60" style={{ padding: pad }} data-testid="display-ap">
-          <p className="truncate font-bold uppercase tracking-wider text-muted-foreground" style={{ fontSize: px(plan.label), lineHeight: LINE.label }}>
-            {text.ap.label}
-          </p>
-          <p className="truncate font-extrabold tabular-nums text-foreground" style={{ fontSize: px(plan.label * (5 / 3)), lineHeight: 1.1 }}>
-            {text.ap.amount}
-          </p>
-        </div>
       ) : null}
     </section>
   );

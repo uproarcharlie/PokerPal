@@ -1,7 +1,7 @@
 /**
  * A tournament's activity feed. It is public: each entry carries only the player's public fields, and
- * the staff bookkeeping entries (STAFF_ONLY_ACTIVITY_TYPES) are shown only to people who can manage
- * the tournament's club.
+ * the staff bookkeeping entries (STAFF_ONLY_ACTIVITY_TYPES, the changes to its prize money among them
+ * since round 6) are shown only to people who can manage the tournament's club.
  *
  * A table break, draw, balance, final table (or the undo of one) keeps every move it made and its undo
  * record in its eventData, for the TD's "Show last moves" and Undo (SeatingDto.lastChange). The feed

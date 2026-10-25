@@ -5,6 +5,7 @@
 import { http, HttpResponse } from "msw";
 import { onTestFinished, vi } from "vitest";
 import type { FinalizePreviewDto, FinalizePreviewInput, FinalizeResultDto, FinalizeRowDto } from "@shared/api/finalize";
+import { toPublicPrizes } from "@shared/api/live-display";
 import type { PrizePoolDto } from "@shared/api/prize-pool";
 import type { ClubDto, PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto, TournamentListItemDto, TournamentStatus } from "@shared/api/tournaments";
@@ -83,7 +84,7 @@ export const HASH_B = "b".repeat(32);
 export const HASH_C = "c".repeat(32);
 
 const previewTournament = { buyInAmount: "100.00", rakeType: "fixed", rakeAmount: "5.00", payoutStructure: "standard" };
-const previewBreakdown = computePrizePool(previewTournament, [{ buyIns: 2 }, { buyIns: 2 }, { buyIns: 1 }]);
+const previewBreakdown = computePrizePool(previewTournament, [2, 2, 1].map((buyIns) => ({ buyIns, paymentConfirmed: true })));
 
 /** A $475 pool ($25 AP) as the preview reports it. */
 export const previewPrizePool: PrizePoolDto = {
@@ -127,6 +128,7 @@ export function previewOf(overrides: Partial<FinalizePreviewDto>): FinalizePrevi
     activePlayers: [],
     dealable: null,
     dealProblems: [],
+    unpaid: [],
     warnings: [],
     pendingRequests: [],
     previous: null,
@@ -203,6 +205,8 @@ export function mockDeskLiveReads(tournament: TournamentDetailDto, registrations
       HttpResponse.json(liveDisplayDto({ clock: null, tournament: { id: tournament.id, name: tournament.name, status: tournament.status as TournamentStatus } })),
     ),
     http.get(`/api/tournaments/${tournament.id}/prize-pool`, () => HttpResponse.json(prizePoolDto(tournament, registrations))),
+    // What someone who does not run the club is shown of the pool instead (round 6).
+    http.get(`/api/public/tournaments/${tournament.id}/prizes`, () => HttpResponse.json(toPublicPrizes(tournament, registrations))),
     http.get(`/api/tournaments/${tournament.id}/seating`, () => HttpResponse.json(seatingDto({ tournamentId: tournament.id }))),
     http.get(`/api/clubs/${tournament.clubId}/blind-structures`, () => HttpResponse.json([])),
   );

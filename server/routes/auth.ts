@@ -8,12 +8,13 @@ import {
   type ChangePasswordInput,
   type LoginInput,
   type RegisterInput,
+  type SignedOutMeResponse,
   type UpdateProfileInput,
 } from "@shared/api/auth";
 import { asyncHandler } from "../http/async-handler";
 import { allowPublic, currentUser, requireAuth } from "../http/authz";
 import { rememberDevice } from "../http/known-device";
-import { HttpError, unauthenticated } from "../http/errors";
+import { HttpError } from "../http/errors";
 import { validateBody } from "../http/validate";
 import { recordImpersonationEnd } from "../services/admin";
 import {
@@ -95,15 +96,17 @@ export function authRoutes({ env, limiters }: RouteDeps): Router {
     }),
   );
 
-  // Not behind requireAuth: a session whose user was deleted or disabled is ended here, so the
-  // browser stops sending a dead cookie.
+  // Not behind requireAuth: anyone may ask who they are, and nobody is an answer, not a 401
+  // (MeResponse). A session whose user was deleted or disabled is ended here, so the browser stops
+  // sending a dead cookie.
   router.get(
     "/api/auth/me",
     asyncHandler(async (req, res) => {
       const session = req.user ? await describeSession(req.user.id, req.impersonatorId) : null;
       if (!session) {
         if (req.session?.userId) await endSession(req, res);
-        throw unauthenticated("Not authenticated");
+        res.json({ user: null } satisfies SignedOutMeResponse);
+        return;
       }
       res.json(session);
     }),

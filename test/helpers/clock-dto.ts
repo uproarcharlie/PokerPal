@@ -149,10 +149,10 @@ export function liveDisplayDto(overrides: DisplayOverrides = {}): LiveDisplayDto
       averageStack: 88_889,
       ...overrides.stats,
     },
-    money: { show: false, estimated: true, rakeLabel: "AP", netCents: null, netSource: null, apCents: null, clubAddedCents: null, payouts: null, lines: null, ...overrides.money },
+    money: { show: false, estimated: true, netCents: null, payouts: null, carriedIn: null, ...overrides.money },
     qr: overrides.qr === undefined ? { target: "season", path: "/season/s1" } : overrides.qr,
-    // The club's staff, signed in, may change the display too (a screen on the clock key alone overrides it).
-    viewer: { canControl: false, clockKeyIssuedAt: null, clockKeyExpiresAt: null, canChangeDisplay: overrides.viewer?.canControl ?? false, ...overrides.viewer },
+    // Whoever runs the clock (the club's staff, or a screen on the clock key) may change the TV's own settings too.
+    viewer: { canControl: false, clockKeyIssuedAt: null, clockKeyExpiresAt: null, ...overrides.viewer },
   };
 }
 

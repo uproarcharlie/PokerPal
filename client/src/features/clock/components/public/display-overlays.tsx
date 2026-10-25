@@ -278,7 +278,7 @@ export function payoutsLayout(places: readonly string[], width: number, height: 
 
 interface PayoutsOverlayProps {
   money: LiveDisplayDto["money"];
-  /** Players entered, for what of the pool no place is paid yet. */
+  /** Everyone playing, paid or not (the Players tile): what the note says of the places not paid yet. */
   entrants: number;
   /** The clock's display settings: why no places may be listed. */
   settings: PayoutSettings;

@@ -14,7 +14,7 @@ const ABOVE_TAB_BAR = "bottom-[calc(4.5rem+env(safe-area-inset-bottom))]";
 interface QuickActionsProps {
   tournament: Pick<TournamentDetailDto, "rebuyAmount" | "addonAmount">;
   waitingRequests: WaitingCount;
-  /** Sign-ups waiting to pay before they are seated ("once they've paid"): 0 for none, or under another mode. */
+  /** Players in the field whose payment is not confirmed (their money is not in the prize pool yet: round 6); 0 for none. */
   awaitingPayment: number;
   onOpen: (dialog: DeskDialog) => void;
   /** The button: the sheets opened from its menu give focus back to it. */
@@ -26,9 +26,9 @@ const ITEM = "min-h-12 gap-3 text-base md:min-h-12 [&_svg]:size-5";
 /**
  * The phone's quick actions (round5-contracts §8.1): one round button above the tab bar, in thumb
  * reach, opening the night's most used things: register a player, bust one, sell a re-buy or an
- * add-on (when the tournament has them), take a payment (under "once they've paid" the step that
- * seats a late arrival, which sat at the foot of the Money tab: R5REV-HOST-09), and the player
- * requests waiting. Each opens its own sheet.
+ * add-on (when the tournament has them), take a payment (how many have not paid beside it: only paid
+ * players are in the pool; under "once they've paid" also the step that seats a late arrival, which sat
+ * at the foot of the Money tab: R5REV-HOST-09), and the player requests waiting. Each opens its own sheet.
  */
 export function QuickActions({ tournament, waitingRequests, awaitingPayment, onOpen, triggerRef }: QuickActionsProps) {
   const waiting = typeof waitingRequests === "number" ? waitingRequests : 0;

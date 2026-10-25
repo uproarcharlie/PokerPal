@@ -4,6 +4,7 @@ import { ApAdjustDialog } from "@/features/prize-pool/components/ap-adjust-dialo
 import { formatMoney } from "@/lib/format";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import type { TournamentMoney } from "@/lib/prize-pool";
+import type { EntryCounts } from "@shared/domain/prize-pool";
 import { ManualPoolEditor, MaxPlayersEditor } from "./stat-editors";
 
 interface StatsStripProps {
@@ -13,6 +14,11 @@ interface StatsStripProps {
   totalPlayers: number;
   /** Sign-ups on the waiting list. */
   waitingList: number;
+  /**
+   * Every entry recorded in the field, paid or not (recordedEntryCounts), as the TV counts them: the
+   * pool beside them counts only the paid ones (round 6), which the paid-players note says.
+   */
+  entries: EntryCounts;
   rakeLabel: string;
   /** The club's staff, while the tournament is open, may change the max players. */
   canEditPlayers: boolean;
@@ -44,14 +50,13 @@ function poolNote({ display, breakdown }: TournamentMoney, rakeLabel: string): s
   return null;
 }
 
-/** The figures the TD reads out: players, the pool, and the entries it is made of. */
-export function StatsStrip({ tournament, money, totalPlayers, waitingList, rakeLabel, canEditPlayers, canEditPool }: StatsStripProps) {
+/** The figures the TD reads out: players, the pool (paid players only), and every entry recorded. */
+export function StatsStrip({ tournament, money, totalPlayers, waitingList, entries, rakeLabel, canEditPlayers, canEditPool }: StatsStripProps) {
   const [editing, setEditing] = useState<"players" | "pool" | null>(null);
   // While an AP total is fixed, a pool typed here would replace it (and its "Low turnout" reason) without a
   // word, and a blank one would change nothing: the AP dialog, which says so, sets the pool then (MONEY-AP-04).
   const [adjusting, setAdjusting] = useState(false);
   const apFixed = money.breakdown.netSource === "ap_override";
-  const counts = money.breakdown.counts;
   const note = poolNote(money, rakeLabel);
   const toggle = (which: "players" | "pool") => setEditing((open) => (open === which ? null : which));
   // A saved editor goes, with the box and Save the TD was on: focus goes back to its tile's Edit (MA-P3REV1-04).
@@ -143,17 +148,17 @@ export function StatsStrip({ tournament, money, totalPlayers, waitingList, rakeL
 
       <StatTile label="Buy-ins">
         <p className={STAT} data-testid="total-buyins">
-          {counts.buyIns}
+          {entries.buyIns}
         </p>
       </StatTile>
       <StatTile label="Re-buys">
         <p className={STAT} data-testid="total-rebuys">
-          {counts.rebuys}
+          {entries.rebuys}
         </p>
       </StatTile>
       <StatTile label="Add-ons">
         <p className={STAT} data-testid="total-addons">
-          {counts.addons}
+          {entries.addons}
         </p>
       </StatTile>
     </section>

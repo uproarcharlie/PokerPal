@@ -1,7 +1,7 @@
 /**
  * The club's AP (its rake) on a night with a low turnout: the TD fixes the AP total by hand from the AP
- * panel, the payouts on the TD's page and the players' public pool change at once, and finalize pays
- * exactly that pool.
+ * panel, the payouts on the TD's page and the players' public pool change at once (the players never see
+ * the AP or its reason: round 6), and finalize pays exactly that pool.
  *
  * Four players at $100 with 10% AP on buy-ins: $400 taken in, $40 AP, $360 to pay (50/30/20: $180, $108,
  * $72). With the AP fixed at $10 for the low turnout: $390 ($195, $117, $78).
@@ -83,7 +83,9 @@ test("a TD fixes the AP total for a low turnout: the payouts and the public pool
     await phone.reload();
     await expect(phone.getByText("Total prize pool: $390")).toBeVisible();
     await phone.getByRole("tab", { name: "Activity" }).click();
-    await expect(phone.getByText(/Low turnout/).first()).toBeVisible();
+    // The AP and its reason are the club's staff's (round 6): the players' feed has the night, not the AP.
+    await expect(phone.getByText(/registered for the tournament/).first()).toBeVisible();
+    await expect(phone.getByText(/Low turnout|AP set manually/)).toHaveCount(0);
   });
 
   await test.step("finalize pays the pool with the fixed AP", async () => {

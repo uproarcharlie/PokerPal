@@ -1,8 +1,9 @@
 /**
  * The venue TV's clock key (P4SEC-TV-FULL-SESSION): POST /api/tournaments/:id/clock/key issues one
  * (staff only, shown once, only its sha256 stored), and a screen that sends it in X-Clock-Key may run
- * that tournament's clock (POST .../clock/actions) without anyone signing in on it, and do nothing
- * else. It works for 24 hours, and only while whoever issued it may still manage the club (P4REV3-SEC-01).
+ * that tournament's clock (POST .../clock/actions) and change the TV's own settings (PATCH
+ * .../clock/display: the layer over the clock, its sounds and edge margin; round 6) without anyone
+ * signing in on it, and do nothing else. It works for 24 hours, and only while whoever issued it may still manage the club (P4REV3-SEC-01).
  * Issuing a new key, DELETE .../clock/key, removing the clock, cancelling and finalizing end it.
  */
 import { createHash } from "node:crypto";
@@ -84,9 +85,9 @@ describe("issuing a clock key", () => {
     const forStranger = await stranger.agent.get(`/api/public/tournaments/${tournament.id}/display`);
     const forTv = await (await tv(key)).display(tournament);
 
-    expect(forStaff.body.viewer).toEqual({ canControl: true, canChangeDisplay: true, clockKeyIssuedAt: issuedAt, clockKeyExpiresAt: expiresAt });
-    expect(forStranger.body.viewer).toEqual({ canControl: false, canChangeDisplay: false, clockKeyIssuedAt: null, clockKeyExpiresAt: null });
-    expect(forTv.body.viewer).toEqual({ canControl: true, canChangeDisplay: false, clockKeyIssuedAt: null, clockKeyExpiresAt: null });
+    expect(forStaff.body.viewer).toEqual({ canControl: true, clockKeyIssuedAt: issuedAt, clockKeyExpiresAt: expiresAt });
+    expect(forStranger.body.viewer).toEqual({ canControl: false, clockKeyIssuedAt: null, clockKeyExpiresAt: null });
+    expect(forTv.body.viewer).toEqual({ canControl: true, clockKeyIssuedAt: null, clockKeyExpiresAt: null });
   });
 
   it("needs a clock (404 NO_CLOCK) and an open tournament (409 TOURNAMENT_CLOSED)", async () => {
@@ -113,8 +114,8 @@ describe("a screen holding the key", () => {
     const started = await screen.act(tournament, { action: "start" });
     const undone = await screen.act(tournament, { action: "undo" });
 
-    // It runs the clock, and is told it does not change the TV display (PATCH …/clock/display stays staff-only).
-    expect(display.body).toMatchObject({ viewer: { canControl: true, canChangeDisplay: false }, clock: { status: "idle" } });
+    // It runs the clock, and may change the TV's own settings from the TV.
+    expect(display.body).toMatchObject({ viewer: { canControl: true }, clock: { status: "idle" } });
     expect(started.status, JSON.stringify(started.body)).toBe(200);
     expect(started.body).toMatchObject({ clock: { status: "running", undo: { action: "start" } }, viewer: { canControl: true } });
     expect(undone.body.clock).toMatchObject({ status: "idle" });
@@ -122,14 +123,32 @@ describe("a screen holding the key", () => {
     expect((await clockRow(tournament)).updatedBy).toBeNull();
   });
 
-  it("can do nothing else: the clock's set-up, display, removal, early birds and seating stay staff-only", async () => {
+  it("saves the TV's own settings, its volume, sounds, edge margin and the layer over the clock (round 6)", async () => {
+    const { owner, tournament } = await setup();
+    const screen = await tv((await issue(owner.agent, tournament)).key);
+    const path = base(tournament);
+
+    const quieter = await screen.write("patch", `${path}/clock/display`, { soundVolume: 0.4, soundCountdown: false, edgeMargin: 5 });
+    const seats = await screen.write("patch", `${path}/clock/display`, { overlay: "seating" });
+
+    expect([quieter.status, seats.status], JSON.stringify(quieter.body)).toEqual([200, 200]);
+    expect(seats.body.clock.displaySettings).toMatchObject({ soundVolume: 0.4, soundCountdown: false, edgeMargin: 5, overlay: "seating" });
+    expect(seats.body.viewer).toMatchObject({ canControl: true });
+    expect((await clockRow(tournament)).updatedBy).toBeNull();
+    // A screen's own setting that is not valid is refused as it is from staff.
+    expect((await screen.write("patch", `${path}/clock/display`, { edgeMargin: 10 })).status).toBe(400);
+  });
+
+  it("can do nothing else: the clock's set-up, what the TV shows, removal, early birds and seating stay staff-only", async () => {
     const { owner, tournament } = await setup();
     const screen = await tv((await issue(owner.agent, tournament)).key);
     const path = base(tournament);
 
     const refusals = [
       await screen.write("put", `${path}/clock`, { structure: testStructure(), baseHash: null }),
-      await screen.write("patch", `${path}/clock/display`, { overlay: "seating" }),
+      await screen.write("patch", `${path}/clock/display`, { showPrizePool: "always" }),
+      await screen.write("patch", `${path}/clock/display`, { overlay: "payouts", qrTarget: "none" }),
+      await screen.write("patch", `${path}/clock/display`, { showAp: true }),
       await screen.write("delete", `${path}/clock`),
       await screen.write("post", `${path}/clock/key`),
       await screen.write("delete", `${path}/clock/key`),
@@ -172,7 +191,7 @@ describe("a screen holding the key", () => {
     expect((await screen.act(tournament, { action: "pause" })).status).toBe(401);
     expect((await screen.display(tournament)).body.viewer.canControl).toBe(false);
     const forStaff = await owner.agent.get(`/api/public/tournaments/${tournament.id}/display`);
-    expect(forStaff.body.viewer).toEqual({ canControl: true, canChangeDisplay: true, clockKeyIssuedAt: null, clockKeyExpiresAt: null });
+    expect(forStaff.body.viewer).toEqual({ canControl: true, clockKeyIssuedAt: null, clockKeyExpiresAt: null });
     expect((await clockRow(tournament)).status).toBe("running");
   });
 
@@ -222,7 +241,7 @@ describe("ending a key", () => {
     const again = await owner.agent.delete(`${base(tournament)}/clock/key`);
 
     expect([revoked.status, again.status]).toEqual([200, 200]);
-    expect(revoked.body.viewer).toEqual({ canControl: true, canChangeDisplay: true, clockKeyIssuedAt: null, clockKeyExpiresAt: null });
+    expect(revoked.body.viewer).toEqual({ canControl: true, clockKeyIssuedAt: null, clockKeyExpiresAt: null });
     expect((await (await tv(key)).act(tournament, { action: "start" })).status).toBe(401);
     const audit = await testDb().select().from(auditLog).where(eq(auditLog.targetId, tournament.id));
     expect(audit.map((entry) => entry.action).sort()).toEqual(["clock.key_issued", "clock.key_revoked"]);

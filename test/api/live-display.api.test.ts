@@ -2,19 +2,20 @@
  * GET /api/public/tournaments/:id/display (phase4-contracts §3.2 rule 7, §4.2): the live display the
  * TV, the TD's clock panel and the header chip poll. Public and PII-free, never cached, never writing
  * (auto-advance is derived), with the field's numbers, the chips in play (early birds included), the
- * money as the clock's display settings allow, the QR target, and whether the viewer may control it.
+ * prize money as the clock's display settings allow (never the club's takings: round 6), the QR target,
+ * and whether the viewer may control it.
  * Polling it, and the TD's clock writes, never touch the venue's shared request budget.
  */
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import session from "express-session";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DISPLAY_SETTINGS } from "@shared/api/clock";
-import { findForbiddenKeys } from "@shared/api/public";
+import { findForbiddenKeys, findTakingsKeys } from "@shared/api/public";
 import { structureHash } from "@shared/domain/clock";
 import { FINALIZE_SNAPSHOT_VERSION, type PrizePoolSnapshot } from "@shared/domain/finalize";
 import { PAYOUT_ALGORITHM } from "@shared/domain/payouts";
-import { tournamentClocks, tournamentTables, type Tournament } from "@shared/schema";
+import { tournamentClocks, tournamentRegistrations, tournamentTables, type Tournament } from "@shared/schema";
 import { createApp } from "../../server/app";
 import { loadEnv } from "../../server/config/env";
 import { qrTargetOf } from "../../server/services/live-display";
@@ -99,9 +100,9 @@ describe("GET /api/public/tournaments/:id/display", () => {
       season: { id: season?.id, name: "Winter League" },
       clock: null,
       stats: { entrants: 2, remaining: 2, buyIns: 2, rebuys: 0, addons: 0, earlyBirds: 0, activeTables: 0, totalChips: null, averageStack: null },
-      money: { show: false, estimated: true, rakeLabel: "AP", netCents: null, netSource: null, apCents: null, clubAddedCents: null, payouts: null, lines: null },
+      money: { show: false, estimated: true, netCents: null, payouts: null, carriedIn: null },
       qr: { target: "season", path: `/season/${season?.id}` },
-      viewer: { canControl: false, canChangeDisplay: false, clockKeyIssuedAt: null, clockKeyExpiresAt: null },
+      viewer: { canControl: false, clockKeyIssuedAt: null, clockKeyExpiresAt: null },
     });
   });
 
@@ -194,97 +195,82 @@ describe("GET /api/public/tournaments/:id/display", () => {
       const open = await world({ tournament: pool, entries: entries(8) });
       const locked = await world({ tournament: { ...pool, prizePoolLocked: true }, entries: entries(8) });
 
-      expect((await displayOf(open.tournament)).body.money).toEqual({
-        show: false,
-        estimated: true,
-        rakeLabel: "AP",
-        netCents: null,
-        netSource: null,
-        apCents: null,
-        clubAddedCents: null,
-        payouts: null,
-        lines: null,
-      });
-      expect((await displayOf(locked.tournament)).body.money).toEqual({
-        show: true,
-        estimated: false,
-        rakeLabel: "AP",
-        netCents: 36_000,
-        netSource: "calculated",
-        apCents: null,
-        clubAddedCents: null,
-        payouts,
-        lines: [],
-      });
+      expect((await displayOf(open.tournament)).body.money).toEqual({ show: false, estimated: true, netCents: null, payouts: null, carriedIn: null });
+      expect((await displayOf(locked.tournament)).body.money).toEqual({ show: true, estimated: false, netCents: 36_000, payouts, carriedIn: [] });
     });
 
-    it("shows an estimate when told to always, never when told never, and the AP and payouts as switched", async () => {
-      const always = await world({ tournament: pool, entries: entries(8), clock: { displaySettings: { showPrizePool: "always", showAp: true, showPayouts: false } } });
-      const never = await world({ tournament: { ...pool, prizePoolLocked: true }, entries: entries(8), clock: { displaySettings: { showPrizePool: "never", showAp: true } } });
+    it("shows an estimate when told to always, never when told never, and the payouts as switched", async () => {
+      const always = await world({ tournament: pool, entries: entries(8), clock: { displaySettings: { showPrizePool: "always", showPayouts: false } } });
+      const never = await world({ tournament: { ...pool, prizePoolLocked: true }, entries: entries(8), clock: { displaySettings: { showPrizePool: "never" } } });
 
-      expect((await displayOf(always.tournament)).body.money).toEqual({
-        show: true,
-        estimated: true,
-        rakeLabel: "AP",
-        netCents: 36_000,
-        netSource: "calculated",
-        apCents: 4_000,
-        clubAddedCents: null,
-        payouts: null,
-        lines: [],
-      });
-      expect((await displayOf(never.tournament)).body.money).toMatchObject({ show: false, netCents: null, payouts: null, apCents: 4_000 });
+      expect((await displayOf(always.tournament)).body.money).toEqual({ show: true, estimated: true, netCents: 36_000, payouts: null, carriedIn: [] });
+      expect((await displayOf(never.tournament)).body.money).toEqual({ show: false, estimated: false, netCents: null, payouts: null, carriedIn: null });
     });
 
     it("never shows the room a pool below zero, from a fixed rate stored above its entry's price before that was refused (P4REV2R2-MONEY-01)", async () => {
       const legacy = { buyInAmount: "20.00", rakeType: "fixed", rakeAmount: "30.00", prizePoolLocked: true } satisfies Partial<NewTournament>;
-      const { tournament } = await world({ tournament: legacy, entries: entries(4), clock: { displaySettings: { showAp: true } } });
+      const { tournament } = await world({ tournament: legacy, entries: entries(4) });
 
-      expect((await displayOf(tournament)).body.money).toMatchObject({ show: true, netCents: 0, apCents: 12_000 });
+      expect((await displayOf(tournament)).body.money).toMatchObject({ show: true, netCents: 0 });
     });
 
-    it("follows a manual AP total", async () => {
-      const { tournament } = await world({ tournament: { ...pool, rakeOverride: "20.00", prizePoolLocked: true }, entries: entries(8), clock: { displaySettings: { showAp: true } } });
+    it("follows a manual AP total, without saying what it is", async () => {
+      const { tournament } = await world({ tournament: { ...pool, rakeOverride: "20.00", prizePoolLocked: true }, entries: entries(8) });
 
-      expect((await displayOf(tournament)).body.money).toMatchObject({ show: true, netCents: 38_000, netSource: "ap_override", apCents: 2_000, clubAddedCents: null });
-    });
-
-    it("never shows a negative AP: a pool fixed above the takings shows what the club adds instead (MONEY-AP-02)", async () => {
-      // 8 × $50 = $400 taken in; the club guarantees a $1,000 pool.
-      const guaranteed = { ...pool, manualPrizePool: "1000.00", prizePoolLocked: true };
-      const shown = await world({ tournament: guaranteed, entries: entries(8), clock: { displaySettings: { showAp: true } } });
-      const hidden = await world({ tournament: guaranteed, entries: entries(8) });
-      const unpublished = await world({ tournament: { ...guaranteed, prizePoolLocked: false }, entries: entries(8), clock: { displaySettings: { showAp: true } } });
-
-      // Beside the pool the breakdown says it as the TD's and the public pages do: $40 AP, and the club adds $640 to the $360 left.
-      const addedByClub = [{ kind: "added_by_club", label: "Added by the club", cents: 64_000 }];
-      expect((await displayOf(shown.tournament)).body.money).toMatchObject({ show: true, netCents: 100_000, netSource: "manual_pool", apCents: 4_000, clubAddedCents: null, lines: addedByClub });
-      expect((await displayOf(hidden.tournament)).body.money).toMatchObject({ show: true, netCents: 100_000, apCents: null, clubAddedCents: null, lines: addedByClub });
-      // While the pool is not shown, the AP alone says what the club puts in on the night.
-      expect((await displayOf(unpublished.tournament)).body.money).toMatchObject({ show: false, netCents: null, apCents: 0, clubAddedCents: 60_000, lines: null });
-    });
-
-    it("says beside the pool what the club keeps, or carries over to the season, of prizes set below the money available (round 5, item 16)", async () => {
-      // $400 in, $40 AP: $360 available; the prizes are fixed at $300.
-      const reduced = { ...pool, manualPrizePool: "300.00", prizePoolLocked: true };
-      const kept = await world({ tournament: reduced, entries: entries(8), clock: { displaySettings: { showAp: true } } });
-      const carried = await world({ tournament: { ...reduced, prizeDifference: "carry" }, entries: entries(8), clock: { displaySettings: { showAp: true } } });
-
-      expect((await displayOf(kept.tournament)).body.money).toMatchObject({
-        netCents: 30_000,
-        apCents: 4_000,
-        lines: [{ kind: "kept_by_club", label: "Kept by the club", cents: 6_000 }],
-      });
-      expect((await displayOf(carried.tournament)).body.money).toMatchObject({
-        netCents: 30_000,
-        apCents: 4_000,
-        lines: [{ kind: "carried_over", label: "Carried over to Winter League", cents: 6_000 }],
+      expect((await displayOf(tournament)).body.money).toEqual({
+        show: true,
+        estimated: false,
+        netCents: 38_000,
+        payouts: [
+          { position: 1, amountCents: 19_000 },
+          { position: 2, amountCents: 11_400 },
+          { position: 3, amountCents: 7_600 },
+        ],
+        carriedIn: [],
       });
     });
 
-    it("shows a finalized pool's breakdown as finalize froze it, and none for prizes typed in by hand", async () => {
-      // $400 in, $40 AP, $360 available: 1st was paid $250 and the club carried $110 over to the season.
-      const difference = { choice: "carry" as const, availableCents: 36_000, setCents: 25_000, cents: 11_000, keptByClubCents: 0, addedToPrizesCents: 0, carriedOverCents: 11_000, addedByClubCents: 0, carryTarget: "Winter League" };
+    it("counts only the paid players in the pool, and every player in the field in the figures and the chips (round 6)", async () => {
+      // 8 players at $50 with 10% AP, 2 of them not paid yet: the pool is the 6 paid players' $270.
+      const { owner, tournament } = await world({ tournament: { ...pool, prizePoolLocked: true }, entries: [...entries(6), { paymentConfirmed: false }, { paymentConfirmed: false }] });
+
+      const before = (await displayOf(tournament)).body;
+      expect(before.money).toMatchObject({ show: true, netCents: 27_000 });
+      expect(before.stats).toMatchObject({ entrants: 8, remaining: 8, buyIns: 8, totalChips: 80_000, averageStack: 10_000 });
+
+      const [unpaid] = await testDb()
+        .select({ id: tournamentRegistrations.id })
+        .from(tournamentRegistrations)
+        .where(and(eq(tournamentRegistrations.tournamentId, tournament.id), eq(tournamentRegistrations.paymentConfirmed, false)));
+      expect((await owner.agent.patch(`/api/registrations/${unpaid.id}/confirm-payment`)).status).toBe(200);
+
+      const after = (await displayOf(tournament)).body;
+      expect(after.money).toMatchObject({ netCents: 31_500 });
+      expect(after.stats).toMatchObject({ entrants: 8, buyIns: 8, totalChips: 80_000 });
+    });
+
+    it("never tells the room what the club takes, keeps, adds or carries over, whoever looks (round 6)", async () => {
+      // 8 × $50 = $400 taken in, $40 AP: a pool guaranteed at $1,000 (the club adds $640), and one fixed at $300 ($60 kept, or carried over).
+      const guaranteed = await world({ tournament: { ...pool, manualPrizePool: "1000.00", prizePoolLocked: true }, entries: entries(8), clock: { displaySettings: { showPrizePool: "always" } } });
+      const kept = await world({ tournament: { ...pool, manualPrizePool: "300.00", prizePoolLocked: true }, entries: entries(8) });
+      const carried = await world({ tournament: { ...pool, manualPrizePool: "300.00", prizeDifference: "carry", prizePoolLocked: true }, entries: entries(8) });
+      const unpublished = await world({ tournament: { ...pool, manualPrizePool: "1000.00" }, entries: entries(8) });
+
+      for (const [{ owner, tournament }, netCents] of [[guaranteed, 100_000], [kept, 30_000], [carried, 30_000], [unpublished, null]] as const) {
+        for (const agent of [undefined, owner.agent]) {
+          const { body } = await displayOf(tournament, agent);
+          expect(body.money.netCents).toBe(netCents);
+          expect(Object.keys(body.money).sort()).toEqual(["carriedIn", "estimated", "netCents", "payouts", "show"]);
+          expect(findTakingsKeys(body)).toEqual([]);
+        }
+      }
+    });
+
+    it("says what was carried into the pool from an earlier game, live and as finalize froze it, and nothing of what the club kept", async () => {
+      const carriedIn = [{ carryOverId: "co1", fromTournamentId: null, fromName: "Week 3", amountCents: 20_000 }];
+      const live = await world({ tournament: { ...pool, prizePoolLocked: true, carriedIn }, entries: entries(8) });
+      // $400 in, $40 AP, $200 carried in: $560 available; 1st was paid $250 and the club carried $310 over to the season.
+      const difference = { choice: "carry" as const, availableCents: 56_000, setCents: 25_000, cents: 31_000, keptByClubCents: 0, addedToPrizesCents: 0, carriedOverCents: 31_000, addedByClubCents: 0, carryTarget: "Winter League" };
       const snapshot: PrizePoolSnapshot = {
         v: FINALIZE_SNAPSHOT_VERSION,
         algorithm: PAYOUT_ALGORITHM,
@@ -301,20 +287,19 @@ describe("GET /api/public/tournaments/:id/display", () => {
           impliedRakeCents: 4_000,
           structure: { requested: "custom", used: "custom", basisPoints: [10_000] },
           difference,
+          carriedIn,
         },
         paid: [],
         warnings: [],
       };
-      const frozen = await world({ tournament: { ...pool, status: "completed", prizePoolSnapshot: snapshot }, entries: entries(8), clock: { displaySettings: { showAp: true } } });
+      const frozen = await world({ tournament: { ...pool, status: "completed", prizePoolSnapshot: snapshot }, entries: entries(8) });
       const typedIn = await world({ tournament: { ...pool, status: "completed" }, entries: [{ paymentConfirmed: true, finalPosition: 1, prizeAmount: "300.00" }, ...entries(7)] });
 
-      expect((await displayOf(frozen.tournament)).body.money).toMatchObject({
-        show: true,
-        apCents: 4_000,
-        clubAddedCents: null,
-        lines: [{ kind: "carried_over", label: "Carried over to Winter League", cents: 11_000 }],
-      });
-      expect((await displayOf(typedIn.tournament)).body.money).toMatchObject({ show: true, netCents: 30_000, lines: [] });
+      expect((await displayOf(live.tournament)).body.money).toMatchObject({ netCents: 56_000, carriedIn: [{ fromName: "Week 3", amountCents: 20_000 }] });
+      const paid = (await displayOf(frozen.tournament)).body;
+      expect(paid.money).toMatchObject({ show: true, carriedIn: [{ fromName: "Week 3", amountCents: 20_000 }] });
+      expect(findTakingsKeys(paid)).toEqual([]);
+      expect((await displayOf(typedIn.tournament)).body.money).toMatchObject({ show: true, netCents: 30_000, carriedIn: [] });
     });
 
     it("shows what a completed tournament paid, and nothing for a cancelled one", async () => {
@@ -326,7 +311,7 @@ describe("GET /api/public/tournaments/:id/display", () => {
           ...entries(2),
         ],
       });
-      const cancelled = await world({ tournament: { ...pool, status: "cancelled" }, entries: entries(8), clock: { displaySettings: { showPrizePool: "always", showAp: true } } });
+      const cancelled = await world({ tournament: { ...pool, status: "cancelled" }, entries: entries(8), clock: { displaySettings: { showPrizePool: "always" } } });
 
       expect((await displayOf(completed.tournament)).body.money).toMatchObject({
         show: true,
@@ -337,17 +322,18 @@ describe("GET /api/public/tournaments/:id/display", () => {
           { position: 2, amountCents: 5_000 },
         ],
       });
-      expect((await displayOf(cancelled.tournament)).body.money).toMatchObject({ show: false, netCents: null, payouts: null, apCents: null });
+      expect((await displayOf(cancelled.tournament)).body.money).toEqual({ show: false, estimated: true, netCents: null, payouts: null, carriedIn: null });
     });
 
-    it("labels the take \"Rake\" for a club that has not named it", async () => {
+    it("names the club's take \"Rake\" for a club that has not named it, for the TD's clock panel, and never beside the money", async () => {
       const owner = await createUser();
       const club = await createClub({ ownerId: owner.id });
       const tournament = await createTournament({ clubId: club.id });
 
       const { body } = await displayOf(tournament);
 
-      expect([body.club.rakeLabel, body.money.rakeLabel]).toEqual(["Rake", "Rake"]);
+      expect(body.club.rakeLabel).toBe("Rake");
+      expect(body.money).not.toHaveProperty("rakeLabel");
     });
   });
 
@@ -388,14 +374,6 @@ describe("GET /api/public/tournaments/:id/display", () => {
     expect(await canControl(owner.agent)).toBe(true);
     expect(await canControl(admin.agent)).toBe(true);
     expect(await canControl(closed.owner.agent, closed.tournament)).toBe(false);
-
-    // Changing the TV display is the signed-in staff's, as PATCH …/clock/display is.
-    const canChangeDisplay = async (agent: request.Agent | undefined, target: Tournament = tournament) => (await displayOf(target, agent)).body.viewer.canChangeDisplay;
-    expect(await canChangeDisplay(undefined)).toBe(false);
-    expect(await canChangeDisplay(stranger.agent)).toBe(false);
-    expect(await canChangeDisplay(owner.agent)).toBe(true);
-    expect(await canChangeDisplay(admin.agent)).toBe(true);
-    expect(await canChangeDisplay(closed.owner.agent, closed.tournament)).toBe(false);
   });
 
   it("gives away no contact details or account ids, to anyone", async () => {
@@ -425,7 +403,7 @@ describe("rate limits at a venue (one shared address)", () => {
     expect(Array.from(statuses)).toEqual([200]);
   });
 
-  it("keeps the display and the TD's clock writes out of the venue's shared budget", { timeout: 60_000 }, async () => {
+  it("keeps the display, the public prizes and the TD's clock writes out of the venue's shared budget", { timeout: 60_000 }, async () => {
     vi.useRealTimers();
     const owner = await createUser();
     const club = await createClub({ ownerId: owner.id });
@@ -439,12 +417,14 @@ describe("rate limits at a venue (one shared address)", () => {
     for (let tap = 0; tap < 10; tap++) writes.push((await td.post(`/api/tournaments/${tournament.id}/clock/actions`).send({ action: "adjust", deltaSeconds: 60 })).status);
     const polls = [];
     for (let poll = 0; poll < 10; poll++) polls.push((await request(app).get(`/api/public/tournaments/${tournament.id}/display`)).status);
+    // The public page's prize pool (round 6) is polled by every phone in the room too.
+    for (let poll = 0; poll < 10; poll++) polls.push((await request(app).get(`/api/public/tournaments/${tournament.id}/prizes`)).status);
     const pageLoads = [];
     for (let load = 0; load < 3; load++) pageLoads.push((await request(app).get("/api/clubs")).status);
 
     expect(writes).toEqual(Array(10).fill(200));
-    expect(polls).toEqual(Array(10).fill(200));
-    // The sign-in and two page loads use up the budget of 3; the clock and the display never touched it.
+    expect(polls).toEqual(Array(20).fill(200));
+    // The sign-in and two page loads use up the budget of 3; the clock, the display and the prizes never touched it.
     expect(pageLoads).toEqual([200, 200, 429]);
   });
 });

@@ -35,6 +35,10 @@ async function liveTournament(overrides: Partial<NewTournament> = {}) {
   return { club, tournament, alice, bob, aliceRegistration, bobRegistration, agent };
 }
 
+/** Confirms every payment: finalize refuses while anyone in the field has not paid (round 6). */
+const everyonePaid = (tournamentId: string) =>
+  testDb().update(tournamentRegistrations).set({ paymentConfirmed: true }).where(eq(tournamentRegistrations.tournamentId, tournamentId));
+
 const actionsOf = (tournamentId: string) =>
   testDb().select().from(pendingActions).where(eq(pendingActions.tournamentId, tournamentId));
 
@@ -593,6 +597,7 @@ describe("POST /api/pending-actions/:id/confirm", () => {
     expect(bobOut.toISOString()).toBe(new Date(claim.body.timestamp).toISOString());
     expect(bobOut.getTime()).toBeLessThan(carolOut.getTime());
     // So Carol, who went out later, finishes above Bob.
+    await everyonePaid(tournament.id);
     const preview = await agent
       .post(`/api/tournaments/${tournament.id}/finalize/preview`)
       .send({ finishOrder: [daveRegistration.id, aliceRegistration.id] });
@@ -642,6 +647,7 @@ describe("requests still waiting when the tournament is finalized (TN2-02)", () 
     const { tournament, alice, bob, agent } = await liveTournament();
     await request(tournament.id, { playerId: alice.id, actionType: "addon" });
     await request(tournament.id, { playerId: bob.id, actionType: "rebuy" });
+    await everyonePaid(tournament.id);
 
     const preview = await agent.post(`/api/tournaments/${tournament.id}/finalize/preview`).send({});
     const order = preview.body.activePlayers.map((player: { registrationId: string }) => player.registrationId);

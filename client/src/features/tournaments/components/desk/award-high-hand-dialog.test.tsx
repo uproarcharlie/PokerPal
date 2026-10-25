@@ -63,6 +63,42 @@ describe("AwardHighHandDialog (TN2-04)", () => {
     await waitFor(() => expect(queryClient.getQueryState(qk.tournaments.detail("t1"))?.isInvalidated).toBe(true));
   });
 
+  it("adds money paid into the pot after every prize was awarded to the winner the TD picks (R6REV0-MONEY-01)", async () => {
+    let sent: { id: unknown; body: unknown } | undefined;
+    server.use(
+      http.put("/api/registrations/:id", async ({ request, params }) => {
+        sent = { id: params.id, body: await request.json() };
+        return HttpResponse.json(entrant("r1", "Ann", { highHandWinner: true, highHandAmount: "45.00" }));
+      }),
+    );
+    const registrations = [entrant("r1", "Ann", { highHandWinner: true, highHandAmount: "40.00" }), entrant("r2", "Bea")];
+    const onOpenChange = vi.fn();
+    const user = userEvent.setup();
+    renderWithApp(
+      <AwardHighHandDialog open onOpenChange={onOpenChange} tournamentId="t1" registrations={registrations} nextAwardCents={null} unawardedCents={500} {...potChecked} />,
+    );
+
+    expect(screen.getByTestId("high-hand-top-up")).toHaveTextContent("$5 not awarded yet");
+    await user.click(screen.getByRole("button", { name: "Add $5 to Ann's prize" }));
+
+    await waitFor(() => expect(sent).toEqual({ id: "r1", body: { highHandAmount: "45.00" } }));
+    expect(await screen.findByText("Ann's high hand is now $45")).toBeInTheDocument();
+    expect(screen.getByText("Pay them the $5 more.")).toBeInTheDocument();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("offers no top-up while prizes are still to come or nothing is left over", () => {
+    const registrations = [entrant("r1", "Ann", { highHandWinner: true, highHandAmount: "40.00" }), entrant("r2", "Bea")];
+    const { unmount } = renderWithApp(
+      <AwardHighHandDialog open onOpenChange={() => {}} tournamentId="t1" registrations={registrations} nextAwardCents={1_500} unawardedCents={0} {...potChecked} />,
+    );
+    expect(screen.queryByTestId("high-hand-top-up")).not.toBeInTheDocument();
+    unmount();
+
+    renderWithApp(<AwardHighHandDialog open onOpenChange={() => {}} tournamentId="t1" registrations={registrations} nextAwardCents={null} {...potChecked} />);
+    expect(screen.queryByTestId("high-hand-top-up")).not.toBeInTheDocument();
+  });
+
   it("awards the next prize by default while prizes are left", async () => {
     let sent: unknown;
     server.use(

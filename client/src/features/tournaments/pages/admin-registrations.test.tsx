@@ -148,6 +148,19 @@ describe("AdminRegistrationsPage", () => {
     expect(await screen.findByText(/has paid\. Seated at Table 1, Seat 4\./)).toBeInTheDocument();
   });
 
+  it("says when the payment grew a high-hand pot whose every prize is already awarded (R6REV0-MONEY-01)", async () => {
+    mockDesk();
+    server.use(http.patch("/api/registrations/:id/confirm-payment", () => HttpResponse.json({ ...ann, paymentConfirmed: true, seating: null, highHandUnawardedCents: 500 })));
+    const user = userEvent.setup();
+    renderDesk();
+
+    await user.click(await screen.findByTestId("confirm-payment-r1"));
+
+    expect(
+      await screen.findByText("Registration payment has been confirmed. $5 of the high-hand pot is not awarded yet: add it to a winner's prize from Award High Hand."),
+    ).toBeInTheDocument();
+  });
+
   it("frees the desk as soon as the server confirms, without waiting for the lists to refresh (P3REV4-PERF-02)", async () => {
     mockDesk();
     let refreshing = false;

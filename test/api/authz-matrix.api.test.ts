@@ -339,9 +339,10 @@ const ROUTES: Record<string, RouteRow> = {
     guards: ["club-manager:Tournament"],
     cases: single(staffOf(200), async ({ club, staff }) => {
       const tournament = await tournamentIn(club, { status: "in_progress" });
-      await registeredPlayer(tournament);
-      await registeredPlayer(tournament, { isEliminated: true, minutesIn: 40 });
-      await registeredPlayer(tournament, { isEliminated: true, minutesIn: 20 });
+      // Paid: finalize refuses while anyone in the field has not paid (round 6).
+      await registeredPlayer(tournament, { paymentConfirmed: true });
+      await registeredPlayer(tournament, { isEliminated: true, minutesIn: 40, paymentConfirmed: true });
+      await registeredPlayer(tournament, { isEliminated: true, minutesIn: 20, paymentConfirmed: true });
       const preview = await staff.admin.agent.post(`/api/tournaments/${tournament.id}/finalize/preview`).send({});
       expect(preview.body).toMatchObject({ ok: true, planHash: expect.any(String) });
       return { path: `/api/tournaments/${tournament.id}/finalize`, json: { expectedPlanHash: preview.body.planHash } };

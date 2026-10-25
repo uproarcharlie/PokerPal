@@ -29,6 +29,11 @@ export const planHashSchema = z.string().regex(/^[0-9a-f]{32}$/, "Invalid plan h
  * - expectedPlanHash: the preview's planHash. If the plan changed since (a late rebuy, an edit),
  *   409 PLAN_CHANGED with `details: { preview }`. Required with `force` (400 PLAN_HASH_REQUIRED).
  * - force: re-finalize a completed tournament (never a cancelled one), after a preview.
+ * - excludeUnpaid (round 6): only paid players are in the prize pool, so while anyone in the field has
+ *   not paid finalize refuses (409 UNPAID_PLAYERS, details: { unpaid }) until each payment is confirmed
+ *   (PATCH /api/registrations/:id/confirm-payment) or this leaves them out: not ranked, paid or scored,
+ *   and any place, prize or points an earlier finalize stored for them cleared. The finishing order is
+ *   then of the paid players still in.
  */
 /**
  * A deal or chop (round 5): what each player still in is paid instead of their place's payout, and
@@ -57,11 +62,12 @@ export const finalizeSchema = z.object({
   expectedPlanHash: planHashSchema.optional(),
   force: z.boolean().optional(),
   deal: dealSchema.optional(),
+  excludeUnpaid: z.boolean().optional(),
 });
 export type FinalizeInput = z.infer<typeof finalizeSchema>;
 
 /** POST /api/tournaments/:id/finalize/preview: the same inputs, no writes. */
-export const finalizePreviewSchema = finalizeSchema.pick({ finishOrder: true, force: true, deal: true });
+export const finalizePreviewSchema = finalizeSchema.pick({ finishOrder: true, force: true, deal: true, excludeUnpaid: true });
 export type FinalizePreviewInput = z.infer<typeof finalizePreviewSchema>;
 
 export { FINALIZE_SNAPSHOT_VERSION } from "../domain/finalize";
@@ -70,25 +76,6 @@ export { FINALIZE_SNAPSHOT_VERSION } from "../domain/finalize";
  * Completed tournaments are displayed from it (D20) and never recomputed.
  */
 export type { PrizePoolSnapshot };
-
-/**
- * What anyone may see of a snapshot on GET /api/tournaments/:id: the pool, who was paid what and the
- * points rules scored with. Its `warnings` are the TD's bookkeeping (how many payments were not
- * confirmed, which player requests finalize discarded) and go only to people who run the club
- * (P2REV1-MONEY-02, SEC-P2REV-05), like payment status and pending requests everywhere else.
- */
-export const PUBLIC_SNAPSHOT_FIELDS = [
-  "v",
-  "algorithm",
-  "finalizedAt",
-  "entrants",
-  "finishOrderSource",
-  "pool",
-  "points",
-  "deal",
-  "paid",
-] as const satisfies readonly (keyof PrizePoolSnapshot)[];
-export type PublicPrizePoolSnapshot = Pick<PrizePoolSnapshot, (typeof PUBLIC_SNAPSHOT_FIELDS)[number]>;
 
 /** One registration as finalize will write it. prizeAmount is the decimal text stored ("238.00") or null. */
 export interface FinalizeRowDto {
@@ -106,7 +93,16 @@ export type FinalizeRefusal =
   | "INVALID_FINISH_ORDER"
   | "ALREADY_FINALIZED"
   | "TOURNAMENT_CANCELLED"
-  | "DEAL_INVALID";
+  | "DEAL_INVALID"
+  | "UNPAID_PLAYERS";
+
+/** A player in the field whose payment is not confirmed, and what they owe (amountDueCents). */
+export interface UnpaidPlayerDto {
+  registrationId: string;
+  playerId: string;
+  playerName: string;
+  amountDueCents: Cents;
+}
 
 /** POST /api/tournaments/:id/finalize/preview (200 even when finalize would refuse: see `ok`/`code`). */
 export interface FinalizePreviewDto {
@@ -129,7 +125,13 @@ export interface FinalizePreviewDto {
   /** Why the deal sent cannot be paid (code DEAL_INVALID); empty otherwise. */
   dealProblems: DealProblem[];
   /**
-   * E.g. pool not locked, N payments not confirmed, $X undistributed, AP override or manual pool
+   * Round 6: the players in the field whose payment is not confirmed, in sign-up order. Their money is
+   * not in `prizePool`. Unless the request left them out (excludeUnpaid), the plan is refused (code
+   * UNPAID_PLAYERS) while there are any.
+   */
+  unpaid: UnpaidPlayerDto[];
+  /**
+   * E.g. pool not locked, the unpaid players left out, $X undistributed, AP override or manual pool
    * active, player requests that will be discarded, points that change on a correction.
    */
   warnings: string[];

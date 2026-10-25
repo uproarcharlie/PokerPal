@@ -488,13 +488,33 @@ describe("ClockPanel TV settings", () => {
     expect(await screen.findByText("The QR code opens the Winter 2026 leaderboard.")).toBeInTheDocument();
     await keys.selectOptions(screen.getByRole("combobox", { name: "The QR code leads to" }), "Find your seat");
     expect(await screen.findByText("The QR code opens the seat finder.")).toBeInTheDocument();
-    await keys.click(screen.getByRole("switch", { name: "Show the AP" }));
+    await keys.click(screen.getByRole("switch", { name: "Show the average stack" }));
     await vi.waitFor(() =>
       expect(sent.map((request) => [request.method, request.path, request.body])).toEqual([
         ["PATCH", "/api/tournaments/t1/clock/display", { qrTarget: "seats" }],
-        ["PATCH", "/api/tournaments/t1/clock/display", { showAp: true }],
+        ["PATCH", "/api/tournaments/t1/clock/display", { showAverageStack: false }],
       ]),
     );
+  });
+
+  it("offers no switch for the AP, and says the TV never shows it or what the club keeps (round 6)", async () => {
+    serveDisplay({ clock: clockDto() });
+    showPanel();
+
+    expect(await screen.findByTestId("tv-takings-note")).toHaveTextContent("The TV shows the prize pool and what each place pays, never the AP or what the club keeps.");
+    expect(screen.queryByRole("switch", { name: /AP|Rake/ })).not.toBeInTheDocument();
+  });
+
+  it("switches the chips in play on by themselves, with the average stack off (round 6)", async () => {
+    serveDisplay({ clock: clockDto({ displaySettings: { ...clockDto().displaySettings, showAverageStack: false } }) });
+    const sent = recordClockChanges(({ body }) => liveDisplayDto({ clock: clockDto({ displaySettings: { ...clockDto().displaySettings, showAverageStack: false, ...(body as object) } }) }));
+    showPanel();
+    const keys = user();
+
+    const chips = await screen.findByRole("switch", { name: "Chips in play" });
+    expect(chips).toBeEnabled();
+    await keys.click(chips);
+    await vi.waitFor(() => expect(sent.map((request) => request.body)).toEqual([{ showChipsInPlay: true }]));
   });
 });
 

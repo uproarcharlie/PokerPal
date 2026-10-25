@@ -20,7 +20,7 @@ import {
   requiredText,
   type WithViewer,
 } from "./common";
-import type { PrizePoolSnapshot, PublicPrizePoolSnapshot } from "./finalize";
+import type { PrizePoolSnapshot } from "./finalize";
 import type { PublicTournament } from "./public";
 
 export type { ActivityEventType, TournamentStatus } from "../domain/tournaments";
@@ -210,10 +210,12 @@ export type TournamentListItemDto = PublicTournament & {
 export type TournamentDetailDto = WithViewer<
   PublicTournament & {
     /**
-     * What finalize paid; null until finalized (and for tournaments finalized before v2). Its
-     * `warnings` are sent only to people who run the club (`PUBLIC_SNAPSHOT_FIELDS`).
+     * What finalize paid; null until finalized (and for tournaments finalized before v2). Only people
+     * who run the club are sent it (round 6): it records the AP, the gross, the difference and where it
+     * went, and the TD's warnings. Everyone else gets null, and reads what was paid and the deal from
+     * GET /api/public/tournaments/:id/prizes.
      */
-    prizePoolSnapshot: (PublicPrizePoolSnapshot & Partial<Pick<PrizePoolSnapshot, "warnings">>) | null;
+    prizePoolSnapshot: PrizePoolSnapshot | null;
   }
 >;
 

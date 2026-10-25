@@ -1,9 +1,9 @@
 /** The session and the signed-in account's own settings (phase2-contracts §2.2). */
 import type {
-  AuthMeResponse,
   AuthUserResponse,
   ChangePasswordInput,
   LoginInput,
+  MeResponse,
   MessageResponse,
   RegisterInput,
   UpdateProfileInput,
@@ -11,8 +11,8 @@ import type {
 import type { ImpersonationResponse } from "@shared/api/admin";
 import { apiGet, apiSend } from "@/lib/api/http";
 
-/** GET /api/auth/me: who is signed in (and the admin behind an impersonation). */
-export const fetchSession = (signal: AbortSignal) => apiGet<AuthMeResponse>("/api/auth/me", { signal });
+/** GET /api/auth/me: who is signed in (and the admin behind an impersonation); `user` null for nobody. */
+export const fetchSession = (signal: AbortSignal) => apiGet<MeResponse>("/api/auth/me", { signal });
 
 export const signIn = (input: LoginInput) => apiSend<AuthUserResponse>("POST", "/api/auth/login", input);
 

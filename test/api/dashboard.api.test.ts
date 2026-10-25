@@ -117,9 +117,10 @@ describe("GET /api/dashboard/stats", () => {
     expect((await statsFor((await signInAdmin()).agent)).totalPrizePool).toBe(205);
   });
 
-  it("takes every pot's rake, counts unpaid entries as finalize does, and never counts a pool below zero", async () => {
+  it("takes every pot's rake, counts only paid entries as finalize does (round 6), and never counts a pool below zero", async () => {
     const club = await createClub();
-    // 5 buy-ins $250 less 10% = $225; 2 re-buys $50 less 50% = $25; 1 add-on $20 less $5 = $15: $265.
+    // 4 paid buy-ins $200 less 10% = $180; 2 re-buys $50 less 50% = $25; 1 add-on $20 less $5 = $15: $220.
+    // The unpaid sign-up's buy-in, re-buy and add-on are not in the pool.
     await tournamentWith(
       club.id,
       {
@@ -134,12 +135,25 @@ describe("GET /api/dashboard/stats", () => {
         addonRakeType: "fixed",
         addonRakeAmount: "5.00",
       },
-      [{ buyIns: 2 }, { rebuys: 2 }, { addons: 1 }, { paymentConfirmed: false }],
+      [{ buyIns: 2 }, { rebuys: 2 }, { addons: 1 }, { paymentConfirmed: false, rebuys: 1, addons: 1 }],
     );
     // 1 x $5 less a fixed $7.50 per entry is below zero: it adds nothing.
     await tournamentWith(club.id, { status: "scheduled", buyInAmount: "5.00", rakeType: "fixed", rakeAmount: "7.50" }, [{}]);
 
-    expect((await statsFor((await signInAdmin()).agent)).totalPrizePool).toBe(265);
+    expect((await statsFor((await signInAdmin()).agent)).totalPrizePool).toBe(220);
+  });
+
+  it("adds a player's money once the payment is confirmed (round 6)", async () => {
+    const club = await createClub();
+    const tournament = await tournamentWith(club.id, { status: "in_progress", buyInAmount: "20.00" }, [{}, { paymentConfirmed: false }, { paymentConfirmed: false }]);
+    const { agent } = await signInAdmin();
+    expect((await statsFor(agent)).totalPrizePool).toBe(20);
+
+    const registrations = await agent.get(`/api/tournaments/${tournament.id}/registrations`);
+    const unpaid = registrations.body.find((r: { paymentConfirmed: boolean }) => !r.paymentConfirmed);
+    expect((await agent.patch(`/api/registrations/${unpaid.id}/confirm-payment`)).status).toBe(200);
+
+    expect((await statsFor(agent)).totalPrizePool).toBe(40);
   });
 
   it("honours a manual prize pool and a manual AP total, as finalize does", async () => {
@@ -180,8 +194,13 @@ describe("GET /api/dashboard/stats", () => {
 
   it("counts a completed tournament whose prizes were never recorded at its calculated pool, as before Phase 2 (P2-PRODDATA-01)", async () => {
     const club = await createClub();
-    // Results entered by hand before Phase 2: positions, no prizeAmount. Its $60 pool, not $0.
-    await tournamentWith(club.id, { status: "completed", buyInAmount: "20.00" }, [{ finalPosition: 1 }, { finalPosition: 2 }, { finalPosition: 3 }]);
+    // Results entered by hand before Phase 2: positions, no prizeAmount. Its $60 pool, not $0, with the
+    // payment nobody confirmed then still in it: counting only paid players changes no completed tournament.
+    await tournamentWith(club.id, { status: "completed", buyInAmount: "20.00" }, [
+      { finalPosition: 1 },
+      { finalPosition: 2 },
+      { finalPosition: 3, paymentConfirmed: false },
+    ]);
 
     expect((await statsFor((await signInAdmin()).agent)).totalPrizePool).toBe(60);
   });

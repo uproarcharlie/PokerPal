@@ -16,13 +16,15 @@
  * exactly the prizes set (round 5, item 16): where a difference from the money available went (kept by
  * the club, added to the places, carried over, or added by the club) is frozen in the snapshot, logged
  * publicly and audited, and money carried over is recorded for the next tournament (carry-overs).
+ * Only paid players are in the pool (round 6): while anyone in the field has not paid, finalize refuses
+ * (409 UNPAID_PLAYERS) until the TD confirms each payment or leaves them out (excludeUnpaid), and a
+ * player left out loses any place, prize or points an earlier finalize stored.
  */
 import { createHash } from "node:crypto";
 import type { Request } from "express";
 import type { AuditData } from "@shared/api/admin";
 import {
   toDealInput,
-  type DealRequest,
   type FinalizeInput,
   type FinalizePreviewDto,
   type FinalizePreviewInput,
@@ -44,7 +46,7 @@ import { writeFinalResults } from "../repositories/finalize";
 import { deletePendingActionsOfTournament, listPendingActionsWithPlayers } from "../repositories/pending-actions";
 import { playerNames } from "../repositories/players";
 import { pointsRules } from "../repositories/points";
-import { registrationsOf } from "../repositories/registrations";
+import { registrationsOf, updateTournamentRegistration } from "../repositories/registrations";
 import { getTournament, lockTournamentForUpdate, setTournamentColumns } from "../repositories/tournaments";
 import { recordAudit } from "./audit";
 import { carryOverChangeProblem, recordCarryOver } from "./carry-overs";
@@ -75,8 +77,11 @@ async function loadPlanContext(ex: Executor, tournament: Tournament, { lock }: {
   return { tournament, registrations, club, playerNames: names, carryTarget: await carryTargetOf(ex, tournament), ...rules, pendingRequests };
 }
 
-/** The plan for `finishOrder`, paying the players still in `deal`'s amounts when one is sent. */
-function makePlan(context: PlanContext, finishOrder: readonly string[] | undefined, finalizedAt: Date, deal?: DealRequest): FinalizePlan {
+/** What the TD chose in the preview or finalize request: the finishing order, a deal, and whether unpaid players are left out. */
+type PlanChoices = Pick<FinalizeInput, "finishOrder" | "deal" | "excludeUnpaid">;
+
+/** The plan for the choices, paying the players still in the deal's amounts when one is sent. */
+function makePlan(context: PlanContext, { finishOrder, deal, excludeUnpaid }: PlanChoices, finalizedAt: Date): FinalizePlan {
   return buildFinalizePlan({
     tournament: context.tournament,
     registrations: context.registrations,
@@ -89,6 +94,7 @@ function makePlan(context: PlanContext, finishOrder: readonly string[] | undefin
     pendingRequests: context.pendingRequests,
     deal: deal ? toDealInput(deal) : undefined,
     carryTarget: context.carryTarget,
+    excludeUnpaid: excludeUnpaid === true,
   });
 }
 
@@ -106,12 +112,23 @@ const REFUSALS: Readonly<Record<FinalizeRefusal, string>> = {
   ALREADY_FINALIZED: "This tournament has already been finalized",
   TOURNAMENT_CANCELLED: "A cancelled tournament cannot be finalized",
   DEAL_INVALID: "The deal must share exactly what the players still in would be paid",
+  UNPAID_PLAYERS: "Some players have not paid, so they are not in the prize pool: confirm their payments, or leave them out",
 };
 
 function refusalOf(tournament: Tournament, plan: FinalizePlan, force: boolean): FinalizeRefusal | undefined {
   if (tournament.status === "cancelled") return "TOURNAMENT_CANCELLED";
   if (tournament.status === "completed" && !force) return "ALREADY_FINALIZED";
   return plan.ok ? undefined : plan.problem;
+}
+
+/** The refusal's sentence; for unpaid players it names them: "Dee and Eve have not paid, so …". */
+function refusalMessage(code: FinalizeRefusal, plan: FinalizePlan): string {
+  if (code !== "UNPAID_PLAYERS" || plan.unpaid.length === 0) return REFUSALS[code];
+  const names = plan.unpaid.map((player) => player.playerName);
+  const who =
+    names.length === 1 ? `${names[0]} has` : names.length <= 3 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)} have` : `${names.length} players have`;
+  const one = names.length === 1;
+  return `${who} not paid, so ${one ? "is" : "are"} not in the prize pool: confirm ${one ? "the payment" : "their payments"}, or leave them out`;
 }
 
 /**
@@ -167,14 +184,16 @@ function toPreviewDto(context: PlanContext, plan: FinalizePlan, force: boolean, 
   const code = refusalOf(context.tournament, plan, force);
   return {
     ok: code === undefined,
-    ...(code ? { code, message: REFUSALS[code] } : {}),
+    ...(code ? { code, message: refusalMessage(code, plan) } : {}),
     requiresForce: context.tournament.status === "completed",
     ...(plan.ok ? { planHash: planHash(plan) } : {}),
-    prizePool: toPrizePoolDto(context),
+    // The pool the plan pays: paid players only, also when correcting a tournament completed before that rule.
+    prizePool: { ...toPrizePoolDto(context), breakdown: plan.prizePool },
     rows: plan.ok ? plan.rows : [],
     activePlayers: plan.activePlayers,
     dealable: plan.dealable,
     dealProblems: plan.ok ? [] : (plan.dealProblems ?? []),
+    unpaid: plan.unpaid,
     warnings: [...plan.warnings, ...extraWarnings],
     pendingRequests: context.pendingRequests.map((request) => ({ ...request, targetPlayerName: request.targetPlayerName ?? null })),
     previous: previousResults(context),
@@ -186,7 +205,7 @@ export async function previewFinalize(id: string, input: FinalizePreviewInput): 
   const tournament = await getTournament(db, id);
   if (!tournament) throw notFound("Tournament not found");
   const context = await loadPlanContext(db, tournament, { lock: false });
-  const plan = makePlan(context, input.finishOrder, new Date(), input.deal);
+  const plan = makePlan(context, input, new Date());
   return toPreviewDto(context, plan, input.force === true, await carryOverWarnings(db, context, plan));
 }
 
@@ -218,10 +237,13 @@ export async function finalizeTournament(req: Request, id: string, input: Finali
 
     const context = await loadPlanContext(tx, tournament, { lock: true });
     const now = new Date();
-    const plan = makePlan(context, input.finishOrder, now, input.deal);
+    const plan = makePlan(context, input, now);
     if (!plan.ok && plan.problem === "DEAL_INVALID") {
       const dealProblems = plan.dealProblems ?? [];
       throw conflict("DEAL_INVALID", dealProblems[0]?.message ?? REFUSALS.DEAL_INVALID, { dealProblems, dealable: plan.dealable });
+    }
+    if (!plan.ok && plan.problem === "UNPAID_PLAYERS") {
+      throw conflict("UNPAID_PLAYERS", refusalMessage("UNPAID_PLAYERS", plan), { unpaid: plan.unpaid, activePlayers: plan.activePlayers });
     }
     if (!plan.ok) throw conflict(plan.problem, REFUSALS[plan.problem], { activePlayers: plan.activePlayers });
     const hash = planHash(plan);
@@ -234,6 +256,10 @@ export async function finalizeTournament(req: Request, id: string, input: Finali
     const { difference } = plan.snapshot.pool;
     await recordCarryOver(tx, req, tournament, difference);
     await writeFinalResults(tx, plan.rows);
+    // A player left out (unpaid, or now on the waiting list) keeps no place, prize or points from an earlier finalize.
+    for (const registrationId of plan.clearedRegistrationIds) {
+      await updateTournamentRegistration(tx, registrationId, { finalPosition: null, prizeAmount: null, pointsAwarded: null });
+    }
     await setTournamentColumns(tx, id, {
       status: "completed",
       finalizedAt: now,
@@ -260,6 +286,7 @@ export async function finalizeTournament(req: Request, id: string, input: Finali
     }
     // A request still waiting can never be applied to a completed tournament (TN2-02); the preview listed each one.
     const requestsCleared = await deletePendingActionsOfTournament(tx, id);
+    const unpaidLeftOut = input.excludeUnpaid ? plan.unpaid.map((player) => player.registrationId) : [];
     const pool: AuditData["tournament.finalize"] = {
       netCents: plan.prizePool.net,
       netSource: plan.prizePool.netSource,
@@ -267,6 +294,8 @@ export async function finalizeTournament(req: Request, id: string, input: Finali
       requestsCleared,
       ...(deal ? { deal } : {}),
       ...(difference ? { difference } : {}),
+      ...(unpaidLeftOut.length > 0 ? { unpaidLeftOut } : {}),
+      ...(plan.clearedRegistrationIds.length > 0 ? { resultsCleared: plan.clearedRegistrationIds } : {}),
     };
     await recordAudit(
       req,

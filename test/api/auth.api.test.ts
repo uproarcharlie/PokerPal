@@ -24,7 +24,8 @@ const NEW_PASSWORD = "Sturdy-Pass2";
 const USER_KEYS = ["createdAt", "email", "id", "imageUrl", "isActive", "lastLoginAt", "name", "phone", "role", "updatedAt"];
 
 const UNAUTHENTICATED = { error: "Authentication required", code: "UNAUTHENTICATED" };
-const NOT_AUTHENTICATED = { error: "Not authenticated", code: "UNAUTHENTICATED" };
+/** What GET /api/auth/me answers (200) when nobody is signed in, or the session has ended. */
+const SIGNED_OUT = { user: null };
 
 /** The `pokerpal.sid=<value>` pair a response sets, if any. */
 function sessionCookie(response: request.Response): string | undefined {
@@ -245,7 +246,7 @@ describe("POST /api/auth/register", () => {
 
     expect(registered.status).toBe(201);
     expect(sessionId(sessionCookie(registered))).not.toBe(sessionId(before));
-    expect((await me(before)).status).toBe(401);
+    expect((await me(before)).body).toEqual(SIGNED_OUT);
     expect((await me(sessionCookie(registered))).body.user.email).toBe("second@example.test");
   });
 });
@@ -394,7 +395,7 @@ describe("POST /api/auth/login", () => {
 
     expect(after.status).toBe(200);
     expect(sessionId(sessionCookie(after))).not.toBe(sessionId(before));
-    expect((await me(before)).status).toBe(401);
+    expect((await me(before)).body).toEqual(SIGNED_OUT);
   });
 
   it("never signs anyone in from a form-encoded or text/plain login, which any site's HTML form can send (CC-13)", async () => {
@@ -590,7 +591,7 @@ describe("POST /api/auth/logout", () => {
     expect(response.body).toEqual({ message: "Logout successful" });
     expect(response.get("Set-Cookie")).toEqual(["pokerpal.sid=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT"]);
     // The old cookie is dead even if a browser keeps sending it.
-    expect((await me(cookie)).body).toEqual(NOT_AUTHENTICATED);
+    expect((await me(cookie)).body).toEqual(SIGNED_OUT);
   });
 
   it("succeeds when no one is signed in", async () => {
@@ -632,35 +633,37 @@ describe("GET /api/auth/me", () => {
   it.each([
     ["no cookie", undefined],
     ["a forged cookie", "pokerpal.sid=s%3Aforged.c2lnbmF0dXJl"],
-  ])("answers 401 with %s", async (_case, cookie) => {
+  ])("answers 200 with no user, not a 401 a browser logs as an error, with %s (backlog item 2)", async (_case, cookie) => {
     const response = await me(cookie);
 
-    expect(response.status).toBe(401);
-    expect(response.body).toEqual(NOT_AUTHENTICATED);
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toMatch(/^application\/json/);
+    expect(response.body).toEqual(SIGNED_OUT);
   });
 
-  it("answers 401 once the signed-in user has been deleted, and clears the cookie", async () => {
+  it("answers no user once the signed-in user has been deleted, and clears the cookie", async () => {
     const created = await createUser();
     const { agent } = await loginAs({ email: created.email });
 
     await testDb().delete(users).where(eq(users.id, created.id));
     const response = await agent.get("/api/auth/me");
 
-    expect(response.status).toBe(401);
-    expect(response.body).toEqual(NOT_AUTHENTICATED);
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(SIGNED_OUT);
     expect(sessionCookie(response)).toBe("pokerpal.sid=");
   });
 
-  it("answers 401 once the signed-in user has been deactivated, and the session stays ended (SEC-11)", async () => {
+  it("answers no user once the signed-in user has been deactivated, and the session stays ended (SEC-11)", async () => {
     const created = await createUser();
     const cookie = await loginCookie(created.email);
 
     await testDb().update(users).set({ isActive: false }).where(eq(users.id, created.id));
-    expect((await me(cookie)).status).toBe(401);
+    expect((await me(cookie)).body).toEqual(SIGNED_OUT);
 
     await testDb().update(users).set({ isActive: true }).where(eq(users.id, created.id));
-    expect((await me(cookie)).status).toBe(401);
+    expect((await me(cookie)).body).toEqual(SIGNED_OUT);
   });
+
 });
 
 describe("PUT /api/auth/profile", () => {
@@ -927,7 +930,7 @@ describe("POST /api/auth/change-password", () => {
     await here.post("/api/auth/change-password").send({ currentPassword: FACTORY_PASSWORD, newPassword: NEW_PASSWORD });
 
     expect((await here.get("/api/auth/me")).status).toBe(200);
-    expect((await elsewhere.get("/api/auth/me")).status).toBe(401);
+    expect((await elsewhere.get("/api/auth/me")).body).toEqual(SIGNED_OUT);
     expect((await someoneElse.get("/api/auth/me")).status).toBe(200);
   });
 });

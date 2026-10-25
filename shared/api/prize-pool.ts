@@ -101,7 +101,7 @@ export function toPayoutPlaces(places: readonly PayoutPlaceInput[]): PayoutPlace
  * when they add up to more, the club adds the difference ("Added by the club"). Allowed while the pool
  * is locked (the published payouts change: the editor says so), until the tournament is completed or
  * cancelled (409 TOURNAMENT_CLOSED). A change (of the structure, the places or the choice) is logged to
- * the activity feed ("payouts_changed", public, with the reason and where the difference goes) and
+ * the activity feed ("payouts_changed", staff-only since round 6, with the reason and where the difference goes) and
  * audited ("tournament.payouts"); sending what is stored changes and logs nothing. Answers
  * ApUpdateResponse.
  */
@@ -155,9 +155,12 @@ export interface PayoutDisplayDto {
 }
 
 /**
- * GET /api/tournaments/:id/prize-pool (public), and part of every money response. Computed on the
+ * GET /api/tournaments/:id/prize-pool (the club's staff, round 6: it carries the AP and what the club
+ * keeps; the public page reads GET /api/public/tournaments/:id/prizes), and part of every money response. Computed on the
  * server by shared/domain/prize-pool; a client that computes locally must use the same functions.
- * `breakdown` is always the live calculation; `display` is what to show as the payouts.
+ * `breakdown` is always the live calculation; `display` is what to show as the payouts. Only paid
+ * players' entries are in either (round 6, poolEntries: `breakdown.counts.registrations` is how many
+ * paid), except for a tournament completed before snapshots, shown as it was paid.
  */
 export interface PrizePoolDto {
   tournamentId: string;
@@ -169,7 +172,7 @@ export interface PrizePoolDto {
   estimated: boolean;
   breakdown: PrizePoolBreakdown;
   display: PayoutDisplayDto;
-  /** The last manual adjustment, if any (the reason is public, like the activity feed). */
+  /** The last manual adjustment, if any (its reason is the staff's, like the activity entry). */
   adjustment: { reason: string | null; adjustedAt: string } | null;
   /**
    * Where money carried over from this tournament goes, as the screens name it (carryTargetName): its
@@ -207,7 +210,7 @@ export interface CarryOversDto {
 /**
  * POST /api/tournaments/:id/prize-pool/carry-overs/:carryOverId adds that money to this pool;
  * DELETE takes it out again (it is then free for another tournament). Both while the tournament is
- * open (409 TOURNAMENT_CLOSED), logged publicly ("prize_pool_adjusted"); 404 for a carry-over this
+ * open (409 TOURNAMENT_CLOSED), logged to the staff's feed ("prize_pool_adjusted"); 404 for a carry-over this
  * tournament cannot take, 409 CONFLICT when another tournament took it first. Answers
  * ApUpdateResponse.
  */

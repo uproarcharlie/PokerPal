@@ -1,4 +1,4 @@
-import { count, eq, inArray, sql, type SQL } from "drizzle-orm";
+import { count, eq, inArray, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { clubs, players, tournamentRegistrations, tournaments } from "@shared/schema";
 import type { Executor } from "../db";
 import { countPlayersKnownAt } from "./players";
@@ -37,29 +37,53 @@ export async function tournamentsForStats(ex: Executor, scope: DashboardScope) {
     .where(inScope(scope));
 }
 
-export interface EntryTotals {
-  tournamentId: string;
+/** Buy-ins, re-buys and add-ons summed over some registrations. */
+export interface Entries {
   buyIns: number;
   rebuys: number;
   addons: number;
+}
+
+export interface EntryTotals {
+  tournamentId: string;
+  /** The registrations whose payment is confirmed: what a prize pool counts (round 6, poolEntries). */
+  paid: Entries;
+  /** The others: only a tournament completed before snapshots still counts them. */
+  unpaid: Entries;
   /** The sum of the stored prizes, decimal text. */
   prizes: string;
 }
 
-/** Entries and stored prizes summed per tournament in scope: one query for every registration (perf-20). */
+const paid = sql`${tournamentRegistrations.paymentConfirmed} is true`;
+const unpaid = sql`${tournamentRegistrations.paymentConfirmed} is not true`;
+
+/** `column` summed over the registrations `which` picks, 0 for none. */
+const sumWhere = (column: AnyColumn, which: SQL) =>
+  sql<number>`coalesce(sum(${column}) filter (where ${which}), 0)`.mapWith(Number);
+
+/** Entries (paid and unpaid apart) and stored prizes summed per tournament in scope: one query for every registration (perf-20). */
 export async function entryTotalsByTournament(ex: Executor, scope: DashboardScope): Promise<EntryTotals[]> {
-  return await ex
+  const rows = await ex
     .select({
       tournamentId: tournamentRegistrations.tournamentId,
-      buyIns: sql<number>`coalesce(sum(${tournamentRegistrations.buyIns}), 0)`.mapWith(Number),
-      rebuys: sql<number>`coalesce(sum(${tournamentRegistrations.rebuys}), 0)`.mapWith(Number),
-      addons: sql<number>`coalesce(sum(${tournamentRegistrations.addons}), 0)`.mapWith(Number),
+      paidBuyIns: sumWhere(tournamentRegistrations.buyIns, paid),
+      paidRebuys: sumWhere(tournamentRegistrations.rebuys, paid),
+      paidAddons: sumWhere(tournamentRegistrations.addons, paid),
+      unpaidBuyIns: sumWhere(tournamentRegistrations.buyIns, unpaid),
+      unpaidRebuys: sumWhere(tournamentRegistrations.rebuys, unpaid),
+      unpaidAddons: sumWhere(tournamentRegistrations.addons, unpaid),
       prizes: sql<string>`coalesce(sum(${tournamentRegistrations.prizeAmount}), 0)::text`,
     })
     .from(tournamentRegistrations)
     .innerJoin(tournaments, eq(tournaments.id, tournamentRegistrations.tournamentId))
     .where(inScope(scope))
     .groupBy(tournamentRegistrations.tournamentId);
+  return rows.map((row) => ({
+    tournamentId: row.tournamentId,
+    paid: { buyIns: row.paidBuyIns, rebuys: row.paidRebuys, addons: row.paidAddons },
+    unpaid: { buyIns: row.unpaidBuyIns, rebuys: row.unpaidRebuys, addons: row.unpaidAddons },
+    prizes: row.prizes,
+  }));
 }
 
 /** Every player for admins; otherwise the players known at the clubs (countPlayersKnownAt), as their Players lists show them. */

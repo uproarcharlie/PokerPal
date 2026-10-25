@@ -7,6 +7,7 @@ import { ClubLogo } from "@/components/image/club-logo";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { clubTimeZone, formatDay } from "@/lib/format";
+import { fieldCountText } from "../tournament-lists";
 
 interface HomeTournamentCardProps {
   tournament: TournamentListItemDto;
@@ -33,9 +34,7 @@ export function HomeTournamentCard({ tournament, club }: HomeTournamentCardProps
           </p>
           <p className="flex items-center gap-2">
             <Users className="h-4 w-4" aria-hidden="true" />
-            {/* The field, never the waiting list behind it ("18 / 18 players · 2 waiting", not "20 / 18": round 5, item 15). */}
-            {tournament.registeredCount - tournament.waitingListCount} / {tournament.maxPlayers} players
-            {tournament.waitingListCount > 0 ? ` · ${tournament.waitingListCount} waiting` : null}
+            {fieldCountText(tournament)}
           </p>
         </div>
         <div className="mt-auto pt-4">

@@ -76,7 +76,7 @@ const FIGURE_SWITCHES: ReadonlyArray<{ field: Toggle; label: string }> = [
 interface SettingsCardProps extends Pick<LiveDisplayDto, "qr" | "season"> {
   tournamentId: string;
   settings: ClockDisplaySettings;
-  /** The club's name for its take ("AP"). */
+  /** The club's name for its take ("AP"), to say the TV never shows it. */
   rakeLabel: string;
   /** The prize pool is locked: every screen shows it. */
   poolLocked: boolean;
@@ -86,10 +86,11 @@ interface SettingsCardProps extends Pick<LiveDisplayDto, "qr" | "season"> {
 
 /**
  * What the TV clock shows and plays, changed at once (no Save) and remembered for this tournament: the
- * prize pool and payouts, the club's take, a layer over the clock (the seats after a draw, the payouts
- * at the bubble), the figures beyond the core set (each off until switched on), where the QR code
- * leads, the sounds (how loud, which, and a test on this device) and the edge margin for a TV that
- * crops the picture's edges. Every screen showing the clock follows within a few seconds.
+ * prize pool and payouts, a layer over the clock (the seats after a draw, the payouts at the bubble),
+ * the figures beyond the core set (each off until switched on), where the QR code leads, the sounds
+ * (how loud, which, and a test on this device) and the edge margin for a TV that crops the picture's
+ * edges. Every screen showing the clock follows within a few seconds. The club's take is never on the
+ * TV (round 6: the AP is for the club's staff only), and the card says so.
  */
 export const DisplaySettingsCard = memo(function DisplaySettingsCard({ tournamentId, settings, rakeLabel, poolLocked, qr, season, bare = false }: SettingsCardProps) {
   const { toast } = useToast();
@@ -156,7 +157,9 @@ export const DisplaySettingsCard = memo(function DisplaySettingsCard({ tournamen
       </div>
       <div className="space-y-1">
         {toggle("showPayouts", "Show the payouts with the pool")}
-        {toggle("showAp", `Show the ${rakeLabel}`)}
+        <p className="pb-1 text-sm text-muted-foreground" data-testid="tv-takings-note">
+          The TV shows the prize pool and what each place pays, never the {rakeLabel} or what the club keeps.
+        </p>
         {toggle("showAverageStack", "Show the average stack")}
       </div>
       <fieldset className="space-y-1 border-t border-border pt-4" data-testid="tv-figures">

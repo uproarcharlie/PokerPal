@@ -1,16 +1,18 @@
 import type { ReactNode, RefObject } from "react";
 import type { ClockOpenRequest } from "@/features/clock/components/clock-status-chip";
-import { tournamentMoney } from "@/lib/prize-pool";
+import { LoadingRows, QueryState } from "@/components/shared/query-state";
+import { tournamentMoney, withPublicPrizes, type TournamentMoney } from "@/lib/prize-pool";
 import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { toCents } from "@shared/domain/money";
-import { nextHighHandAward } from "@shared/domain/prize-pool";
+import { nextHighHandAward, recordedEntryCounts, unawardedHighHandCents } from "@shared/domain/prize-pool";
 import { isClosedStatus } from "@shared/domain/tournaments";
+import { usePublicPrizes } from "@/features/public-tournament/hooks";
 import { lineupOf } from "@/features/public-tournament/waiting-list";
 import { CorrectResultsDialog } from "../finalize/correct-results-dialog";
 import { PhoneDesk } from "../mobile/phone-desk";
 import type { PhoneTab } from "../mobile/phone-tabs";
-import { finishersOf } from "../standings/standings-order";
+import { correctionOrderOf } from "../standings/standings-order";
 import type { PotCheck } from "../../staff-hooks";
 import { AwardHighHandDialog } from "./award-high-hand-dialog";
 import type { WaitingCount } from "./desk-actions";
@@ -48,11 +50,25 @@ interface DeskBodyProps {
  * The TD's page once the players are in: everything worked out from them (the figures, what the next
  * high hand is awarded), the phone's tabs or the wide screen's, and the dialogs that need the players.
  */
-export function DeskBody({ tournament, registrations, rakeLabel, timeZone, waitingRequests, potCheck, onCheckPot, dialogs, tab, onTabChange, clockOpenRequest, phone }: DeskBodyProps) {
+export function DeskBody(props: DeskBodyProps) {
+  const { tournament } = props;
+  const canManage = tournament.viewer.canManage;
+  // Anyone but the club's staff is not sent who has paid, so they are shown the server's public prize
+  // pool (round 6), once it is in.
+  const prizes = usePublicPrizes(tournament.id, { follow: tournament, enabled: !canManage });
+  const local = tournamentMoney(tournament, props.registrations);
+  if (canManage) return <DeskFigures {...props} money={local} />;
+  return (
+    <QueryState query={prizes} loading={<LoadingRows rows={4} />} errorTitle="The prize pool could not be loaded">
+      {(paid) => <DeskFigures {...props} money={withPublicPrizes(local, paid)} />}
+    </QueryState>
+  );
+}
+
+/** The desk once its money is known: the same shared functions finalize pays with, so what the TD sees is what is paid. */
+function DeskFigures({ tournament, registrations, rakeLabel, timeZone, waitingRequests, potCheck, onCheckPot, dialogs, tab, onTabChange, clockOpenRequest, phone, money }: DeskBodyProps & { money: TournamentMoney }) {
   const closed = isClosedStatus(tournament.status);
   const canManage = tournament.viewer.canManage;
-  // The same shared functions finalize pays with: what the TD sees here is what is paid.
-  const money = tournamentMoney(tournament, registrations);
   // The field, and the waiting list behind a full one (round 5, item 15): counted apart.
   const lineup = lineupOf(registrations, tournament.maxPlayers);
   // What the next high-hand winner is awarded, or null once every prize is: the server works it out the same way (MONEY-36).
@@ -70,6 +86,7 @@ export function DeskBody({ tournament, registrations, rakeLabel, timeZone, waiti
             money={money}
             totalPlayers={lineup.field.length}
             waitingList={lineup.waiting.length}
+            entries={recordedEntryCounts(tournament, registrations)}
             rakeLabel={rakeLabel}
             canEditPlayers={canManage && !closed}
             canEditPool={canManage && !closed && tournament.prizePoolLocked !== true}
@@ -82,11 +99,12 @@ export function DeskBody({ tournament, registrations, rakeLabel, timeZone, waiti
         tournamentId={tournament.id}
         registrations={registrations}
         nextAwardCents={nextHighHandAward(money.breakdown.highHand, highHandAwards)}
+        unawardedCents={unawardedHighHandCents(money.breakdown.highHand, highHandAwards)}
         potCheck={potCheck}
         onCheckPot={onCheckPot}
         {...dialogs.propsFor("highHand")}
       />
-      <CorrectResultsDialog tournamentId={tournament.id} finishers={finishersOf(registrations)} {...dialogs.propsFor("correct")} />
+      <CorrectResultsDialog tournamentId={tournament.id} finishers={correctionOrderOf(registrations, tournament.maxPlayers)} {...dialogs.propsFor("correct")} />
     </div>
   );
 }

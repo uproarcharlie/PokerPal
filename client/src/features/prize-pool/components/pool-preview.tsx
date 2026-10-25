@@ -1,7 +1,7 @@
 import { AlertTriangle } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { formatMoney, ordinal } from "@/lib/format";
-import { undistributedNote, type TournamentMoney } from "@/lib/prize-pool";
+import { undistributedNote, type PoolPlayers, type TournamentMoney } from "@/lib/prize-pool";
 import { carryTargetName, differenceSentence } from "@shared/domain/prize-difference";
 
 /** How many places the preview names before "+N more". */
@@ -14,8 +14,8 @@ interface PoolPreviewProps {
   before: TournamentMoney;
   /** The club's name for its AP. */
   label: string;
-  /** How many players are entered: places beyond them are not paid while the game runs. */
-  entrants: number;
+  /** The paid players in the pool, and the field: places beyond the paid players are not paid while the game runs. */
+  players: PoolPlayers;
   /** The pool is locked: its payouts have been published to the players. */
   locked: boolean;
   /** What to say while `after` is null. */
@@ -25,11 +25,13 @@ interface PoolPreviewProps {
 }
 
 /**
- * Why no place would be paid: nobody has entered yet, or the pool is $0 or less (an AP total equal to
- * what came in, a manual pool of $0), which finalize also says (P4REV2R3-MONEY-01).
+ * Why no place would be paid: nobody has entered or paid yet (only paid players are in the pool: round
+ * 6), or the pool is $0 or less (an AP total equal to what came in, a manual pool of $0), which finalize
+ * also says (P4REV2R3-MONEY-01).
  */
-function noPlacesText(after: TournamentMoney, entrants: number): string {
-  if (entrants === 0) return "No places are paid until players enter.";
+function noPlacesText(after: TournamentMoney, players: PoolPlayers): string {
+  if (players.field === 0) return "No places are paid until players enter.";
+  if (players.paid === 0) return "No places are paid until payments are confirmed.";
   return after.breakdown.net <= 0 ? "The prize pool is $0 or less, so no places are paid." : "No places are paid.";
 }
 
@@ -40,9 +42,9 @@ function noPlacesText(after: TournamentMoney, entrants: number): string {
  * announced as it changes. A locked pool warns that its published payouts change only when the change
  * moves the pool.
  */
-export function PoolPreview({ after, before, label, entrants, locked, waiting = "Enter an amount to see the prize pool.", carryTarget }: PoolPreviewProps) {
+export function PoolPreview({ after, before, label, players, locked, waiting = "Enter an amount to see the prize pool.", carryTarget }: PoolPreviewProps) {
   const places = after?.display.rows ?? [];
-  const undistributed = after ? undistributedNote(after.display, entrants) : null;
+  const undistributed = after ? undistributedNote(after.display, players, "staff") : null;
   const changed = after !== null && after.breakdown.net !== before.breakdown.net;
   const difference = after ? differenceSentence(after.breakdown.difference, carryTarget ?? carryTargetName(null)) : null;
   return (
@@ -74,7 +76,7 @@ export function PoolPreview({ after, before, label, entrants, locked, waiting = 
             </p>
           ) : (
             <p className="text-muted-foreground" data-testid="preview-no-places">
-              {noPlacesText(after, entrants)}
+              {noPlacesText(after, players)}
             </p>
           )}
           {undistributed ? <p className="text-muted-foreground">{undistributed}</p> : null}

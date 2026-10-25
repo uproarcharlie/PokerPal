@@ -70,14 +70,22 @@ describe("the production Content-Security-Policy", () => {
     ]);
   });
 
-  it("runs only our own scripts: no inline script, no inline handlers, no third-party script (SEC-08)", async () => {
+  it("runs only our own scripts and Cloudflare's analytics beacon: no inline script, no inline handlers (SEC-08)", async () => {
     const csp = await cspOf(production());
 
-    expect(csp.get("script-src")).toEqual(["'self'"]);
+    expect(csp.get("script-src")).toEqual(["'self'", "https://static.cloudflareinsights.com"]);
     expect(csp.get("script-src-attr")).toEqual(["'none'"]);
     expect(csp.get("object-src")).toEqual(["'none'"]);
     expect(csp.get("default-src")).toEqual(["'self'"]);
-    expect(csp.get("connect-src")).toEqual(["'self'"]);
+  });
+
+  it("lets the analytics beacon Cloudflare adds to each page load and report what it counts, and nothing else leave", async () => {
+    const csp = await cspOf(production(r2WithCustomDomain));
+
+    expect(csp.get("script-src")).toContain("https://static.cloudflareinsights.com");
+    expect(csp.get("connect-src")).toEqual(["'self'", "https://cloudflareinsights.com"]);
+    // Neither is a wildcard or 'unsafe-inline': the beacon is one external file, and stored HTML still runs nothing.
+    expect([...(csp.get("script-src") ?? []), ...(csp.get("connect-src") ?? [])].join(" ")).not.toMatch(/\*|unsafe/);
   });
 
   it("is not sent in development, where Vite injects inline scripts", async () => {

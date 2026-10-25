@@ -125,6 +125,26 @@ describe("PublicClubPage", () => {
     expect(screen.queryByText("Called Off")).not.toBeInTheDocument();
   });
 
+  it("counts each tournament's field against Max players, with the waiting list apart, never \"19 / 18\" (round 6, B4)", async () => {
+    tournaments = [
+      tournamentItem({ id: "soon", name: "Friday Freezeout", status: "registration", maxPlayers: 18, registeredCount: 19, waitingListCount: 1 }),
+      tournamentItem({ id: "later", name: "Late Show", status: "scheduled", maxPlayers: 18, registeredCount: 7, waitingListCount: 0 }),
+      tournamentItem({ id: "done", name: "August Opener", status: "completed", maxPlayers: 18, registeredCount: 19, waitingListCount: 1 }),
+    ];
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("tab", { name: "Tournaments" }));
+
+    const cardOf = (name: string) => screen.getByRole("link", { name }).closest("li") as HTMLElement;
+    expect(await screen.findByRole("link", { name: "Friday Freezeout" })).toBeInTheDocument();
+    expect(cardOf("Friday Freezeout")).toHaveTextContent("18 / 18 players · 1 waiting");
+    expect(cardOf("Friday Freezeout")).not.toHaveTextContent("19 / 18");
+    expect(cardOf("Late Show")).toHaveTextContent("7 / 18 players");
+    expect(cardOf("August Opener")).toHaveTextContent("18 / 18 players");
+    expect(cardOf("August Opener")).not.toHaveTextContent("waiting");
+  });
+
   it("says when nothing is coming up", async () => {
     const user = userEvent.setup();
     renderPage();

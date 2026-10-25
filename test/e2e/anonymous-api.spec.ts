@@ -1,7 +1,7 @@
 /**
  * (e) Someone who is not signed in calls the staff API directly (curl, a script, a copied link), against
  * real records of the production build. Every such call is answered 401 with the JSON error body, and
- * none of them changes anything.
+ * none of them changes anything. Asking who is signed in answers "nobody" instead.
  */
 import sharp from "sharp";
 import type { ApiErrorBody } from "../../shared/api/errors";
@@ -55,7 +55,6 @@ test("anonymous calls to staff endpoints are refused with 401 and change nothing
   const image = { name: "logo.png", mimeType: "image/png", buffer: photo };
 
   const calls: StaffCall[] = [
-    { method: "GET", path: "/api/auth/me" },
     { method: "PUT", path: "/api/auth/profile", data: { name: "Hacker", email: "hacker@example.test" } },
     { method: "POST", path: "/api/auth/change-password", data: { currentPassword: "x", newPassword: "Hacked-Pass-123" } },
     { method: "GET", path: "/api/admin/users" },
@@ -88,6 +87,8 @@ test("anonymous calls to staff endpoints are refused with 401 and change nothing
     },
     { method: "PUT", path: `/api/tournaments/${tournament.id}`, data: { status: "cancelled" } },
     { method: "DELETE", path: `/api/tournaments/${tournament.id}` },
+    // Round 6: the staff's breakdown (the AP and what the club keeps); the public read /prizes.
+    { method: "GET", path: `/api/tournaments/${tournament.id}/prize-pool` },
     { method: "PUT", path: `/api/tournaments/${tournament.id}/prize-pool/adjustment`, data: { mode: "manual_pool", amount: "1000", reason: "x" } },
     { method: "PUT", path: `/api/tournaments/${tournament.id}/prize-pool/rates`, data: { rakeType: "percentage", rakeAmount: "90" } },
     { method: "POST", path: `/api/tournaments/${tournament.id}/finalize/preview`, data: {} },
@@ -109,7 +110,7 @@ test("anonymous calls to staff endpoints are refused with 401 and change nothing
     { method: "POST", path: `/api/tournaments/${tournament.id}/seating/undo`, data: { activityId: registration.id } },
     { method: "PUT", path: `/api/tournaments/${tournament.id}/clock`, data: { structure: { levels: [] }, baseHash: null } },
     { method: "POST", path: `/api/tournaments/${tournament.id}/clock/actions`, data: { action: "start" } },
-    { method: "PATCH", path: `/api/tournaments/${tournament.id}/clock/display`, data: { showAp: true } },
+    { method: "PATCH", path: `/api/tournaments/${tournament.id}/clock/display`, data: { showPrizePool: "always" } },
     { method: "DELETE", path: `/api/tournaments/${tournament.id}/clock` },
     { method: "POST", path: `/api/tournaments/${tournament.id}/clock/key` },
     { method: "DELETE", path: `/api/tournaments/${tournament.id}/clock/key` },
@@ -134,6 +135,10 @@ test("anonymous calls to staff endpoints are refused with 401 and change nothing
       expect.soft(body.code, label).toBe("UNAUTHENTICATED");
       expect.soft(Object.keys(body).sort(), label).toEqual(["code", "error"]);
     }
+    // Asking who is signed in is not refused: nobody is (a 401 here logged an error on every public page).
+    const me = await context.request.get("/api/auth/me");
+    expect.soft(me.status(), `${who}: GET /api/auth/me`).toBe(200);
+    expect.soft(await me.json(), `${who}: GET /api/auth/me`).toEqual({ user: null });
   }
 
   // Nothing moved: the owner still sees every record as it was.

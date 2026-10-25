@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 import { Trophy } from "lucide-react";
@@ -47,11 +48,17 @@ interface AwardHighHandDialogProps {
   potCheck: PotCheck;
   /** Fetches the pot again, after a check that failed. */
   onCheckPot: () => void;
+  /**
+   * What of the pot no award pays once every prize is awarded (unawardedHighHandCents: money paid in
+   * after the last award), which the TD adds to a winner's prize here. 0 when nothing is left over.
+   */
+  unawardedCents?: Cents;
 }
 
 /**
  * Awards the next high-hand prize, or a tie that shares an earlier winner's prize. The amount is the
- * server's: shown here as the server will work it out, never sent (TN2-04).
+ * server's: shown here as the server will work it out, never sent (TN2-04). Money paid into the pot
+ * after every prize was awarded is added to a winner's prize here (R6REV0-MONEY-01).
  */
 export function AwardHighHandDialog({ open, onOpenChange, ...props }: AwardHighHandDialogProps) {
   return (
@@ -67,6 +74,7 @@ function AwardForm({
   nextAwardCents,
   potCheck,
   onCheckPot,
+  unawardedCents = 0,
   onClose,
 }: Omit<AwardHighHandDialogProps, "open" | "onOpenChange"> & { onClose: () => void }) {
   const { toast } = useToast();
@@ -121,6 +129,9 @@ function AwardForm({
         </DialogHeader>
 
         <div className="space-y-4 py-4">
+          {allAwarded && unawardedCents > 0 && previousWinners.length > 0 ? (
+            <TopUpWinner tournamentId={tournamentId} winners={previousWinners} unawardedCents={unawardedCents} potCheck={potCheck} onDone={onClose} />
+          ) : null}
           <RequiredNote />
           {previousWinners.length > 0 ? (
             <div className="space-y-2 rounded-lg border bg-muted/50 p-3">
@@ -240,6 +251,64 @@ function AwardForm({
         </DialogFooter>
       </form>
     </Form>
+  );
+}
+
+interface TopUpWinnerProps {
+  tournamentId: string;
+  winners: readonly PublicRegistration[];
+  unawardedCents: Cents;
+  potCheck: PotCheck;
+  onDone: () => void;
+}
+
+/**
+ * The pot grew after every prize was awarded (a payment confirmed late: only paid entries are in it,
+ * round 6): what nobody is due yet, and a button per winner that adds it to their prize, which the
+ * server holds to the pot like any amount set by hand.
+ */
+function TopUpWinner({ tournamentId, winners, unawardedCents, potCheck, onDone }: TopUpWinnerProps) {
+  const { toast } = useToast();
+  const update = useUpdateRegistration(tournamentId);
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const extra = formatMoney(unawardedCents);
+
+  const add = async (winner: PublicRegistration) => {
+    setSavingId(winner.id);
+    try {
+      const saved = await update.mutateAsync({
+        registrationId: winner.id,
+        input: { highHandAmount: centsToDecimalString(toCents(winner.highHandAmount) + unawardedCents) },
+      });
+      toast({ title: `${playerName(winner)}'s high hand is now ${formatAmount(saved.highHandAmount)}`, description: `Pay them the ${extra} more.` });
+      onDone();
+    } catch (error) {
+      toast({ title: "Could not add it to the prize", description: errorMessage(error), variant: "destructive" });
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  return (
+    <section aria-labelledby="high-hand-top-up-title" className="space-y-2 rounded-lg border border-accent/60 bg-accent/10 p-3" data-testid="high-hand-top-up">
+      <h3 id="high-hand-top-up-title" className="text-sm font-semibold text-foreground">
+        {extra} not awarded yet
+      </h3>
+      <p className="text-xs text-muted-foreground">Paid into the pot after the last award. Add it to a winner&apos;s prize, then pay them the difference.</p>
+      {winners.map((winner) => (
+        <Button
+          key={winner.id}
+          type="button"
+          variant="outline"
+          className="h-11 w-full"
+          disabled={savingId !== null && savingId !== winner.id}
+          busy={savingId === winner.id || potCheck === "checking"}
+          onClick={() => void add(winner)}
+        >
+          Add {extra} to {playerName(winner)}&apos;s prize
+        </Button>
+      ))}
+    </section>
   );
 }
 

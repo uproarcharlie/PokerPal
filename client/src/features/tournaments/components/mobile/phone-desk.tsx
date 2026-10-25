@@ -11,6 +11,7 @@ import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import type { Cents } from "@shared/domain/money";
 import { isClosedStatus } from "@shared/domain/tournaments";
+import { unpaidEntries } from "@shared/domain/prize-pool";
 import { acceptRefusal } from "@shared/domain/waiting-list";
 import { lineupOf, type Lineup } from "@/features/public-tournament/waiting-list";
 import type { WaitingCount } from "../desk/desk-actions";
@@ -92,8 +93,9 @@ export function PhoneDesk({
   // Who sits where, for the bust sheet: their seat under their name, their table's players first.
   const seating = useSeating(tournament.id, { enabled: desk });
   const seatOf = desk ? seating.data?.seatByRegistrationId : undefined;
-  // "Once they've paid": confirming the payment is what seats a late arrival, so the menu says how many wait for it.
-  const awaitingPayment = desk && seating.data?.settings.autoSeat === "once_paid" ? seating.data.advisor.notArrived : 0;
+  // Only paid players are in the prize pool (round 6), so in every seating mode the menu says how many in the
+  // field have not paid; under "once they've paid" the payment is also what seats them (R6REV1-PHONE-02).
+  const awaitingPayment = desk ? unpaidEntries(tournament, registrations).length : 0;
 
   return (
     <>
@@ -148,6 +150,8 @@ export function PhoneDesk({
                 rakeLabel={rakeLabel}
                 timeZone={timeZone}
                 highHandAwardsCents={highHandAwardsCents}
+                // The Take payment sheet, so the TD stays on the desk (its tabs, clock and quick actions).
+                onTakePayments={desk ? () => dialogs.show("payments") : undefined}
               />
             ),
           },

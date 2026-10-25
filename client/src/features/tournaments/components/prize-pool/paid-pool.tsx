@@ -1,8 +1,8 @@
 import { formatMoney, type Cents } from "@/lib/format";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { describeDeal, type SnapshotDeal } from "@shared/domain/deal";
-import { nextHighHandAward, type PayoutDisplay, type PrizePoolBreakdown } from "@shared/domain/prize-pool";
-import { frozenSummary } from "@/features/prize-pool/components/public/pool-summary";
+import { nextHighHandAward, unawardedHighHandCents, type PayoutDisplay, type PrizePoolBreakdown } from "@shared/domain/prize-pool";
+import { frozenSummary } from "@/features/prize-pool/components/pool-summary";
 import { DifferenceRows, LeftoverNote, PoolCard, PoolLine } from "./pool-lines";
 import { undistributedNote } from "@/lib/prize-pool";
 
@@ -48,7 +48,8 @@ export function PaidPool({ pool, display, rakeLabel, deal }: PaidPoolProps) {
         </div>
         {display.undistributedCents > 0 ? (
           <p className="text-right text-xs text-muted-foreground" data-testid="undistributed">
-            {undistributedNote(display, 0)}
+            {/* What finalize paid: nobody is still to pay or enter. */}
+            {undistributedNote(display, { paid: 0, field: 0 })}
           </p>
         ) : null}
         {deal ? (
@@ -65,11 +66,14 @@ export function PaidPool({ pool, display, rakeLabel, deal }: PaidPoolProps) {
 /**
  * The high-hand prizes: how many, what has been awarded, and what the next winner gets, worked out
  * exactly as the server awards it (nextHighHandAward: what is left over the winners still to come, the
- * last taking the remainder), so the figure the TD reads out is the one paid (P2REV1-07).
+ * last taking the remainder), so the figure the TD reads out is the one paid (P2REV1-07). Money paid in
+ * after the last prize was awarded (a payment confirmed late) is said, with where to give it out
+ * (R6REV0-MONEY-01).
  */
 export function HighHandAwards({ highHand, awardedCents }: { highHand: PrizePoolBreakdown["highHand"]; awardedCents: readonly Cents[] }) {
   const next = nextHighHandAward(highHand, awardedCents);
   const awarded = awardedCents.reduce((sum, cents) => sum + cents, 0);
+  const unawarded = unawardedHighHandCents(highHand, awardedCents);
   return (
     <>
       <PoolLine label="Number of Winners" value={highHand.winners} />
@@ -82,6 +86,15 @@ export function HighHandAwards({ highHand, awardedCents }: { highHand: PrizePool
         testId="high-hand-next-award"
         tone="accent"
       />
+      {unawarded > 0 ? (
+        <PoolLine
+          label="Not Awarded Yet"
+          note="Paid in after the last award: add it to a winner's prize from Award High Hand."
+          value={formatMoney(unawarded)}
+          testId="high-hand-unawarded"
+          tone="total"
+        />
+      ) : null}
     </>
   );
 }

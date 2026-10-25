@@ -9,6 +9,7 @@ import { z } from "zod";
 import { idSchema, integerSchema, moneySchema } from "./common";
 import type { ClubPlayer } from "./players";
 import type { PublicRegistration, PublicRegistrationRow, WaitingListPlace } from "./public";
+import type { Cents } from "../domain/money";
 import type { AutoSeatResultDto } from "./seating";
 
 /**
@@ -20,9 +21,11 @@ import type { AutoSeatResultDto } from "./seating";
  * beyond Max players is taken onto the waiting list (round 5, item 15: `waitingListPosition`).
  * Refused with 400 PHOTO_REQUIRED (a club that requires a photo, and a player without one who is not
  * one of its regulars and was not added on its QR page: R5REV-SEC-01), 409 ALREADY_REGISTERED,
- * PRIZE_POOL_LOCKED, TOURNAMENT_CLOSED (completed or cancelled), HIGH_HAND_AWARDED (entering a high
- * hand whose every prize is awarded), 404 PLAYER_NOT_FOUND, 400 HIGH_HAND_NOT_AVAILABLE. Open while
- * the game is in progress (enableLateRegistration is not enforced until the Phase 4 clock).
+ * PRIZE_POOL_LOCKED, TOURNAMENT_CLOSED (completed or cancelled), 404 PLAYER_NOT_FOUND, 400
+ * HIGH_HAND_NOT_AVAILABLE. A sign-up has not paid, so its high-hand entry is not in the pot (round 6:
+ * paid players only) until the TD confirms the payment (which is never refused for the pot: see
+ * PaymentConfirmedDto). Open while the game is in progress (enableLateRegistration is not enforced
+ * until the Phase 4 clock).
  */
 export const publicRegistrationSchema = z.object({
   playerId: idSchema,
@@ -71,12 +74,17 @@ export type StaffRegistrationInput = z.infer<typeof staffRegistrationSchema>;
  *   A winner's amount changed by hand follows the same rule as any change to the pot: never more than
  *   the pot (409 HIGH_HAND_OVER_POOL), and once every prize is awarded exactly the pot (409
  *   HIGH_HAND_AWARDED), so no money is left that nobody can win.
- * - enteringHighHands changed: the awards already made must still fit the pot (409
- *   HIGH_HAND_OVER_POOL when they would add up to more, HIGH_HAND_AWARDED when every prize is awarded
- *   and the pot would no longer be what they add up to).
+ * - enteringHighHands changed, or paymentConfirmed true → false while the tournament is open (only paid
+ *   entries are in the pot): the awards already made must still fit the pot (409 HIGH_HAND_OVER_POOL
+ *   when they would add up to more, HIGH_HAND_AWARDED when every prize is awarded and the pot would no
+ *   longer be what they add up to). A payment taken (false → true) is never refused for the pot, as on
+ *   confirm-payment, and after the game no payment change is checked against it: the high hand there
+ *   is paid out (R6REV0-MONEY-01).
  * - knockouts is an absolute count, kept for today's client; new code uses /counts.
  * - paymentConfirmed false → true accepts the player, as does a first re-buy, add-on, knockout or bust
  *   of a waiting-list entry: past Max players, 409 TOURNAMENT_FULL (round 5, item 15; no override).
+ *   true → false takes the entry's money out of the pool: a manual AP total must still be within what
+ *   the paid entries took in (400 AP_EXCEEDS_GROSS).
  */
 export const updateRegistrationSchema = z
   .object({
@@ -135,11 +143,21 @@ export type RegistrationCreatedDto = (PublicRegistration | ManagedRegistration) 
  * PATCH /api/registrations/:id/confirm-payment (staff), round 5: accepts the player, which past Max
  * players is 409 TOURNAMENT_FULL "18 of 18 players accepted: raise Max players to accept more" for
  * everyone, owners included (item 15; a player who has already played is in the field, so their
- * payment is always taken). Under "once they've paid" a player who has no seat is seated by auto-seat
+ * payment is always taken). The payment puts the entry's money in the prize pool (round 6), and a
+ * high-hand entrant's in the high-hand pot. It is never refused for that pot: money taken at the desk
+ * is in it (R6REV0-MONEY-01). Under "once they've paid" a player who has no seat is seated by auto-seat
  * as their payment is confirmed (`seating`); null when auto-seat did nothing (another mode, already
  * seated, out, or nothing changed).
  */
-export type PaymentConfirmedDto = ManagedRegistration & { seating: AutoSeatResultDto | null };
+export type PaymentConfirmedDto = ManagedRegistration & {
+  seating: AutoSeatResultDto | null;
+  /**
+   * What of the high-hand pot no award pays after this payment (unawardedHighHandCents): every prize
+   * was already awarded, so the TD adds it to a winner's prize (Award High Hand). 0 when nothing is
+   * left over, and always after the game, when the high hand is paid out.
+   */
+  highHandUnawardedCents: Cents;
+};
 
 /** A registration for staff screens: the player's contact details only when `player.canEdit` (ClubPlayer). */
 export type StaffRegistrationDto = PublicRegistrationRow & PaymentStatus & WaitingListPlace & { player: ClubPlayer | null };

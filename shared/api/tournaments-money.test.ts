@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dealSchema, finalizePreviewSchema, finalizeSchema, PUBLIC_SNAPSHOT_FIELDS, toDealInput } from "./finalize";
+import { dealSchema, finalizePreviewSchema, finalizeSchema, toDealInput } from "./finalize";
 import { payoutsUpdateSchema, prizePoolAdjustmentSchema, rakeRatesSchema, toPayoutPlaces } from "./prize-pool";
 import { createTournamentSchema, updateTournamentSchema } from "./tournaments";
 import { HIGH_HAND_PRIZES_MAX } from "../domain/prize-pool";
@@ -232,10 +232,6 @@ describe("a deal at finalize (round 5)", () => {
     expect(dealSchema.safeParse({ ...deal, reason: "  " }).success).toBe(false);
     expect(dealSchema.safeParse({ ...deal, reason: "x".repeat(201) }).success).toBe(false);
     expect(dealSchema.safeParse({ ...deal, amounts: [{ registrationId: "r1", amount: "1.005" }, deal.amounts[1]] }).success).toBe(false);
-  });
-
-  it("is public in the snapshot, like who was paid what", () => {
-    expect(PUBLIC_SNAPSHOT_FIELDS).toContain("deal");
   });
 });
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode, type RefObject } from "react";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import type { ReturnFocusProps } from "@/components/ui/return-focus";
+import { SHEET_FOOTER_ATTRIBUTE } from "@/lib/notifications-region";
 import { cn } from "@/lib/utils";
 
 const WIDTHS = {
@@ -94,13 +95,32 @@ export function PhoneSheetHeader({ title, description, titleRef, icon, children 
   );
 }
 
-/** The part that scrolls. `atFoot` (no footer under it, the default): its end clears the phone's home bar. */
+/**
+ * The part that scrolls. `atFoot` (no footer under it, the default): its end clears the phone's home bar.
+ * While toasts stand over the sheet's foot it ends above them (TOAST_CLEARANCE_VARIABLE, which the
+ * toaster sets), so they never cover a row the TD is about to tap.
+ */
 export function PhoneSheetBody({ children, atFoot = true, className }: { children: ReactNode; atFoot?: boolean; className?: string }) {
-  return <div className={cn("min-h-0 flex-1 overflow-y-auto px-4 pt-4", atFoot ? "pb-[max(1.5rem,env(safe-area-inset-bottom))]" : "pb-4", className)}>{children}</div>;
+  return (
+    <div
+      className={cn(
+        "mb-[var(--toast-clearance,0px)] min-h-0 flex-1 overflow-y-auto px-4 pt-4",
+        atFoot ? "pb-[max(1.5rem,env(safe-area-inset-bottom))]" : "pb-4",
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
 }
 
+/** The sheet's buttons, kept in view: marked for the toaster, which keeps its toasts above them. */
 export function PhoneSheetFooter({ children }: { children: ReactNode }) {
-  return <div className="flex shrink-0 gap-2 border-t border-border bg-background px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3">{children}</div>;
+  return (
+    <div className="flex shrink-0 gap-2 border-t border-border bg-background px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3" {...{ [SHEET_FOOTER_ATTRIBUTE]: "" }}>
+      {children}
+    </div>
+  );
 }
 
 /**

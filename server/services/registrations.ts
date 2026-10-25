@@ -20,7 +20,7 @@ import type {
 } from "@shared/api/registrations";
 import { pickFields, PUBLIC_REGISTRATION_FIELDS } from "@shared/api/public";
 import type { ActivityEventType } from "@shared/api/tournaments";
-import { centsToDecimalString, centsToDollars, formatMoney, toCents } from "@shared/domain/money";
+import { centsToDecimalString, centsToDollars, formatMoney, toCents, type Cents } from "@shared/domain/money";
 import { lateTopUpText, offersHighHand, PRIZE_POOL_LOCKED_MESSAGE, topUpRefusal, type TopUpCounts } from "@shared/domain/player-actions";
 import { registrationRemovalProblem } from "@shared/domain/standings";
 import { acceptRefusal, inFieldByRight, waitingListPositions, type WaitingListEntry } from "@shared/domain/waiting-list";
@@ -31,6 +31,7 @@ import {
   highHandAwardsProblem,
   nextHighHandAward,
   splitHighHandAward,
+  unawardedHighHandCents,
 } from "@shared/domain/prize-pool";
 import type { InsertTournamentRegistration, PendingAction, Player, Tournament, TournamentRegistration } from "@shared/schema";
 import { db, type Transaction } from "../db";
@@ -684,8 +685,12 @@ export async function updateRegistration(req: Request, registrationId: string, i
       addons: input.addons ?? current.addons,
       knockouts: input.knockouts ?? current.knockouts,
     });
-    // Ticking or unticking an entry moves the high-hand pot, which the awards already made must still fit.
-    const potBefore = changed.includes("enteringHighHands") ? await registrationsRepo.registrationsOf(tx, tournament.id) : undefined;
+    // Ticking or unticking an entry moves the high-hand pot, which the awards already made must still
+    // fit. So does a payment taken back (only paid entries are in the pot) while the game is open. A
+    // payment taken is never refused for it (highHandLeftByPayment), nor is any payment after the game.
+    const movesPot =
+      changed.includes("enteringHighHands") || (changed.includes("paymentConfirmed") && input.paymentConfirmed === false && !isClosed(tournament));
+    const potBefore = movesPot ? await registrationsRepo.registrationsOf(tx, tournament.id) : undefined;
 
     const highHand = await highHandChange(tx, locked, input, changed);
     // Absent fields stay undefined, which drizzle leaves out of the UPDATE.
@@ -716,7 +721,9 @@ export async function updateRegistration(req: Request, registrationId: string, i
       const potAfter = await registrationsRepo.registrationsOf(tx, tournament.id);
       assertHighHandAwardsFit({ tournament, registrations: potBefore }, { tournament, registrations: potAfter });
     }
-    const lowered = (["buyIns", "rebuys", "addons"] as const).some((field) => (input[field] ?? Infinity) < (current[field] ?? 0));
+    // Fewer entries, or a payment taken back, lowers the gross a manual AP total must stay within.
+    const unpaid = changed.includes("paymentConfirmed") && input.paymentConfirmed === false;
+    const lowered = unpaid || (["buyIns", "rebuys", "addons"] as const).some((field) => (input[field] ?? Infinity) < (current[field] ?? 0));
     if (lowered) await assertApStillWithinGross(tx, tournament, await registrationsRepo.registrationsOf(tx, tournament.id));
 
     const player = await getPlayer(tx, current.playerId);
@@ -822,10 +829,25 @@ export async function adjustCounts(registrationId: string, deltas: AdjustCountsI
 }
 
 /**
+ * What a payment just taken left of the high-hand pot that no award pays (unawardedHighHandCents): a
+ * paid entry adds to the pot (round 6), and once every prize is awarded nobody is due the rest until
+ * the TD adds it to a winner's prize. A payment is money the desk has taken, so it is never refused
+ * for the side pot (R6REV0-MONEY-01); after the game the high hand is paid out, so nothing is left.
+ */
+async function highHandLeftByPayment(tx: Transaction, tournament: Tournament): Promise<Cents> {
+  if (isClosed(tournament) || !offersHighHand(tournament)) return 0;
+  const registrations = await registrationsRepo.registrationsOf(tx, tournament.id);
+  const { highHand } = computePrizePool(tournament, registrations);
+  const awarded = registrations.filter((r) => r.highHandWinner === true).map((r) => toCents(r.highHandAmount));
+  return unawardedHighHandCents(highHand, awarded);
+}
+
+/**
  * PATCH /api/registrations/:id/confirm-payment: accepts the player. Idempotent: confirming a
  * confirmed payment changes nothing and logs nothing. Allowed after the game, for late
  * reconciliation. Accepting one more than Max players is 409 TOURNAMENT_FULL, for everyone (round 5,
- * item 15); a player who has already played is in the field, so their payment is always taken.
+ * item 15); a player who has already played is in the field, so their payment is always taken. Never
+ * refused for the high-hand pot: what it leaves there unawarded is said (highHandLeftByPayment).
  */
 export async function confirmPayment(registrationId: string) {
   return db.transaction(async (tx) => {
@@ -836,7 +858,8 @@ export async function confirmPayment(registrationId: string) {
     if (confirmed) await logActivity(tx, confirmed, "payment_confirmed", `Payment confirmed for ${playerName(player)}`);
     // Round 5: a player waiting for their payment (or behind a full field) sits down as it is confirmed.
     const seating = confirmed && !isClosed(tournament) ? await autoSeatOnPayment(tx, tournament, registration.id) : null;
+    const highHandUnawardedCents = confirmed && registration.enteringHighHands ? await highHandLeftByPayment(tx, tournament) : 0;
     // Accepted: in the field, never on the waiting list.
-    return { ...toManagedRegistration(confirmed ?? registration, player, new Map()), seating };
+    return { ...toManagedRegistration(confirmed ?? registration, player, new Map()), seating, highHandUnawardedCents };
   });
 }

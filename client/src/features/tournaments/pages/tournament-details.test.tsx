@@ -7,14 +7,17 @@ import { apiError, mockSignedIn, renderWithApp } from "@test/helpers/web";
 import { LIVE_REFRESH_MS } from "@/lib/live-refresh";
 import { clubDto, finalizeResultDto, HASH_A, HASH_B, mockDeskLiveReads, previewOf, registrationDto, tournamentDto } from "@test/helpers/f1-tournaments";
 import type { PublicRegistration } from "@shared/api/public";
-import type { RegistrationCreatedDto } from "@shared/api/registrations";
+import type { ManagedRegistration, RegistrationCreatedDto } from "@shared/api/registrations";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { CENTRAL_STARS_THEME, themeVariables } from "@shared/domain/theme";
 import { qk } from "@/lib/api/query-keys";
 import { seatingDto, seatingMutation, seatMove, seatRef } from "@test/helpers/seating-dto";
+import { visitorView } from "@test/helpers/f2-public";
 import TournamentDetails from "./tournament-details";
 
-const field = [registrationDto("r1", "Ann", 2), registrationDto("r2", "Bob", 2), registrationDto("r3", "Cat", 1)];
+/** As the club's staff get them: only paid players are in the pool (round 6). */
+const paid = (registration: PublicRegistration): ManagedRegistration => ({ ...registration, paymentConfirmed: true });
+const field = [registrationDto("r1", "Ann", 2), registrationDto("r2", "Bob", 2), registrationDto("r3", "Cat", 1)].map(paid);
 
 function mockPage(
   canManage: boolean,
@@ -24,11 +27,14 @@ function mockPage(
     registrations = field,
   }: { canOwn?: boolean; overrides?: Partial<TournamentDetailDto>; registrations?: PublicRegistration[] } = {},
 ) {
-  mockDeskLiveReads(tournamentDto({ ...overrides, viewer: { canManage, canOwn } }), registrations);
+  const tournament = tournamentDto({ ...overrides, viewer: { canManage, canOwn } });
+  mockDeskLiveReads(tournament, registrations);
+  // Someone who does not run the club is sent neither the takings nor who has paid (round 6).
+  const shown = canManage ? registrations : registrations.map((registration) => ({ ...registration, paymentConfirmed: undefined }));
   server.use(
-    http.get("/api/tournaments/t1", () => HttpResponse.json(tournamentDto({ ...overrides, viewer: { canManage, canOwn } }))),
+    http.get("/api/tournaments/t1", () => HttpResponse.json(canManage ? tournament : visitorView(tournament))),
     http.get("/api/clubs/c1", () => HttpResponse.json(clubDto())),
-    http.get("/api/tournaments/t1/registrations", () => HttpResponse.json(registrations)),
+    http.get("/api/tournaments/t1/registrations", () => HttpResponse.json(shown)),
     http.get("/api/tournaments/t1/pending-actions", () => HttpResponse.json([])),
   );
 }
@@ -92,6 +98,16 @@ describe("TournamentDetails", () => {
     expect(screen.queryByTestId("end-tournament-waiting")).not.toBeInTheDocument();
   });
 
+  it("says whose money the pool holds: paid players only, with the way to the payment desk (round 6)", async () => {
+    mockPage(true, { registrations: [...field, { ...registrationDto("r4", "Dee", 1), paymentConfirmed: false }] });
+    renderDetails();
+
+    expect(await screen.findByTestId("paid-players-note")).toHaveTextContent("Prize pool from 3 paid players · 1 not paid yet (not in the pool)");
+    expect(screen.getByRole("link", { name: "Take payments" })).toHaveAttribute("href", "/admin/registrations/t1");
+    // Dee's $100 is not in it: five paid buy-ins less $5 AP each.
+    expect(screen.getByTestId("prize-pool")).toHaveTextContent("$475");
+  });
+
   it("hides the staff controls from someone who does not run the club", async () => {
     mockPage(false);
     renderDetails();
@@ -100,6 +116,22 @@ describe("TournamentDetails", () => {
     expect(screen.queryByTestId("end-tournament")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Delete/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Edit/ })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("paid-players-note")).not.toBeInTheDocument();
+  });
+
+  it("shows someone who does not run the club the server's pool and places, never the AP or how the pool is worked out (round 6)", async () => {
+    mockPage(false);
+    let breakdownAsked = 0;
+    server.use(http.get("/api/tournaments/t1/prize-pool", () => void breakdownAsked++));
+    renderDetails();
+
+    // They are not sent who has paid: the pool is the server's, from the paid players.
+    expect(await screen.findByTestId("prize-pool")).toHaveTextContent("$475");
+    expect(await screen.findByTestId("payout-1")).toHaveTextContent("$238");
+    expect(screen.getByTestId("payout-3")).toHaveTextContent("$95");
+    expect(screen.queryByTestId("ap-panel")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^AP/)).not.toBeInTheDocument();
+    expect(breakdownAsked).toBe(0);
   });
 
   it("offers Delete to the club's owner, never to a manager, who gets a 403 for it (TN-09)", async () => {
@@ -116,12 +148,21 @@ describe("TournamentDetails", () => {
   });
 
   it("warns that places beyond the entrants are not paid, and totals only what finalize would pay (MONEY-REV-01)", async () => {
-    mockPage(true, { registrations: [registrationDto("r1", "Ann", 1), registrationDto("r2", "Bob", 1)] });
+    mockPage(true, { registrations: [registrationDto("r1", "Ann", 1), registrationDto("r2", "Bob", 1)].map(paid) });
     renderDetails();
 
     // Standard pays three places, but two players can only take two of them: $190 net, $38 unpaid.
     expect(await screen.findByTestId("undistributed")).toHaveTextContent("Only 2 players: $38 of the pool is not paid out unless more players enter.");
     expect(screen.getByTestId("payout-1")).toHaveTextContent("$95");
+    expect(screen.queryByTestId("payout-3")).not.toBeInTheDocument();
+  });
+
+  it("counts the paid players when some of the field has not paid: their places wait for the payments (R6REV0-MONEY-02)", async () => {
+    mockPage(true, { registrations: [...[registrationDto("r1", "Ann", 1), registrationDto("r2", "Bob", 1)].map(paid), registrationDto("r3", "Cat", 1)] });
+    renderDetails();
+
+    // Three in the field, two paid: the same two places as above, and the third waits for Cat's payment.
+    expect(await screen.findByTestId("undistributed")).toHaveTextContent("Only 2 paid players: $38 of the pool is not paid out until more payments are confirmed.");
     expect(screen.queryByTestId("payout-3")).not.toBeInTheDocument();
   });
 
@@ -392,9 +433,9 @@ describe("TournamentDetails", () => {
       vi.useRealTimers();
     });
 
-    it("keeps the pool in step with QR sign-ups made on players' phones, without a reload", async () => {
+    it("keeps the pool in step with sign-ups and payments made on other devices, without a reload", async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
-      let registrations = field;
+      let registrations: ManagedRegistration[] = field;
       server.use(
         http.get("/api/tournaments/t1", () => HttpResponse.json(tournamentDto())),
         http.get("/api/clubs/c1", () => HttpResponse.json(clubDto())),
@@ -403,11 +444,18 @@ describe("TournamentDetails", () => {
       renderDetails();
       expect(await screen.findByTestId("prize-pool")).toHaveTextContent("$475");
 
-      // Dee signs up from the QR page: one more $100 entry, $5 AP.
-      registrations = [...field, registrationDto("r4", "Dee", 1)];
+      // Dee signs up from the QR page: her $100 entry is not in the pool until she pays (round 6).
+      registrations = [...field, { ...registrationDto("r4", "Dee", 1), paymentConfirmed: false }];
+      await vi.advanceTimersByTimeAsync(LIVE_REFRESH_MS + 100);
+      await waitFor(() => expect(screen.getByTestId("unpaid-count")).toHaveTextContent("1 not paid yet"));
+      expect(screen.getByTestId("prize-pool")).toHaveTextContent("$475");
+
+      // She pays at the desk on another device: one more $100 entry, $5 AP.
+      registrations = [...field, paid(registrationDto("r4", "Dee", 1))];
       await vi.advanceTimersByTimeAsync(LIVE_REFRESH_MS + 100);
 
       await waitFor(() => expect(screen.getByTestId("prize-pool")).toHaveTextContent("$570"));
+      expect(screen.queryByTestId("unpaid-count")).not.toBeInTheDocument();
     });
 
     it("stops asking once the tournament is finished", async () => {
@@ -461,7 +509,7 @@ describe("TournamentDetails: round 5 wiring", () => {
     seating = seatingDto({
       tables: [{ id: "tA", number: 1, seats: 9, seated: { 1: { id: "r1", name: "Ann" }, 2: { id: "r2", name: "Bob" }, 3: { id: "r3", name: "Cat" }, 4: { id: "r4", name: "Dee" } } }],
     });
-    registrations = [...field, registrationDto("r4", "Dee", 1)];
+    registrations = [...field, paid(registrationDto("r4", "Dee", 1))];
     await act(() => queryClient.invalidateQueries({ queryKey: qk.tournaments.registrations("t1") }));
 
     expect(await screen.findByText("Dee seated at Table 1, Seat 4.")).toBeInTheDocument();

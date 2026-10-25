@@ -166,12 +166,34 @@ describe("AuthProvider sign-in and sign-out", () => {
     vi.restoreAllMocks();
   });
 
-  it("treats only a 401 at start as nobody signed in, at once", async () => {
-    mockSignedOut();
+  it("takes the server's { user: null } at start as nobody signed in, at once (backlog item 2)", async () => {
+    let asked = 0;
+    server.use(
+      http.get("/api/auth/me", () => {
+        asked += 1;
+        return HttpResponse.json({ user: null });
+      }),
+    );
     renderWithApp(<SessionProbe />);
 
     await waitFor(() => expect(screen.getByTestId("check")).toHaveTextContent("ok"));
     expect(screen.getByTestId("who")).toHaveTextContent("nobody");
+    expect(asked).toBe(1);
+  });
+
+  it("still takes a 401 at start as nobody signed in, at once, as the server answered before", async () => {
+    let asked = 0;
+    server.use(
+      http.get("/api/auth/me", () => {
+        asked += 1;
+        return apiError(401, "UNAUTHENTICATED", "Not authenticated");
+      }),
+    );
+    renderWithApp(<SessionProbe />);
+
+    await waitFor(() => expect(screen.getByTestId("check")).toHaveTextContent("ok"));
+    expect(screen.getByTestId("who")).toHaveTextContent("nobody");
+    expect(asked).toBe(1);
   });
 });
 

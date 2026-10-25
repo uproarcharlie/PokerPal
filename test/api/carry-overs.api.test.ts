@@ -113,9 +113,9 @@ describe("adding carried-over money to a later pool", () => {
     expect(await descriptions(next.id)).toEqual(["$50 carried over from Test Wednesday added to the prize pool (now $250)"]);
     expect((await list(staff.manager.agent, next.id)).available).toEqual([]);
 
-    // Everyone sees it in the pool, without anyone's account.
-    const publicPool = await (await anon()).get(base(next.id));
-    expect(publicPool.body.breakdown.carriedIn).toHaveLength(1);
+    // Everyone sees it in the pool, without anyone's account (round 6: the public prize pool, by name only).
+    const publicPool = await (await anon()).get(`/api/public/tournaments/${next.id}/prizes`);
+    expect(publicPool.body).toMatchObject({ poolCents: 25_000, carriedIn: [{ fromName: "Test Wednesday", amountCents: 5_000 }] });
     expect(findForbiddenKeys(publicPool.body)).toEqual([]);
     const publicTournament = await (await anon()).get(`/api/tournaments/${next.id}`);
     expect(publicTournament.body.carriedIn).toHaveLength(1);

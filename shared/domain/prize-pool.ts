@@ -10,6 +10,9 @@
  * club's rates give. High-hand money is a separate pot and is never part of the AP override. When the
  * prizes as set (a manual pool, or custom places) are not exactly the money available for prizes, the
  * tournament's choice says where the difference goes (./prize-difference, round 5 item 16).
+ *
+ * Only paid players are in the pool (owner, 2026-10-26: "prize pool should only show confirmed players
+ * that have paid"): see poolEntries.
  */
 import {
   isAmountSet,
@@ -68,12 +71,16 @@ export interface PrizePoolInput {
   highHandRakeType?: string | null;
   highHandRakeAmount?: MoneyInput;
   highHandPayouts?: number | null;
-  /** Round 5 (item 15): the entries beyond it that are on the waiting list are not counted (poolEntries). */
+  /** Round 5 (item 15): who is on the waiting list behind a full field (unpaidEntries leaves them out). */
   maxPlayers?: number | null;
   /** Round 5 (item 16): where a difference between the prizes as set and the money available goes (null: the club keeps it). */
   prizeDifference?: string | null;
   /** Round 5 (item 16): money carried over into this pool from earlier tournaments (tournaments.carried_in). */
   carriedIn?: unknown;
+  /** With prizePoolSnapshot: whether the tournament was completed before finalize kept snapshots (poolEntries). */
+  status?: string | null;
+  /** Only whether there is one is read here. */
+  prizePoolSnapshot?: PaidSnapshotInput | null;
 }
 
 /**
@@ -154,20 +161,60 @@ export interface PrizePoolBreakdown {
   highHand: HighHandBreakdown;
 }
 
+/** Whether the TD has confirmed the entry's payment at the desk: only then is its money in the prize pool. */
+export function hasPaid(entry: Pick<EntryInput, "paymentConfirmed">): boolean {
+  return entry.paymentConfirmed === true;
+}
+
 /**
- * The registrations a prize pool counts (round 5, item 15). The owner has not yet said whether
- * registrations that have not paid count (they always have) or whether only accepted players do; the
- * lead's default until then: every registration counts as today EXCEPT those on the waiting list
- * (beyond Max players, not accepted, not played: shared/domain/waiting-list), so a pool never includes
- * people who cannot play. The owner's answer is a change to this one function.
+ * A tournament completed before finalize kept a snapshot (before Phase 2; only finalize completes a
+ * tournament, and it always keeps one now): its prizes were worked out from every entry in the field,
+ * paid or not, and that is still how it is shown and totalled. Counting only paid players came later
+ * and changes no tournament already completed.
  */
-export function poolEntries<T extends EntryInput>(tournament: Pick<PrizePoolInput, "maxPlayers">, entries: readonly T[]): T[] {
-  return fieldEntries(entries, tournament.maxPlayers);
+function completedBeforeSnapshots(tournament: Pick<PrizePoolInput, "status" | "prizePoolSnapshot">): boolean {
+  return tournament.status === "completed" && !tournament.prizePoolSnapshot;
+}
+
+/**
+ * The registrations a prize pool counts: only those whose payment is confirmed (the owner's decision,
+ * 2026-10-26), with all their buy-ins, re-buys, add-ons and their high-hand entry. A sign-up that has
+ * not paid, whether it has played or not, and the waiting list (./waiting-list) add nothing until the TD
+ * confirms the payment. Admin, public, TV, dashboard and finalize all count through here, so they agree.
+ * An entry that carries no payment status (a public registration) counts nothing: the server works out
+ * a pool for anyone who cannot see who paid. A paid entry is never on the waiting list (paying accepts
+ * it), but a list that carries its places is read as it is. A tournament completed before snapshots
+ * counts its field as it always has (completedBeforeSnapshots).
+ */
+export function poolEntries<T extends EntryInput>(
+  tournament: Pick<PrizePoolInput, "maxPlayers" | "status" | "prizePoolSnapshot">,
+  entries: readonly T[],
+): T[] {
+  const field = fieldEntries(entries, tournament.maxPlayers);
+  return completedBeforeSnapshots(tournament) ? field : field.filter(hasPaid);
+}
+
+/**
+ * The players in the field (everyone but the waiting list) whose payment is not confirmed yet: they
+ * play, and their chips count on the table, but their money is not in the prize pool until the TD
+ * confirms it. What the TD's screens and finalize warn about.
+ */
+export function unpaidEntries<T extends EntryInput>(tournament: Pick<PrizePoolInput, "maxPlayers">, entries: readonly T[]): T[] {
+  return fieldEntries(entries, tournament.maxPlayers).filter((entry) => !hasPaid(entry));
+}
+
+/**
+ * Every entry recorded in the field (the waiting list left out), paid or not: what a new price would
+ * re-price, since the desk asks every player for their entries at today's prices and the pool counts
+ * each one once paid. The prize pool itself counts only paid entries (computePrizePool's `counts`).
+ */
+export function recordedEntryCounts(tournament: Pick<PrizePoolInput, "maxPlayers">, entries: readonly EntryInput[]): EntryCounts {
+  return countEntries(fieldEntries(entries, tournament.maxPlayers));
 }
 
 /**
  * Works out a tournament's pool from its settings and the registrations passed in, as poolEntries
- * counts them (unpaid ones count, as they always have; the waiting list does not).
+ * counts them: paid players only.
  */
 export function computePrizePool(tournament: PrizePoolInput, entries: readonly EntryInput[]): PrizePoolBreakdown {
   const counts = countEntries(poolEntries(tournament, entries));
@@ -328,6 +375,17 @@ export function nextHighHandAward(highHand: Pick<HighHandBreakdown, "net" | "win
   return winnersLeft === 1 ? left : Math.floor(left / winnersLeft);
 }
 
+/**
+ * What of the high-hand pot no award pays once every prize has been awarded: money paid in after the
+ * last award, such as a payment confirmed late (only paid entries are in the pot: round 6), which the TD
+ * adds to a winner's prize (R6REV0-MONEY-01). 0 while prizes are still to come (nextHighHandAward gives
+ * the rest out) and when the awards add up to the pot.
+ */
+export function unawardedHighHandCents(highHand: Pick<HighHandBreakdown, "net" | "winners">, awardedCents: readonly Cents[]): Cents {
+  if (awardedCents.length === 0 || awardedCents.length < highHand.winners) return 0;
+  return Math.max(0, highHand.net - awardedCents.reduce((sum, amount) => sum + amount, 0));
+}
+
 export type HighHandAwardsProblem = {
   /** HIGH_HAND_OVER_POOL: more awarded than the pot holds; HIGH_HAND_AWARDED: every prize is awarded, so the pot is spoken for. */
   code: "HIGH_HAND_OVER_POOL" | "HIGH_HAND_AWARDED";
@@ -400,7 +458,7 @@ export interface PayoutDisplayTournament {
  * - "cancelled": a cancelled tournament pays nothing (finalize refuses it, the dashboard counts it as
  *   $0), so screens say so and show no places (P2REV1-MONEY-04).
  * - "live": any other tournament: what finalize would pay now, the v2 payouts of the current pool for
- *   as many places as there are entrants (places beyond them are not paid: legacy D28).
+ *   as many places as there are paid players (places beyond them are not paid: legacy D28).
  */
 export type PayoutDisplaySource = "snapshot" | "stored" | "unrecorded" | "cancelled" | "live";
 
@@ -489,7 +547,8 @@ function sumAmounts(rows: readonly { amountCents: Cents }[]): Cents {
  *   recorded), else, when no prize was recorded at all ("unrecorded"), its calculated pool, as the
  *   dashboard counted it before Phase 2;
  * - anything else: its current pool, never below zero.
- * `entries` may be per registration, or one row of totals: only the sums matter.
+ * `entries` may be per registration, or one row of totals of the paid entries (marked paid, with no
+ * id): only the sums matter.
  */
 export function prizeMoneyCents(
   tournament: PrizePoolInput & PayoutDisplayTournament,

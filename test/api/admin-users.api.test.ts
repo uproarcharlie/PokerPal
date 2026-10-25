@@ -43,10 +43,10 @@ function cookieOf(response: request.Response): string {
   return cookie.split(";")[0];
 }
 
-/** Who /api/auth/me says the agent is: the user's id, or the status when it is not 200. */
-async function whoAmI(agent: request.Agent): Promise<string | number> {
+/** Who /api/auth/me says the agent is: the user's id, null for nobody (signed out), or the status when it is not 200. */
+async function whoAmI(agent: request.Agent): Promise<string | null | number> {
   const response = await agent.get("/api/auth/me");
-  return response.status === 200 ? response.body.user.id : response.status;
+  return response.status === 200 ? (response.body.user?.id ?? null) : response.status;
 }
 
 describe("GET /api/admin/users", () => {
@@ -331,7 +331,7 @@ describe("PUT /api/admin/users/:userId", () => {
     expect((await other.put(`/api/admin/users/${admin.id}`).send({ role: "full_member" })).status).toBe(200);
 
     expect((await demoted.get("/api/admin/users")).status).toBe(401);
-    expect(await whoAmI(elsewhere)).toBe(401);
+    expect(await whoAmI(elsewhere)).toBeNull();
     expect((await other.get("/api/admin/users")).status).toBe(200);
   });
 
@@ -355,7 +355,7 @@ describe("PUT /api/admin/users/:userId", () => {
     await agent.put(`/api/admin/users/${disabled.id}`).send({ isActive: false });
     await agent.put(`/api/admin/users/${renamed.id}`).send({ name: "New Name" });
 
-    expect(await whoAmI(disabledSession)).toBe(401);
+    expect(await whoAmI(disabledSession)).toBeNull();
     expect(await whoAmI(renamedSession)).toBe(renamed.id);
   });
 
@@ -399,7 +399,7 @@ describe("POST /api/admin/users/:userId/impersonate", () => {
     const impersonationCookie = cookieOf(response);
     expect(impersonationCookie).not.toBe(adminCookie);
     // The session id the admin had before is gone (SEC-12).
-    expect((await request(app).get("/api/auth/me").set("Cookie", adminCookie)).status).toBe(401);
+    expect((await request(app).get("/api/auth/me").set("Cookie", adminCookie)).body).toEqual({ user: null });
 
     const me = await request(app).get("/api/auth/me").set("Cookie", impersonationCookie);
     expect(me.body.user.id).toBe(target.id);
@@ -511,7 +511,7 @@ describe("POST /api/admin/stop-impersonation", () => {
     expect(me.body).toMatchObject({ user: { id: admin.id }, impersonator: null });
     expect((await agent.get("/api/admin/users")).status).toBe(200);
     // The impersonation's session id is gone, and there is nothing left to stop.
-    expect((await request(await getApp()).get("/api/auth/me").set("Cookie", impersonationCookie)).status).toBe(401);
+    expect((await request(await getApp()).get("/api/auth/me").set("Cookie", impersonationCookie)).body).toEqual({ user: null });
     expect((await agent.post("/api/admin/stop-impersonation")).status).toBe(400);
 
     const [row] = await auditRows("impersonation.stop");
@@ -533,7 +533,7 @@ describe("POST /api/admin/stop-impersonation", () => {
     expect(response.status).toBe(401);
     expect(response.body).toMatchObject({ code: "UNAUTHENTICATED" });
     expect((await agent.get("/api/admin/users")).status).toBe(401);
-    expect(await whoAmI(agent)).toBe(401);
+    expect(await whoAmI(agent)).toBeNull();
     expect((await auditRows("impersonation.stop"))[0]).toMatchObject({ data: { endedBy: "stop", restored: false } });
   });
 });
@@ -547,7 +547,7 @@ describe("an impersonation ends with the admin's access", () => {
 
     await otherAdmin.put(`/api/admin/users/${admin.id}`).send({ isActive: false });
 
-    expect(await whoAmI(impersonating)).toBe(401);
+    expect(await whoAmI(impersonating)).toBeNull();
   });
 
   it("when the admin loses admin access any other way, /api/auth/me ends the session", async () => {
@@ -557,7 +557,7 @@ describe("an impersonation ends with the admin's access", () => {
 
     await testDb().update(users).set({ role: "full_member" }).where(eq(users.id, admin.id));
 
-    expect(await whoAmI(agent)).toBe(401);
+    expect(await whoAmI(agent)).toBeNull();
   });
 
   it("signing out records the end of the impersonation", async () => {
@@ -569,7 +569,7 @@ describe("an impersonation ends with the admin's access", () => {
 
     const [row] = await auditRows("impersonation.stop");
     expect(row).toMatchObject({ actorUserId: admin.id, targetId: target.id, data: { endedBy: "sign-out", restored: false } });
-    expect(await whoAmI(agent)).toBe(401);
+    expect(await whoAmI(agent)).toBeNull();
   });
 
   it("signing in to another account records the end of the impersonation", async () => {

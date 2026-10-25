@@ -59,13 +59,15 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 /**
- * Who is signed in, or null for nobody. Only a 401 means nobody (P3REV4-PERF-04): anything else is
- * asked again by the rule every read follows (shouldRetry, retryDelay), then thrown.
+ * Who is signed in, or null for nobody: the server answers `{ user: null }`, or a 401 as it did before
+ * (backlog item 2). Any other failure is not "nobody" (P3REV4-PERF-04): it is asked again by the rule
+ * every read follows (shouldRetry, retryDelay), then thrown.
  */
 async function readSession(signal: AbortSignal): Promise<AuthMeResponse | null> {
   for (let attempt = 0; ; attempt += 1) {
     try {
-      return await fetchSession(signal);
+      const me = await fetchSession(signal);
+      return me.user === null ? null : me;
     } catch (error) {
       if (isApiError(error) && error.status === 401) return null;
       if (signal.aborted || !shouldRetry(attempt, error)) throw error;
@@ -97,8 +99,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    */
   const forgetCachedData = useCallback(() => queryClient.clear(), [queryClient]);
 
-  // Who is signed in, at start (and again on request after a failed check). A 401 only means
-  // "nobody": no one was signed in to lose.
+  // Who is signed in, at start (and again on request after a failed check). "Nobody" here is no
+  // session ending: no one was signed in to lose.
   useEffect(() => {
     const controller = new AbortController();
     readSession(controller.signal)

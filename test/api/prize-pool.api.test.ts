@@ -1,8 +1,9 @@
 /**
  * A tournament's prize pool and AP (server/routes/prize-pool.ts, spec §5.2 #19-#20, D11-D16): the
- * public breakdown worked out on the server with shared/domain, the manual AP total / manual prize
+ * staff's breakdown worked out on the server with shared/domain (staff-only since round 6: the public
+ * page reads /api/public/tournaments/:id/prizes), the manual AP total / manual prize
  * pool (mutually exclusive, allowed while locked, refused once completed or cancelled) and the AP
- * rates. Every change is logged to the public feed without user ids and audited with the actor.
+ * rates. Every change is logged to the staff's feed without user ids and audited with the actor.
  */
 import { eq } from "drizzle-orm";
 import type request from "supertest";
@@ -49,10 +50,19 @@ describe("response types", () => {
 });
 
 describe("GET /api/tournaments/:id/prize-pool", () => {
-  it("works the pool out on the server with the shared maths, for anyone, without personal data", async () => {
-    const { tournament } = await poolTournament();
+  it.each(VISITORS)("answers a %s as the authorization rules say: the club's staff only (round 6)", async (visitor) => {
+    const { staff, tournament } = await poolTournament({}, 2);
 
-    const response = await (await anon()).get(poolPath(tournament.id));
+    const response = await (await agentFor(visitor, staff)).get(poolPath(tournament.id));
+
+    expect(response.status).toBe(MANAGER_ROUTE[visitor]);
+    if (response.status !== 200) expect(JSON.stringify(response.body)).not.toContain("rake");
+  });
+
+  it("works the pool out on the server with the shared maths, for the club's staff, without personal data", async () => {
+    const { staff, tournament } = await poolTournament();
+
+    const response = await staff.manager.agent.get(poolPath(tournament.id));
 
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({
@@ -85,10 +95,28 @@ describe("GET /api/tournaments/:id/prize-pool", () => {
     expect(findForbiddenKeys(response.body)).toEqual([]);
   });
 
-  it('labels the rake "Rake" for a club without a label, and stops calling the pool an estimate once locked', async () => {
-    const { tournament } = await poolTournament({ prizePoolLocked: true }, 2, await clubWithStaff());
+  it("counts only paid players (round 6): an unpaid sign-up adds nothing until its payment is confirmed", async () => {
+    const { staff, tournament } = await poolTournament({ rebuyAmount: "25.00" }, 4);
+    const player = await createPlayer();
+    const unpaid = await createRegistration({ tournamentId: tournament.id, playerId: player.id, paymentConfirmed: false, rebuys: 1 });
+    const agent = staff.owner.agent;
 
-    const response = await (await anon()).get(poolPath(tournament.id));
+    const before = await agent.get(poolPath(tournament.id));
+    expect(before.body.breakdown).toMatchObject({ counts: { registrations: 4, buyIns: 4, rebuys: 0 }, gross: { total: 20_000 }, net: 18_000 });
+    // A manual AP total may take no more than the paid entries brought in.
+    const tooMuch = await agent.put(`${poolPath(tournament.id)}/adjustment`).send({ mode: "ap_override", amount: "225.00" });
+    expect(tooMuch.body).toMatchObject({ code: "AP_EXCEEDS_GROSS", details: { grossCents: 20_000 } });
+
+    expect((await agent.patch(`/api/registrations/${unpaid.id}/confirm-payment`)).status).toBe(200);
+    const after = await agent.get(poolPath(tournament.id));
+    // Its $50 buy-in (less 10%) and $25 re-buy (no AP of its own) are in now.
+    expect(after.body.breakdown).toMatchObject({ counts: { registrations: 5, buyIns: 5, rebuys: 1 }, net: 25_000 });
+  });
+
+  it('labels the rake "Rake" for a club without a label, and stops calling the pool an estimate once locked', async () => {
+    const { staff, tournament } = await poolTournament({ prizePoolLocked: true }, 2, await clubWithStaff());
+
+    const response = await staff.owner.agent.get(poolPath(tournament.id));
 
     expect(response.body).toMatchObject({ rakeLabel: "Rake", locked: true, estimated: false });
   });
@@ -108,7 +136,7 @@ describe("GET /api/tournaments/:id/prize-pool", () => {
     // Settings changed after finalizing must not change what is shown as paid (D20).
     await testDb().update(tournaments).set({ buyInAmount: "500.00" }).where(eq(tournaments.id, tournament.id));
 
-    const response = await (await anon()).get(poolPath(tournament.id));
+    const response = await staff.owner.agent.get(poolPath(tournament.id));
 
     expect(response.body.display).toEqual({
       source: "snapshot",
@@ -124,13 +152,13 @@ describe("GET /api/tournaments/:id/prize-pool", () => {
   });
 
   it("shows a tournament finalized before snapshots by its stored prizes", async () => {
-    const { tournament, registrations } = await poolTournament({ status: "completed" }, 2);
+    const { staff, tournament, registrations } = await poolTournament({ status: "completed" }, 2);
     await testDb()
       .update(tournamentRegistrations)
       .set({ finalPosition: 1, prizeAmount: "60.00" })
       .where(eq(tournamentRegistrations.id, registrations[1].id));
 
-    const response = await (await anon()).get(poolPath(tournament.id));
+    const response = await staff.owner.agent.get(poolPath(tournament.id));
 
     expect(response.body.display).toEqual({
       source: "stored",
@@ -141,7 +169,9 @@ describe("GET /api/tournaments/:id/prize-pool", () => {
   });
 
   it("answers 404 for an unknown tournament", async () => {
-    const response = await (await anon()).get(poolPath(UNKNOWN_ID));
+    const { staff } = await poolTournament({}, 0);
+
+    const response = await staff.owner.agent.get(poolPath(UNKNOWN_ID));
 
     expect(response.status).toBe(404);
     expect(response.body).toEqual({ error: "Tournament not found", code: "NOT_FOUND" });
@@ -475,7 +505,7 @@ describe("PUT /api/tournaments/:id/prize-pool/rates", () => {
     expect([viaRates.status, viaTournament.status]).toEqual([200, 200]);
     expect(await row(tournament.id)).toMatchObject({ highHandRakeAmount: "4.00", rakeOverride: "20.00" });
     expect(viaTournament.body.rakeOverride).toBe("20.00");
-    expect((await (await anon()).get(poolPath(tournament.id))).body.breakdown.net).toBe(48_000);
+    expect((await staff.owner.agent.get(poolPath(tournament.id))).body.breakdown.net).toBe(48_000);
     expect((await activity(tournament.id)).map((entry) => entry.description)).toEqual([
       "AP rates changed: high hand $10 → $5",
       "AP rates changed: high hand $5 → $4",

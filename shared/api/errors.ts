@@ -93,6 +93,7 @@ export const ERROR_CODES = [
   "PLAN_CHANGED",
   "PLAN_HASH_REQUIRED",
   "DEAL_INVALID", // 409 (finalize), a deal that does not share exactly what the players still in would be paid (details { dealProblems, dealable })
+  "UNPAID_PLAYERS", // 409 (finalize, round 6), players in the field have not paid: confirm them or send excludeUnpaid (details { unpaid, activePlayers })
   // tables and seating (phase4-contracts §2)
   "TABLE_NOT_FOUND", // 404, a table that is not this tournament's
   "TABLE_LIMIT", // 409, more than 50 active tables

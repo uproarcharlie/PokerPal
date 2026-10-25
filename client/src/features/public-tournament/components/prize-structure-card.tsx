@@ -1,6 +1,7 @@
 import { Lock, Trophy } from "lucide-react";
+import { carriedInNote, type PublicPrizesDto } from "@shared/api/live-display";
 import type { PublicRegistration } from "@shared/api/public";
-import { describeDeal, type SnapshotDeal } from "@shared/domain/deal";
+import { describeDeal } from "@shared/domain/deal";
 import type { PointsRules } from "@shared/domain/points";
 import { PlayerAvatar } from "@/components/image/player-avatar";
 import { MoneyText } from "@/components/shared/money-text";
@@ -10,11 +11,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollRegion } from "@/components/shared/scroll-region";
 import { FigureValue } from "@/components/shared/query-figure";
 import { formatMoney, formatNumber, ordinal } from "@/lib/format";
-import type { TournamentMoney } from "@/lib/prize-pool";
 import { prizeTable } from "../standings";
 import { PlaceName } from "@/components/shared/podium";
 import { undistributedNote } from "@/lib/prize-pool";
-import { PoolSummary, type PoolSummaryFigures } from "@/features/prize-pool/components/public/pool-summary";
 
 /** The points rules once known, or where their requests stand. */
 export type PointsRulesFigure = PointsRules | "loading" | "failed";
@@ -22,37 +21,37 @@ export type PointsRulesFigure = PointsRules | "loading" | "failed";
 const NO_RULES: PointsRules = { trackPoints: false, pointsSystem: null, allocations: [] };
 
 interface PrizeStructureCardProps {
-  money: TournamentMoney;
+  /** The prize pool as the server works it out for the players (never the club's takings). */
+  prizes: PublicPrizesDto;
+  /** The field (not the waiting list behind a full one): who finished where, and how many are playing. */
   registrations: readonly PublicRegistration[];
   /** Whether points are shown: the tournament tracks them (`trackPoints`). */
   trackPoints: boolean;
   pointsRules: PointsRulesFigure;
   /** Asks for the points rules again, after they failed. */
   onRetryPoints: () => void;
-  /** The TD has locked the pool: the amounts are final enough to show. */
-  locked: boolean;
-  /** The deal the players still in made at the end (the finalize snapshot's), if they made one. */
-  deal?: SnapshotDeal | null;
-  /**
-   * The pool's honest breakdown (round 5, item 16: "Prize pool $600 · AP $80 · Kept by the club $50"),
-   * shown with the pool once it is revealed; it says nothing unless something was kept, carried or added.
-   */
-  summary?: PoolSummaryFigures | null;
 }
 
-/** What each place pays (and scores), from the same shared functions finalize pays with. */
-export function PrizeStructureCard({ money, registrations, trackPoints, pointsRules, onRetryPoints, locked, deal, summary }: PrizeStructureCardProps) {
-  const { display, poolCents } = money;
+/**
+ * What each place pays (and scores): the prize pool and the places the server pays from, with the money
+ * carried in from an earlier game ("Includes $200 carried over from Week 3"), and never what the club
+ * takes, keeps or adds (round 6).
+ */
+export function PrizeStructureCard({ prizes, registrations, trackPoints, pointsRules, onRetryPoints }: PrizeStructureCardProps) {
+  const { source, poolCents } = prizes;
   // Shown once the pool is locked, and always once the prizes have been paid.
-  const revealed = locked || display.source !== "live";
-  const cancelled = display.source === "cancelled";
+  const revealed = prizes.locked || source !== "live";
+  const cancelled = source === "cancelled";
   // Until the rules are known the table lists the paid places, each place's points a placeholder.
   const known = typeof pointsRules === "object";
-  const table = prizeTable(display.rows, known ? pointsRules : NO_RULES);
+  const table = prizeTable(prizes.payouts, known ? pointsRules : NO_RULES);
   const showPoints = trackPoints;
   // A deal is shown with the prizes it paid (round 5, item 2): each dealt player's prize is what they agreed.
-  const paidDeal = display.source === "snapshot" ? (deal ?? null) : null;
+  const paidDeal = prizes.deal;
   const dealt = new Set(paidDeal?.players.map((player) => player.registrationId) ?? []);
+  const carried = revealed && !cancelled ? carriedInNote(prizes.carriedIn) : null;
+  // Places beyond the paid players in the pool are not paid: while part of it is not, the places listed are one per paid player.
+  const undistributed = revealed ? undistributedNote(prizes, { paid: prizes.payouts.length, field: registrations.length }) : null;
 
   return (
     <Card>
@@ -70,7 +69,7 @@ export function PrizeStructureCard({ money, registrations, trackPoints, pointsRu
           ) : null}
         </CardTitle>
         <p className="mt-1 text-sm text-muted-foreground">
-          {display.source === "unrecorded" ? (
+          {source === "unrecorded" ? (
             <span data-testid="prizes-unrecorded">Prizes were not recorded for this tournament</span>
           ) : cancelled ? (
             <span data-testid="prizes-cancelled">Cancelled: no prizes are paid</span>
@@ -83,7 +82,11 @@ export function PrizeStructureCard({ money, registrations, trackPoints, pointsRu
             </span>
           )}
         </p>
-        {revealed && !cancelled && summary ? <PoolSummary figures={summary} className="mt-1" testId="public-pool-summary" /> : null}
+        {carried ? (
+          <p className="mt-1 text-sm text-muted-foreground" data-testid="public-carried-in">
+            {carried}
+          </p>
+        ) : null}
         {paidDeal ? (
           <p className="mt-1 text-sm text-foreground" data-testid="prizes-deal">
             <span className="font-semibold">Deal:</span> {describeDeal(paidDeal)} ({paidDeal.reason})
@@ -169,9 +172,9 @@ export function PrizeStructureCard({ money, registrations, trackPoints, pointsRu
             </Button>
           </div>
         ) : null}
-        {revealed && undistributedNote(display, registrations.length) ? (
+        {undistributed ? (
           <p className="mt-4 px-3 pb-4 text-sm text-muted-foreground sm:px-0 sm:pb-0" data-testid="undistributed">
-            {undistributedNote(display, registrations.length)}
+            {undistributed}
           </p>
         ) : null}
       </CardContent>

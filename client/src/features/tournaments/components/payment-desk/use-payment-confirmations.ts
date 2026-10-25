@@ -4,6 +4,7 @@ import { useToast } from "@/hooks/use-toast";
 import { errorMessage, hasErrorCode } from "@/lib/api/http";
 import { useConfirmPayment } from "../../staff-hooks";
 import { autoSeatText } from "../desk/auto-seat-text";
+import { highHandLeftText } from "../desk/high-hand-left";
 import type { EarlyBirdToggle } from "./payment-lists";
 
 /**
@@ -24,7 +25,9 @@ export function usePaymentConfirmations(tournamentId: string): { confirmingIds: 
       const paid = await rows.run(registrationId, () => confirmPayment.mutateAsync(registrationId));
       const seat = autoSeatText(paid.seating);
       const name = paid.player?.name ?? "The player";
-      toast({ title: "Payment Confirmed", description: seat ? `${name} has paid. ${seat}` : "Registration payment has been confirmed." });
+      const confirmed = seat ? `${name} has paid. ${seat}` : "Registration payment has been confirmed.";
+      const left = highHandLeftText(paid.highHandUnawardedCents);
+      toast({ title: "Payment Confirmed", description: left ? `${confirmed} ${left}` : confirmed });
     } catch (error) {
       // Max players are accepted (round 5, item 15): no override, the server's sentence says how to make room.
       toast({

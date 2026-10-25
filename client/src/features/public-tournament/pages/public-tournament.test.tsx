@@ -5,7 +5,7 @@ import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { server } from "@test/msw/server";
 import { pointsAllocationDto, pointsSystemDto, prizePoolSnapshotDto, seasonDto } from "@test/helpers/dto";
-import { clubDto, mockTournamentPages, registrationDto, tournamentDto } from "@test/helpers/f2-public";
+import { clubDto, mockTournamentPages, prizesDto, registrationDto, tournamentDto, visitorView } from "@test/helpers/f2-public";
 import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { CENTRAL_STARS_THEME, themeVariables } from "@shared/domain/theme";
@@ -28,13 +28,18 @@ const registration = (id: string, name: string, buyIns: number, extra: Partial<P
 /** Five buy-ins at $100 with $5 AP each: a $475 pool. */
 const registrations = [registration("r1", "Ann", 2), registration("r2", "Bob", 2), registration("r3", "Cat", 1)];
 
+/** The page as a visitor gets it: the tournament without the club's takings, and the prize pool the server works out from them. */
 function mockPage(overrides: Partial<TournamentDetailDto> = {}, regs: PublicRegistration[] = registrations) {
   server.use(
-    http.get("/api/tournaments/t1", () => HttpResponse.json(tournament(overrides))),
+    http.get("/api/tournaments/t1", () => HttpResponse.json(visitorView(tournament(overrides)))),
     http.get("/api/clubs/c1", () => HttpResponse.json(clubDto())),
     http.get("/api/tournaments/t1/registrations", () => HttpResponse.json(regs)),
+    http.get("/api/public/tournaments/t1/prizes", () => HttpResponse.json(prizesDto(tournament(overrides), regs))),
   );
 }
+
+/** Anything about the club's takings on the page: the AP, what it keeps, adds or carries over (round 6). */
+const TAKINGS_WORDS = /\bAP\b|\bRake\b|[Kk]ept by|keeps|[Aa]dded by the club|[Cc]arried over to/;
 
 function renderView() {
   return renderWithApp(<PublicTournamentView />, { path: "/tournament/t1", route: "/tournament/:id" });
@@ -61,6 +66,8 @@ function mockLiveScreens({ seated = false, clock = false }: { seated?: boolean; 
 beforeEach(() => {
   mockSignedOut();
   mockLiveScreens();
+  // A game with nothing in its pool yet, unless a test says otherwise.
+  server.use(http.get("/api/public/tournaments/t1/prizes", () => HttpResponse.json(prizesDto(tournamentDto()))));
 });
 
 describe("PublicTournamentView prize pool", () => {
@@ -81,6 +88,17 @@ describe("PublicTournamentView prize pool", () => {
 
     expect(await screen.findByText("Total prize pool: $600")).toBeInTheDocument();
     expect(screen.getByText("$300")).toBeInTheDocument();
+  });
+
+  it("counts the paid players while some of the field has not paid: their places wait for the payments, not for more players (R6REV0-MONEY-02)", async () => {
+    const field = [registration("r1", "Ann", 1), registration("r2", "Bob", 1), registration("r3", "Cat", 1)];
+    mockPage({}, field);
+    // Cat has not paid: the server's pool is Ann's and Bob's.
+    server.use(http.get("/api/public/tournaments/t1/prizes", () => HttpResponse.json(prizesDto(tournament(), field.slice(0, 2)))));
+    renderView();
+
+    expect(await screen.findByTestId("undistributed")).toHaveTextContent("Only 2 paid players: $38 of the pool is not paid out yet.");
+    expect(screen.queryByText("3rd Place")).not.toBeInTheDocument();
   });
 
   it("lists only the places finalize would pay, and says what the rest of the pool waits for (MONEY-REV-01)", async () => {
@@ -147,39 +165,48 @@ describe("PublicTournamentView prize pool", () => {
     expect(screen.getAllByText("Deal", { exact: true })).toHaveLength(2);
   });
 
-  it("says honestly where a difference between the prizes and the money available goes (round 5, item 16)", async () => {
-    // $500 in, $25 AP: $475 available. A $400 pool leaves $75, which the club keeps unless the TD says otherwise.
-    mockPage({ manualPrizePool: "400.00" });
-    const { unmount } = renderView();
-    expect(await screen.findByTestId("public-pool-summary")).toHaveTextContent("Prize pool $400· AP $25· Kept by the club $75");
-    unmount();
-
+  it("never says what the club takes, keeps, adds or carries over, whatever the TD set (round 6)", async () => {
+    // $500 in, $25 AP: $475 available. A $400 pool leaves $75 the club keeps (or carries over); $600 is $125 the club adds.
     server.use(http.get("/api/seasons/s1", () => HttpResponse.json(seasonDto({ id: "s1", name: "Winter League" }))));
-    mockPage({ manualPrizePool: "400.00", prizeDifference: "carry", seasonId: "s1" });
-    const carried = renderView();
-    await waitFor(() => expect(screen.getByTestId("public-pool-summary")).toHaveTextContent("Prize pool $400· AP $25· Carried over to Winter League $75"));
-    carried.unmount();
-
-    // A $600 pool is $125 more than came in for prizes: the club adds it.
-    mockPage({ manualPrizePool: "600.00" });
-    renderView();
-    expect(await screen.findByTestId("public-pool-summary")).toHaveTextContent("Prize pool $600· AP $25· Added by the club $125");
+    const cases: Array<[Partial<TournamentDetailDto>, string]> = [
+      [{ manualPrizePool: "400.00" }, "Total prize pool: $400"],
+      [{ manualPrizePool: "400.00", prizeDifference: "carry", seasonId: "s1" }, "Total prize pool: $400"],
+      [{ manualPrizePool: "600.00" }, "Total prize pool: $600"],
+      [{ rakeOverride: "0.00" }, "Total prize pool: $500"],
+    ];
+    for (const [overrides, pool] of cases) {
+      mockPage(overrides);
+      const { unmount } = renderView();
+      expect(await screen.findByText(pool)).toBeInTheDocument();
+      expect(document.body.textContent).not.toMatch(TAKINGS_WORDS);
+      expect(screen.queryByTestId("public-carried-in")).not.toBeInTheDocument();
+      unmount();
+    }
   });
 
-  it("says nothing more than the pool when the prizes are what is available, or before the pool is revealed", async () => {
+  it("says what was carried in from an earlier game: it is in the pool the players play for (round 6, 390 px)", async () => {
+    screenWidth(390);
+    mockPage({ carriedIn: [{ carryOverId: "co1", fromTournamentId: "t0", fromName: "Week 3", amountCents: 20_000 }] });
+    renderView();
+
+    expect(await screen.findByText("Total prize pool: $675")).toBeInTheDocument();
+    expect(screen.getByTestId("public-carried-in")).toHaveTextContent("Includes $200 carried over from Week 3");
+  });
+
+  it("says nothing more than the pool when nothing was carried in, nor before the pool is revealed", async () => {
     mockPage();
     const { unmount } = renderView();
     expect(await screen.findByText("Total prize pool: $475")).toBeInTheDocument();
-    expect(screen.queryByTestId("public-pool-summary")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("public-carried-in")).not.toBeInTheDocument();
     unmount();
 
-    mockPage({ manualPrizePool: "400.00", prizePoolLocked: false });
+    mockPage({ prizePoolLocked: false, carriedIn: [{ carryOverId: "co1", fromTournamentId: "t0", fromName: "Week 3", amountCents: 20_000 }] });
     renderView();
     expect(await screen.findByText("Prize pool will be revealed when locked")).toBeInTheDocument();
-    expect(screen.queryByTestId("public-pool-summary")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("public-carried-in")).not.toBeInTheDocument();
   });
 
-  it("says where the difference went as finalize froze it", async () => {
+  it("says what finalize paid and what was carried in, never what the club kept of it", async () => {
     const snapshot = prizePoolSnapshotDto({
       paid: [
         { position: 1, registrationId: "r2", playerId: "p-r2", playerName: "Bob", basisPoints: 6000, amountCents: 25_500 },
@@ -196,7 +223,8 @@ describe("PublicTournamentView prize pool", () => {
       carriedOverCents: 0,
       addedByClubCents: 0,
     };
-    const frozen = { ...snapshot, pool: { ...snapshot.pool, netCents: 42_500, impliedRakeCents: 7_500, difference } };
+    const carriedIn = [{ carryOverId: "co1", fromTournamentId: "t0", fromName: "Week 3", amountCents: 5_000 }];
+    const frozen = { ...snapshot, pool: { ...snapshot.pool, netCents: 42_500, impliedRakeCents: 7_500, difference, carriedIn } };
     mockPage({ status: "completed", prizePoolLocked: false, prizePoolSnapshot: frozen }, [
       registration("r1", "Ann", 2, { finalPosition: 2, prizeAmount: "170.00", isEliminated: true }),
       registration("r2", "Bob", 2, { finalPosition: 1, prizeAmount: "255.00" }),
@@ -204,7 +232,9 @@ describe("PublicTournamentView prize pool", () => {
     ]);
     renderView();
 
-    expect(await screen.findByTestId("public-pool-summary")).toHaveTextContent("Prize pool $425· AP $25· Kept by the club $50");
+    expect(await screen.findByText("Total prize pool: $425")).toBeInTheDocument();
+    expect(screen.getByTestId("public-carried-in")).toHaveTextContent("Includes $50 carried over from Week 3");
+    expect(document.body.textContent).not.toMatch(TAKINGS_WORDS);
   });
 });
 
@@ -216,14 +246,15 @@ describe("PublicTournamentView stays in step with the TD (MONEY-P2REV-02)", () =
   it("picks up a manual prize pool the TD sets after the page opened, without a reload", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let manualPrizePool: string | null = null;
-    let detailRequests = 0;
+    let prizeRequests = 0;
     server.use(
-      http.get("/api/tournaments/t1", () => {
-        detailRequests++;
-        return HttpResponse.json(tournament({ manualPrizePool }));
-      }),
+      http.get("/api/tournaments/t1", () => HttpResponse.json(visitorView(tournament({ manualPrizePool })))),
       http.get("/api/clubs/c1", () => HttpResponse.json(clubDto({ rakeLabel: null }))),
       http.get("/api/tournaments/t1/registrations", () => HttpResponse.json(registrations)),
+      http.get("/api/public/tournaments/t1/prizes", () => {
+        prizeRequests++;
+        return HttpResponse.json(prizesDto(tournament({ manualPrizePool }), registrations));
+      }),
     );
     renderView();
     expect(await screen.findByText("Total prize pool: $475")).toBeInTheDocument();
@@ -232,7 +263,26 @@ describe("PublicTournamentView stays in step with the TD (MONEY-P2REV-02)", () =
     await vi.advanceTimersByTimeAsync(LIVE_REFRESH_MS + 100);
 
     await waitFor(() => expect(screen.getByText("Total prize pool: $300")).toBeInTheDocument());
-    expect(detailRequests).toBeGreaterThan(1);
+    expect(prizeRequests).toBeGreaterThan(1);
+  });
+
+  it("shows a payment the TD confirms at the desk in the pool at the next poll: only paid players are in it (round 6)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // Ann and Bob have paid ($400 less $20 AP); Cat's buy-in is not in the pool until the TD confirms it.
+    let paid = registrations.slice(0, 2);
+    server.use(
+      http.get("/api/tournaments/t1", () => HttpResponse.json(visitorView(tournament()))),
+      http.get("/api/clubs/c1", () => HttpResponse.json(clubDto())),
+      http.get("/api/tournaments/t1/registrations", () => HttpResponse.json(registrations)),
+      http.get("/api/public/tournaments/t1/prizes", () => HttpResponse.json(prizesDto(tournament(), paid))),
+    );
+    renderView();
+    expect(await screen.findByText("Total prize pool: $380")).toBeInTheDocument();
+
+    paid = registrations;
+    await vi.advanceTimersByTimeAsync(LIVE_REFRESH_MS + 100);
+
+    await waitFor(() => expect(screen.getByText("Total prize pool: $475")).toBeInTheDocument());
   });
 });
 
@@ -583,6 +633,7 @@ describe("PublicTournamentView polling (PUB-11)", () => {
 
     expect(asked.detail()).toBe(1);
     expect(asked.registrations()).toBe(1);
+    expect(asked.prizes()).toBe(1);
   });
 
   it("fetches the results once more when the tournament it follows is finalized, even after a poll that missed them (P3REV0-PARITY-01)", async () => {

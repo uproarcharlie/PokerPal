@@ -82,11 +82,16 @@ export type ActivityEventType = (typeof ACTIVITY_EVENT_TYPES)[number];
 
 /**
  * Activity that is staff bookkeeping rather than part of the game: shown only to people who can
- * manage the tournament's club. Everyone else's feed leaves these entries out.
+ * manage the tournament's club. Everyone else's feed leaves these entries out. The prize-pool and
+ * payout changes are among them (round 6): they say what the club takes, keeps, adds or carries over
+ * (a manual AP total and its reason, money carried in or out, what a payout change leaves over), like
+ * the AP itself. The public see the pool and the places as they are now.
  */
 export const STAFF_ONLY_ACTIVITY_TYPES = [
   "payment_confirmed",
   "rake_rates_changed",
+  "prize_pool_adjusted",
+  "payouts_changed",
   "table_updated",
   "clock_time_adjusted",
   "clock_reset",

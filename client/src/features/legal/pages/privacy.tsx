@@ -64,6 +64,10 @@ export default function Privacy() {
           To keep the site secure, our servers use the network address a request comes from to limit misuse, and staff who sign in
           get a cookie that keeps them signed in. We do not use advertising or tracking cookies.
         </p>
+        <p>
+          We count visits with Cloudflare Web Analytics, which sets no cookies and does not identify you: it records which pages
+          are opened, the site a visit came from, and the kind of browser and device and the country it came from.
+        </p>
       </Section>
 
       <Section title="Why we collect it">

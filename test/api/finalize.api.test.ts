@@ -344,16 +344,6 @@ const legacyCases: LegacyCase[] = [
     ]),
   },
   {
-    name: "unpaid registrations still count toward the pool and can win (money-15; kept by spec decision D27)",
-    options: { players: 4, buyIn: "50.00", paid: [0, 1], eliminations: bustInOrder(4) },
-    expected: finishingOrder([
-      [3, "100.00", null],
-      [2, "60.00", null],
-      [1, "40.00", null],
-      [0, null, null],
-    ]),
-  },
-  {
     name: "high-hand entries stay out of the prize pool",
     options: {
       players: 4,
@@ -851,32 +841,129 @@ describe("finalize is all or nothing (data-integrity-06)", () => {
 });
 
 describe("the finalized tournament's snapshot on GET /api/tournaments/:id (P2REV1-MONEY-02, SEC-P2REV-05)", () => {
-  it("keeps its warnings, the TD's bookkeeping, for the club's staff: never unconfirmed payments or discarded requests for anyone else", async () => {
+  it("keeps its warnings, the TD's bookkeeping, for the club's staff: never who did not pay or discarded requests for anyone else", async () => {
     const { scenario, staff } = await staffedScenario({
       players: 4,
       buyIn: "50.00",
-      paid: [0, 1],
+      paid: [1, 2, 3],
       eliminations: bustInOrder(4),
     });
     await testDb()
       .insert(pendingActions)
-      .values({ tournamentId: scenario.tournament.id, playerId: scenario.players[0].id, actionType: "rebuy", timestamp: new Date() });
-    const preview = await staff.owner.agent.post(previewPath(scenario));
-    expect((await staff.owner.agent.post(finalizePath(scenario)).send({ expectedPlanHash: preview.body.planHash })).status).toBe(200);
+      .values({ tournamentId: scenario.tournament.id, playerId: scenario.players[1].id, actionType: "rebuy", timestamp: new Date() });
+    const preview = await staff.owner.agent.post(previewPath(scenario)).send({ excludeUnpaid: true });
+    const finalized = await staff.owner.agent.post(finalizePath(scenario)).send({ expectedPlanHash: preview.body.planHash, excludeUnpaid: true });
+    expect(finalized.status).toBe(200);
     const detailPath = `/api/tournaments/${scenario.tournament.id}`;
 
     for (const visitor of ["anonymous", "stranger"] as const) {
       const response = await (await agentFor(visitor, staff)).get(detailPath);
-      expect(response.body.prizePoolSnapshot, visitor).toMatchObject({ pool: { netCents: 20_000 }, paid: expect.any(Array) });
-      expect(response.body.prizePoolSnapshot, visitor).not.toHaveProperty("warnings");
-      expect(JSON.stringify(response.body), visitor).not.toMatch(/not confirmed|re-buy|discarded/);
+      expect(response.status, visitor).toBe(200);
+      expect(response.body.prizePoolSnapshot?.warnings, visitor).toBeUndefined();
+      expect(JSON.stringify(response.body), visitor).not.toMatch(/not paid|left out|re-buy|discarded/);
     }
     for (const member of ["owner", "manager", "admin"] as const) {
       const response = await (await agentFor(member, staff)).get(detailPath);
+      expect(response.body.prizePoolSnapshot, member).toMatchObject({ pool: { netCents: 15_000 } });
       expect(response.body.prizePoolSnapshot.warnings, member).toEqual(
-        expect.arrayContaining(["2 payments not confirmed", expect.stringMatching(/^1 player request still waiting will be discarded/)]),
+        expect.arrayContaining([
+          `1 player who has not paid is left out, not ranked, paid or scored: ${scenario.players[0].name}`,
+          expect.stringMatching(/^1 player request still waiting will be discarded/),
+        ]),
       );
     }
+  });
+});
+
+describe("players who have not paid (round 6: only paid players are in the prize pool)", () => {
+  /** Ten paid players and two at the front who never paid (both out first); the last one in won. */
+  const twoUnpaid = { players: 12, buyIn: "50.00", rake: { type: "percentage" as const, amount: "5.00" }, paid: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11], eliminations: bustInOrder(12) };
+
+  it("refuses to finalize while anyone in the field has not paid, naming them, and writes nothing", async () => {
+    const { scenario, agent } = await ownedScenario(twoUnpaid);
+
+    const response = await agent.post(finalizePath(scenario));
+
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({
+      code: "UNPAID_PLAYERS",
+      error: `${scenario.players[0].name} and ${scenario.players[1].name} have not paid, so are not in the prize pool: confirm their payments, or leave them out`,
+      details: {
+        unpaid: [0, 1].map((player) => ({
+          registrationId: scenario.registrations[player].id,
+          playerId: scenario.players[player].id,
+          playerName: scenario.players[player].name,
+          amountDueCents: 5_000,
+        })),
+      },
+    });
+    expect(await standings(scenario)).toEqual(unplaced(scenario));
+    expect(await tournamentStatus(scenario)).toBe("in_progress");
+    expect(await auditRows(scenario)).toEqual([]);
+  });
+
+  it("previews the refusal with the pool of the paid players and who has not paid", async () => {
+    const { scenario, agent } = await ownedScenario(twoUnpaid);
+
+    const response = await agent.post(previewPath(scenario));
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ ok: false, code: "UNPAID_PLAYERS", rows: [], prizePool: { breakdown: { net: 47_500, counts: { registrations: 10 } } } });
+    expect(response.body).not.toHaveProperty("planHash");
+    expect(response.body.unpaid.map((player: { registrationId: string }) => player.registrationId)).toEqual([0, 1].map((i) => scenario.registrations[i].id));
+  });
+
+  it("leaves them out when asked: not ranked, paid or scored, and audited", async () => {
+    const { scenario, agent } = await ownedScenario({ ...twoUnpaid, points: { participation: 10, allocations: [] }, tournament: { trackPoints: true } });
+
+    const preview = await agent.post(previewPath(scenario)).send({ excludeUnpaid: true });
+    expect(preview.body).toMatchObject({ ok: true, warnings: expect.arrayContaining([expect.stringMatching(/^2 players who have not paid are left out/)]) });
+    const response = await agent.post(finalizePath(scenario)).send({ excludeUnpaid: true, expectedPlanHash: preview.body.planHash });
+
+    expect(response.status).toBe(200);
+    const rows = await standings(scenario);
+    expect(prizes(rows).slice(0, 4)).toEqual(["238.00", "142.00", "95.00", null]);
+    expect(rows.slice(0, 2).map((row) => row.player)).toEqual([11, 10]);
+    expect(rows.filter((row) => row.position === null)).toEqual([0, 1].map((player) => ({ player, position: null, prize: null, points: null })));
+    expect(rows.filter((row) => row.points === 10)).toHaveLength(10);
+    expect(response.body.snapshot).toMatchObject({ entrants: 10, pool: { netCents: 47_500 } });
+    const [audit] = await auditRows(scenario);
+    expect(audit.data).toMatchObject({ unpaidLeftOut: [0, 1].map((i) => scenario.registrations[i].id) });
+    expect(audit.data).not.toHaveProperty("resultsCleared");
+  });
+
+  it("pays a player whose payment is confirmed before finalizing, from a pool that grew by their entry", async () => {
+    const { scenario, agent } = await ownedScenario({ players: 3, buyIn: "50.00", paid: [0, 2], eliminations: bustInOrder(3) });
+    const before = await agent.post(previewPath(scenario));
+    expect(before.body).toMatchObject({ code: "UNPAID_PLAYERS", prizePool: { breakdown: { net: 10_000 } } });
+
+    expect((await agent.patch(`/api/registrations/${scenario.registrations[1].id}/confirm-payment`)).status).toBe(200);
+    const after = await agent.post(previewPath(scenario));
+    expect(after.body).toMatchObject({ ok: true, unpaid: [], prizePool: { breakdown: { net: 15_000 } } });
+    expect((await agent.post(finalizePath(scenario)).send({ expectedPlanHash: after.body.planHash })).status).toBe(200);
+
+    expect(prizes(await standings(scenario))).toEqual(["75.00", "45.00", "30.00"]);
+  });
+
+  it("clears the place, prize and points a correction leaves out, and audits it", async () => {
+    const { scenario, agent } = await ownedScenario({ players: 4, buyIn: "50.00", eliminations: bustInOrder(4) });
+    expect((await agent.post(finalizePath(scenario))).status).toBe(200);
+    // Player 0 (4th) turns out never to have paid.
+    await setRegistration(scenario, 0, { paymentConfirmed: false, pointsAwarded: 3 });
+
+    const preview = await agent.post(previewPath(scenario)).send({ force: true, excludeUnpaid: true });
+    expect(preview.body.rows).toHaveLength(3);
+    const response = await agent.post(finalizePath(scenario)).send({ force: true, excludeUnpaid: true, expectedPlanHash: preview.body.planHash });
+
+    expect(response.status).toBe(200);
+    expect(await standings(scenario)).toEqual([
+      { player: 3, position: 1, prize: "75.00", points: null },
+      { player: 2, position: 2, prize: "45.00", points: null },
+      { player: 1, position: 3, prize: "30.00", points: null },
+      { player: 0, position: null, prize: null, points: null },
+    ]);
+    const audits = await auditRows(scenario);
+    expect(audits.at(-1)).toMatchObject({ action: "tournament.refinalize", data: { resultsCleared: [scenario.registrations[0].id] } });
   });
 });
 
@@ -886,7 +973,6 @@ describe("POST /api/tournaments/:id/finalize/preview", () => {
       players: 10,
       buyIn: "50.00",
       rake: { type: "percentage", amount: "5.00" },
-      paid: [0, 1, 2, 3, 4, 5, 6, 7],
       eliminations: bustInOrder(10),
     });
 
@@ -898,7 +984,8 @@ describe("POST /api/tournaments/:id/finalize/preview", () => {
       requiresForce: false,
       planHash: expect.stringMatching(/^[0-9a-f]{32}$/),
       activePlayers: [{ registrationId: scenario.registrations[9].id, playerName: scenario.players[9].name }],
-      warnings: ["The prize pool is not locked", "2 payments not confirmed"],
+      warnings: ["The prize pool is not locked"],
+      unpaid: [],
       previous: null,
       prizePool: { tournamentId: scenario.tournament.id, breakdown: { net: 47_500 }, display: { source: "live" } },
     });

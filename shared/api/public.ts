@@ -3,6 +3,13 @@
  * so a column added later stays private until it is listed here. No public body may carry email,
  * phone, userId, passwordHash, ownerId or any other user id (FORBIDDEN_PUBLIC_KEYS); the server's
  * PII deep-scan test runs `findForbiddenKeys` over every public response.
+ *
+ * Nor what the club takes (round 6, the owner: "Don't show the rake or what is kept by the club"): its
+ * AP, its rates, a manual AP total or prize pool and the reason for it, what it keeps, adds or carries
+ * over (FORBIDDEN_TAKINGS_KEYS). Only people who run the club are sent those; everyone else, and every
+ * screen in the room (the TV), gets the prize pool and the payouts the server works out from them
+ * (shared/api/live-display: PublicPrizesDto, LiveDisplayDto.money), and the money carried in from an
+ * earlier game.
  */
 import { z } from "zod";
 import type {
@@ -31,29 +38,32 @@ export const FORBIDDEN_PUBLIC_KEYS = [
   "byUserId",
 ] as const;
 
+/** Paths of every key of `keys` in `value`, at any depth, JSON text inside strings included. */
+function findKeys(keys: ReadonlySet<string>, value: unknown, path: string): string[] {
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text.startsWith("{") && !text.startsWith("[")) return [];
+    try {
+      return findKeys(keys, JSON.parse(text), `${path}<json>`);
+    } catch {
+      return [];
+    }
+  }
+  if (Array.isArray(value)) return value.flatMap((item, i) => findKeys(keys, item, `${path}[${i}]`));
+  if (typeof value !== "object" || value === null) return [];
+  return Object.entries(value).flatMap(([key, child]) => {
+    const childPath = path ? `${path}.${key}` : key;
+    return [...(keys.has(key) ? [childPath] : []), ...findKeys(keys, child, childPath)];
+  });
+}
+
 const FORBIDDEN: ReadonlySet<string> = new Set(FORBIDDEN_PUBLIC_KEYS);
 
 /**
  * Paths (e.g. "[0].player.phone") of every forbidden key in `value`, including inside JSON-encoded
  * string fields such as activity_log.event_data. Empty when the body is safe to serve publicly.
  */
-export function findForbiddenKeys(value: unknown, path = ""): string[] {
-  if (typeof value === "string") {
-    const text = value.trim();
-    if (!text.startsWith("{") && !text.startsWith("[")) return [];
-    try {
-      return findForbiddenKeys(JSON.parse(text), `${path}<json>`);
-    } catch {
-      return [];
-    }
-  }
-  if (Array.isArray(value)) return value.flatMap((item, i) => findForbiddenKeys(item, `${path}[${i}]`));
-  if (typeof value !== "object" || value === null) return [];
-  return Object.entries(value).flatMap(([key, child]) => {
-    const childPath = path ? `${path}.${key}` : key;
-    return [...(FORBIDDEN.has(key) ? [childPath] : []), ...findForbiddenKeys(child, childPath)];
-  });
-}
+export const findForbiddenKeys = (value: unknown): string[] => findKeys(FORBIDDEN, value, "");
 
 /** `keys` of `row` and nothing else. */
 export function pickFields<T extends object, K extends keyof T>(row: T, keys: readonly K[]): Pick<T, K> {
@@ -101,7 +111,11 @@ export const PUBLIC_SEASON_FIELDS = [
 ] as const satisfies readonly (keyof Season)[];
 export type PublicSeason = Json<Pick<Season, (typeof PUBLIC_SEASON_FIELDS)[number]>>;
 
-/** Every tournament column except the audit user ids and the (large) finalize snapshot. */
+/**
+ * A tournament as anyone may see it: every column except the audit user ids, the (large) finalize
+ * snapshot and the club's takings (TOURNAMENT_TAKINGS_FIELDS). The money carried into its pool from an
+ * earlier game (`carriedIn`, round 5 item 16) is public: it is what players play for.
+ */
 export const PUBLIC_TOURNAMENT_FIELDS = [
   "id",
   "name",
@@ -119,18 +133,10 @@ export const PUBLIC_TOURNAMENT_FIELDS = [
   "maxAddons",
   "rebuyOrAddon",
   "rebuyPeriodMinutes",
-  "rakeType",
-  "rakeAmount",
-  "rebuyRakeType",
-  "rebuyRakeAmount",
-  "addonRakeType",
-  "addonRakeAmount",
   "payoutStructure",
   "customPayouts",
   "enableHighHand",
   "highHandAmount",
-  "highHandRakeType",
-  "highHandRakeAmount",
   "highHandPayouts",
   "enableLateRegistration",
   "trackPoints",
@@ -138,10 +144,8 @@ export const PUBLIC_TOURNAMENT_FIELDS = [
   "maxPlayers",
   "prizePoolLocked",
   "prizePoolLockedAt",
+  // A prize pool fixed by hand is what the players play for, as the pool shown is.
   "manualPrizePool",
-  "rakeOverride",
-  "prizePoolAdjustmentReason",
-  "prizePoolAdjustedAt",
   "finalizedAt",
   "useClubAddress",
   "address",
@@ -152,12 +156,72 @@ export const PUBLIC_TOURNAMENT_FIELDS = [
   "autoSeat",
   "tableShape",
   "createdAt",
-  // Round 5 item 16: where a difference between the prizes as set and the money available goes, and the
-  // money carried into the pool (shared/domain/prize-difference), so every screen pays as finalize does.
-  "prizeDifference",
   "carriedIn",
 ] as const satisfies readonly (keyof Tournament)[];
-export type PublicTournament = Json<Pick<Tournament, (typeof PUBLIC_TOURNAMENT_FIELDS)[number]>>;
+
+/**
+ * What the club takes of a tournament, and how (round 6): its AP rates (buy-in, re-buy, add-on and
+ * high hand), a manual AP total, the reason and time the pool was last adjusted, and where a
+ * difference between the prizes as set and the money available goes (round 5 item 16). Sent only to
+ * someone who runs the club (the server's toPublicTournament), for the AP panel, the payout editor and
+ * the tournament form.
+ */
+export const TOURNAMENT_TAKINGS_FIELDS = [
+  "rakeType",
+  "rakeAmount",
+  "rebuyRakeType",
+  "rebuyRakeAmount",
+  "addonRakeType",
+  "addonRakeAmount",
+  "highHandRakeType",
+  "highHandRakeAmount",
+  "rakeOverride",
+  "prizePoolAdjustmentReason",
+  "prizePoolAdjustedAt",
+  "prizeDifference",
+] as const satisfies readonly (keyof Tournament)[];
+export type TournamentTakings = Json<Pick<Tournament, (typeof TOURNAMENT_TAKINGS_FIELDS)[number]>>;
+
+/**
+ * A tournament as the API answers it: the public fields, and the takings only for a viewer who runs its
+ * club (absent for everyone else, so a public page can never show them by mistake).
+ */
+export type PublicTournament = Json<Pick<Tournament, (typeof PUBLIC_TOURNAMENT_FIELDS)[number]>> & Partial<TournamentTakings>;
+
+/**
+ * Keys that tell what the club takes (round 6): the takings columns, and the figures the prize-pool
+ * maths, the finalize snapshot, the TV and the activity feed work them into (the AP itself, the gross
+ * the pool is taken from, how the pool was set, what was kept, added or carried over, and to where).
+ * None may appear in a body sent to someone who does not run the club, nor in any body the TV or the
+ * public prize pool is sent, whoever looks: the server's no-takings scan runs `findTakingsKeys` over
+ * every public response. The club's name for its take (`rakeLabel`) is not a figure, and stays public.
+ */
+export const FORBIDDEN_TAKINGS_KEYS = [
+  ...TOURNAMENT_TAKINGS_FIELDS,
+  "rake",
+  "impliedRake",
+  "impliedRakeCents",
+  "rakeCalculatedCents",
+  "rakeOverrideCents",
+  "netAfterAp",
+  "netSource",
+  "gross",
+  "grossCents",
+  "difference",
+  "keptByClubCents",
+  "carriedOverCents",
+  "addedByClubCents",
+  "addedToPrizesCents",
+  "carryTarget",
+  "apCents",
+  "clubAddedCents",
+  "adjustment",
+] as const;
+
+const TAKINGS: ReadonlySet<string> = new Set(FORBIDDEN_TAKINGS_KEYS);
+
+/** Paths of every takings key in `value` (FORBIDDEN_TAKINGS_KEYS), as findForbiddenKeys finds personal data. */
+export const findTakingsKeys = (value: unknown): string[] => findKeys(TAKINGS, value, "");
 
 /**
  * Registrations hold no personal data; the player is reduced to PublicPlayer. Whether an entry has

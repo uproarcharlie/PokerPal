@@ -419,6 +419,8 @@ describe("isLiveApiRequest", () => {
     expect(live("GET", "/public/tournaments/t1/seating")).toBe(true);
     expect(live("GET", "/public/seasons/s1/leaderboard")).toBe(true);
     expect(live("GET", "/tournaments/t1/seating")).toBe(true);
+    // Round 6: the public page polls the pool the server works out for it.
+    expect(live("GET", "/public/tournaments/t1/prizes")).toBe(true);
     expect(live("GET", "/public/tournaments/t1/players")).toBe(false);
     expect(live("GET", "/seasons/s1/leaderboard")).toBe(false);
   });

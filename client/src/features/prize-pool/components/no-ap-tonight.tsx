@@ -9,7 +9,7 @@ import type { PrizePoolDto } from "@shared/api/prize-pool";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { useAdjustPrizePool } from "../staff-hooks";
 
-/** The reason "No AP tonight" stores: the public feed says "AP set manually to $0 (the rates give $230) - No AP tonight". */
+/** The reason "No AP tonight" stores: the staff's feed says "AP set manually to $0 (the rates give $230) - No AP tonight". */
 const NO_AP_REASON = "No AP tonight";
 
 /** Whether the AP is taken off for tonight: a manual AP total of $0 (and no pool fixed by hand, which would replace it). */

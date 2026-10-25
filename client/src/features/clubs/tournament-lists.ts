@@ -1,6 +1,18 @@
 import type { TournamentListItemDto } from "@shared/api/tournaments";
+import { isClosedStatus } from "@shared/domain/tournaments";
 
 type Listed = Pick<TournamentListItemDto, "status" | "startDateTime">;
+
+type Counted = Pick<TournamentListItemDto, "status" | "registeredCount" | "waitingListCount" | "maxPlayers">;
+
+/**
+ * "18 / 18 players · 1 waiting": the field against Max players, as the server counts it, and while the
+ * tournament is open the waiting list behind it, never in the field ("19 / 18": round 5, item 15).
+ */
+export function fieldCountText({ status, registeredCount, waitingListCount, maxPlayers }: Counted): string {
+  const waiting = isClosedStatus(status) ? 0 : waitingListCount;
+  return `${registeredCount - waitingListCount} / ${maxPlayers} players${waiting > 0 ? ` · ${waiting} waiting` : ""}`;
+}
 
 const startTime = (tournament: Listed) => new Date(tournament.startDateTime).getTime();
 

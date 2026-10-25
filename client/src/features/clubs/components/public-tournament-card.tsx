@@ -6,6 +6,7 @@ import { MoneyText } from "@/components/shared/money-text";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatDay, formatTime } from "@/lib/format";
+import { fieldCountText } from "../tournament-lists";
 
 /** How a club's public page names a status where it differs from the staff wording. */
 const PUBLIC_LABELS: Readonly<Record<string, string | undefined>> = { in_progress: "Live", scheduled: "Upcoming" };
@@ -41,7 +42,7 @@ export function PublicTournamentCard({ tournament, timeZone, showTime = true }: 
             </span>
             <span className="flex items-center gap-1">
               <Users className="h-4 w-4" aria-hidden="true" />
-              {tournament.maxPlayers} max players
+              {fieldCountText(tournament)}
             </span>
           </p>
         </div>

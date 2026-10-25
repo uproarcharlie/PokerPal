@@ -18,3 +18,16 @@ export function keepOpenForNotifications<E extends Event>(handler?: (event: E) =
     if (isInNotificationsRegion(event.target)) event.preventDefault();
   };
 }
+
+/**
+ * Marks a phone sheet's footer (its Save or Confirm, kept in view): the toaster keeps its toasts above
+ * it, so a refusal never hides the button to press again (round 6, B3).
+ */
+export const SHEET_FOOTER_ATTRIBUTE = "data-sheet-footer";
+
+/**
+ * Set by the toaster on the open dialog or sheet while toasts stand over its foot: how much of it they
+ * cover ("120px"). A phone sheet's scrolling body (PhoneSheetBody) ends that far above, so no row of it
+ * is ever under a toast, and its last rows still scroll into view (R6REV1-PHONE-03).
+ */
+export const TOAST_CLEARANCE_VARIABLE = "--toast-clearance";

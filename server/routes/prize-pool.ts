@@ -16,7 +16,7 @@ import { changePayouts } from "../services/payouts";
 import { adjustPrizePool, changeRakeRates, getPrizePool } from "../services/prize-pool";
 
 /**
- * A tournament's prize pool and AP (spec §5.2 #19-#20): the public breakdown, and the staff's manual
+ * A tournament's prize pool and AP (spec §5.2 #19-#20), all the club staff's: the breakdown, the manual
  * AP total / manual prize pool, AP rates and payouts (round 5's payout editor), and money carried over
  * from earlier tournaments (round 5, item 16). The staff endpoints are open until the tournament is
  * completed or cancelled (409 TOURNAMENT_CLOSED), even while the pool is locked (D14).
@@ -24,9 +24,15 @@ import { adjustPrizePool, changeRakeRates, getPrizePool } from "../services/priz
 export function prizePoolRoutes(): Router {
   const router = Router();
 
-  router.get("/api/tournaments/:id/prize-pool", asyncHandler(async (req, res) => {
-    res.json(await getPrizePool(req.params.id));
-  }));
+  // The staff's breakdown (the AP, its rates and reason, what the club keeps): the public page reads
+  // GET /api/public/tournaments/:id/prizes instead (round 6).
+  router.get(
+    "/api/tournaments/:id/prize-pool",
+    requireClubManager(clubFrom.tournament()),
+    asyncHandler(async (req, res) => {
+      res.json(await getPrizePool(req.params.id));
+    }),
+  );
 
   router.put(
     "/api/tournaments/:id/prize-pool/adjustment",

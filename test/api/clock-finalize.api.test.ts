@@ -65,7 +65,7 @@ describe("finalize and the clock", () => {
     expect(display.body).toMatchObject({
       tournament: { status: "completed" },
       clock: { status: "finished", undo: null },
-      viewer: { canControl: false, canChangeDisplay: false, clockKeyIssuedAt: null, clockKeyExpiresAt: null },
+      viewer: { canControl: false, clockKeyIssuedAt: null, clockKeyExpiresAt: null },
     });
   });
 

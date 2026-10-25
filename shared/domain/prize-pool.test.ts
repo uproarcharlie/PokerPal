@@ -6,8 +6,9 @@ import { legacyFigures, legacyPayouts } from "@test/helpers/legacy-money";
 import { PAYOUT_STRUCTURES } from "./payouts";
 import {
   amountDueCents,
-  computePrizePool,
+  computePrizePool as computeAnyPool,
   DEFAULT_RAKE_LABEL,
+  hasPaid,
   highHandAwardsProblem,
   nextHighHandAward,
   paidPercentage,
@@ -15,12 +16,25 @@ import {
   poolEntries,
   prizeMoneyCents,
   rakeLabel,
+  recordedEntryCounts,
   splitHighHandAward,
+  unawardedHighHandCents,
   type EntryInput,
   type PrizePoolBreakdown,
   type PrizePoolInput,
   type StoredResultInput,
+  unpaidEntries,
 } from "./prize-pool";
+
+/** An entry whose payment the TD confirmed, unless it says otherwise. */
+const paidUp = <T extends EntryInput>(entry: T): T => ({ paymentConfirmed: true, ...entry });
+
+/**
+ * Only paid entries are in a pool (round 6, poolEntries). The figures in this file are about everything
+ * else, so their entries have paid unless they say they have not; "paid players only" below tests the
+ * rule itself with computeAnyPool.
+ */
+const computePrizePool = (settings: PrizePoolInput, entries: readonly EntryInput[]) => computeAnyPool(settings, entries.map(paidUp));
 
 /** The pool the club's rates alone would give (gross less the calculated AP): what the legacy screens worked out. */
 const netFromRates = (pool: Pick<PrizePoolBreakdown, "gross" | "rake">) => pool.gross.total - pool.rake.calculated;
@@ -589,6 +603,89 @@ describe("computePrizePool: the high-hand pot", () => {
   });
 });
 
+describe("computePrizePool: paid players only (round 6, the owner's decision of 2026-10-26)", () => {
+  const settings = () =>
+    tournament({ rebuyAmount: "25.00", addonAmount: "20.00", highHandAmount: "10.00", highHandRakeType: "none", rakeType: "fixed", rakeAmount: "5.00" });
+  const entry = (id: string, paymentConfirmed: boolean | null | undefined, extra: Partial<EntryInput> = {}): EntryInput & { id: string } => ({
+    id,
+    registrationTime: new Date(Number(id.slice(1)) * 60_000),
+    buyIns: 1,
+    paymentConfirmed,
+    ...extra,
+  });
+
+  it("counts only the entries whose payment is confirmed: their buy-ins, re-buys, add-ons and high-hand entry", () => {
+    const entries = [
+      entry("r1", true, { rebuys: 1, addons: 1, enteringHighHands: true }),
+      entry("r2", true),
+      // Unpaid: still playing (a re-buy, the high hand), but none of it is in the pool until the TD confirms it.
+      entry("r3", false, { rebuys: 2, addons: 1, enteringHighHands: true }),
+      entry("r4", null),
+    ];
+    const pool = computeAnyPool(settings(), entries);
+    expect(pool.counts).toEqual({ registrations: 2, buyIns: 2, rebuys: 1, addons: 1, highHandEntrants: 1 });
+    expect(pool.gross).toEqual({ buyIn: 10_000, rebuy: 2_500, addon: 2_000, total: 14_500 });
+    expect(pool.rake.applied).toBe(1_000);
+    expect(pool.net).toBe(13_500);
+    expect(pool.highHand).toMatchObject({ entrants: 1, gross: 1_000, net: 1_000 });
+    expect(poolEntries(settings(), entries).map((e) => e.id)).toEqual(["r1", "r2"]);
+  });
+
+  it("raises the pool as each payment is confirmed", () => {
+    const entries = [entry("r1", true), entry("r2", false), entry("r3", false)];
+    const before = computeAnyPool(settings(), entries).net;
+    const after = computeAnyPool(settings(), entries.map((e) => (e.id === "r2" ? { ...e, paymentConfirmed: true } : e))).net;
+    expect([before, after]).toEqual([4_500, 9_000]);
+  });
+
+  it("is $0 until anyone has paid, and counts nothing for entries that carry no payment status (a public list)", () => {
+    expect(computeAnyPool(settings(), [entry("r1", false), entry("r2", false)])).toMatchObject({ net: 0, payouts: [] });
+    expect(computeAnyPool(settings(), [{ buyIns: 3 }, { id: "x", buyIns: 1 }]).counts.buyIns).toBe(0);
+  });
+
+  it("leaves the waiting list out (round 5, item 15): unpaid sign-ups beyond Max players are neither in the pool nor unpaid players", () => {
+    // 20 sign-ups for 18 places, the first 15 paid: 15 in the pool, 3 in the field still to pay, 2 waiting.
+    const entries = Array.from({ length: 20 }, (_, i) => entry(`r${i + 10}`, i < 15));
+    const max = tournament({ maxPlayers: 18 });
+    expect(computeAnyPool(max, entries).counts).toMatchObject({ registrations: 15, buyIns: 15 });
+    expect(unpaidEntries(max, entries).map((e) => e.id)).toEqual(["r25", "r26", "r27"]);
+    expect(unpaidEntries(tournament(), entries)).toHaveLength(5);
+    // A registration list from the API carries its place on the list.
+    const listed = entries.map((e, i) => ({ ...e, waitingListPosition: i >= 18 ? i - 17 : null }));
+    expect(unpaidEntries(max, listed)).toHaveLength(3);
+  });
+
+  it("still counts every entry recorded in the field for a re-pricing, paid or not", () => {
+    const entries = [entry("r1", true, { rebuys: 2 }), entry("r2", false, { rebuys: 1, enteringHighHands: true }), entry("r3", false)];
+    expect(recordedEntryCounts(tournament({ maxPlayers: 2 }), entries)).toEqual({ registrations: 2, buyIns: 2, rebuys: 3, addons: 0, highHandEntrants: 1 });
+    expect(computeAnyPool(tournament({ maxPlayers: 2 }), entries).counts).toEqual({ registrations: 1, buyIns: 1, rebuys: 2, addons: 0, highHandEntrants: 0 });
+  });
+
+  it("changes no tournament completed before snapshots: it counts its field as it was paid", () => {
+    // Before Phase 2 nobody had to confirm a payment: these were the prizes, though never recorded.
+    const legacy = { ...settings(), status: "completed", prizePoolSnapshot: null };
+    const entries = [entry("r1", false), entry("r2", null), entry("r3", true)];
+    const pool = computeAnyPool(legacy, entries);
+    expect(pool.counts.buyIns).toBe(3);
+    expect(payoutsForDisplay(legacy, pool, entries).source).toBe("unrecorded");
+    expect(prizeMoneyCents(legacy, [{ buyIns: 3, paymentConfirmed: false }], 0)).toBe(13_500);
+    // Finalized since: shown from its snapshot; while it runs, paid players only.
+    expect(computeAnyPool({ ...legacy, prizePoolSnapshot: { pool: { netCents: 4_500 }, paid: [] } }, entries).counts.buyIns).toBe(1);
+    expect(computeAnyPool({ ...legacy, status: "in_progress" }, entries).counts.buyIns).toBe(1);
+  });
+
+  it("is the pool of the paid entries alone, whatever else has signed up", () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.record({ buyIns: fc.integer({ min: 0, max: 3 }), rebuys: fc.integer({ min: 0, max: 3 }), paymentConfirmed: fc.option(fc.boolean()) }), { maxLength: 12 }),
+        (entries) => {
+          expect(computeAnyPool(settings(), entries)).toEqual(computeAnyPool(settings(), entries.filter(hasPaid)));
+        },
+      ),
+    );
+  });
+});
+
 describe("computePrizePool: entries and payouts", () => {
   it("counts null entries as 0, as today's `sum + null` does", () => {
     const pool = computePrizePool(tournament(), [
@@ -598,21 +695,6 @@ describe("computePrizePool: entries and payouts", () => {
     ]);
     expect(pool.counts).toEqual({ registrations: 3, buyIns: 1, rebuys: 0, addons: 0, highHandEntrants: 0 });
     expect(pool.gross.total).toBe(5_000);
-  });
-
-  it("leaves the waiting list out of the pool (round 5, item 15: the lead's default until the owner answers)", () => {
-    // 20 sign-ups for 18 places, 2 of them unpaid at the back: 18 buy-ins count.
-    const entries = Array.from({ length: 20 }, (_, i) => ({ id: `r${i + 10}`, registrationTime: new Date(i * 60_000), buyIns: 1, paymentConfirmed: i < 18 }));
-    const pool = computePrizePool(tournament({ maxPlayers: 18 }), entries);
-    expect(pool.counts).toMatchObject({ registrations: 18, buyIns: 18 });
-    expect(pool.gross.total).toBe(90_000);
-    expect(poolEntries({ maxPlayers: 18 }, entries)).toHaveLength(18);
-    // Unpaid sign-ups inside Max players still count, as they always have; so does everyone without a Max players.
-    expect(computePrizePool(tournament({ maxPlayers: 20 }), entries).counts.buyIns).toBe(20);
-    expect(computePrizePool(tournament(), entries).counts.buyIns).toBe(20);
-    // A registration list from the API carries its place on the list.
-    const listed = entries.map((entry, i) => ({ buyIns: 1, id: entry.id, waitingListPosition: i === 0 ? 1 : null }));
-    expect(computePrizePool(tournament({ maxPlayers: 18 }), listed).counts.buyIns).toBe(19);
   });
 
   it("pays nothing before anyone has entered", () => {
@@ -1264,6 +1346,21 @@ describe("highHandAwardsProblem (MONEY-P2REV-05)", () => {
   });
 });
 
+describe("unawardedHighHandCents (R6REV0-MONEY-01)", () => {
+  it("is what a pot that grew after the last prize was awarded holds beyond the awards", () => {
+    // 8 paid × $5 = $40 to one winner, then a ninth entrant's payment is confirmed: $45 in the pot.
+    expect(unawardedHighHandCents({ net: 4_500, winners: 1 }, [4_000])).toBe(500);
+    expect(unawardedHighHandCents({ net: 9_000, winners: 2 }, [4_000, 4_000])).toBe(1_000);
+  });
+
+  it("is nothing while prizes are still to come, before any award, or when the awards add up to the pot or more", () => {
+    expect(unawardedHighHandCents({ net: 9_000, winners: 2 }, [4_000])).toBe(0);
+    expect(unawardedHighHandCents({ net: 4_500, winners: 1 }, [])).toBe(0);
+    expect(unawardedHighHandCents({ net: 4_000, winners: 1 }, [4_000])).toBe(0);
+    expect(unawardedHighHandCents({ net: 4_000, winners: 1 }, [5_000])).toBe(0);
+  });
+});
+
 describe("amountDueCents (money-18)", () => {
   const prices = { buyInAmount: "50.00", rebuyAmount: "40.00", addonAmount: "25.50", highHandAmount: "20.00" };
   const entry = { buyIns: 1, rebuys: 0, addons: 0, enteringHighHands: false };
@@ -1293,7 +1390,7 @@ describe("amountDueCents (money-18)", () => {
 });
 
 describe("prizeMoneyCents: one tournament's share of a total such as the dashboard's", () => {
-  const entries = [{ buyIns: 2 }, { buyIns: 1, rebuys: 2 }, { buyIns: 1, addons: 1 }, { buyIns: 1 }];
+  const entries = [{ buyIns: 2 }, { buyIns: 1, rebuys: 2 }, { buyIns: 1, addons: 1 }, { buyIns: 1 }].map(paidUp);
   const open = tournament({ buyInAmount: "50.00", rebuyAmount: "25.00", addonAmount: "20.00", rakeType: "percentage", rakeAmount: "10.00" });
 
   it("counts an open tournament's current pool, with each pot's own rake", () => {
@@ -1302,13 +1399,19 @@ describe("prizeMoneyCents: one tournament's share of a total such as the dashboa
   });
 
   it("gives the same answer for one row of totals as for the registrations", () => {
-    expect(prizeMoneyCents({ ...open, status: "in_progress" }, [{ buyIns: 5, rebuys: 2, addons: 1 }], 0)).toBe(
+    expect(prizeMoneyCents({ ...open, status: "in_progress" }, [{ buyIns: 5, rebuys: 2, addons: 1, paymentConfirmed: true }], 0)).toBe(
       prizeMoneyCents({ ...open, status: "in_progress" }, entries, 0),
     );
   });
 
+  it("counts only paid entries (round 6): a row of totals counts when it is marked paid", () => {
+    const unpaid = { buyIns: 3, rebuys: 1, addons: 1, paymentConfirmed: false };
+    expect(prizeMoneyCents({ ...open, status: "in_progress" }, [...entries, unpaid], 0)).toBe(29_500);
+    expect(prizeMoneyCents({ ...open, status: "in_progress" }, [{ buyIns: 5, rebuys: 2, addons: 1 }], 0)).toBe(0);
+  });
+
   it("never counts an open pool below zero", () => {
-    expect(prizeMoneyCents({ ...tournament({ rakeType: "fixed", rakeAmount: "60.00" }), status: "scheduled" }, [{ buyIns: 1 }], 0)).toBe(0);
+    expect(prizeMoneyCents({ ...tournament({ rakeType: "fixed", rakeAmount: "60.00" }), status: "scheduled" }, [paidUp({ buyIns: 1 })], 0)).toBe(0);
   });
 
   it("counts what a completed tournament paid: its snapshot, else its stored prizes, never its rates", () => {

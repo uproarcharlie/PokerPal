@@ -158,14 +158,16 @@ export function userOrVisitorKey(req: Request): string {
  * the prize pool that changes with them), the TD's desk pages (pending and confirmed registrations,
  * pending actions every 3 s), and Phase 4's live screens: the TV clock and the TD's clock panel
  * (the display, every 3–5 s), the TD's seating (10 s), the seat finder (15 s) and the season
- * leaderboard behind the TV's QR code (60 s). They are counted by `live`, not `globalApi`, so polling
+ * leaderboard behind the TV's QR code (60 s), and round 6's public prize pool (the pool and payouts
+ * the server works out for the public page, polled with its registrations). They are counted by
+ * `live`, not `globalApi`, so polling
  * never uses up the budget that page loads, sign-ins and QR sign-ups draw on. Any endpoint the client
  * starts polling belongs here. Case-insensitive, as Express's routing is.
  */
 const LIVE_API_PATHS: readonly RegExp[] = [
   /^\/api\/tournaments\/[^/]+\/?$/i,
   /^\/api\/tournaments\/[^/]+\/(?:registrations|activity|prize-pool|pending-registrations|confirmed-registrations|pending-actions|seating)\/?$/i,
-  /^\/api\/public\/tournaments\/[^/]+\/(?:display|seating)\/?$/i,
+  /^\/api\/public\/tournaments\/[^/]+\/(?:display|seating|prizes)\/?$/i,
   /^\/api\/public\/seasons\/[^/]+\/leaderboard\/?$/i,
 ];
 

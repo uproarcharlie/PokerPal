@@ -2,7 +2,8 @@
  * GET /api/dashboard/stats: the admin dashboard's four headline numbers, for the clubs the viewer
  * owns or manages (every club for an admin), so no one sees another club's totals (MONEY-23). The prize
  * money uses shared/domain, as finalize does (money-14): cancelled tournaments add nothing, completed
- * ones what they paid, any other its current pool.
+ * ones what they paid, any other its current pool: its paid players' entries only (round 6), with money
+ * carried in and a difference added to the prizes.
  */
 import type { DashboardStatsDto } from "@shared/api/dashboard";
 import { toCents } from "@shared/domain/money";
@@ -24,7 +25,9 @@ export async function dashboardStats(user: AuthUser): Promise<DashboardStatsDto>
   let prizeCents = 0;
   for (const tournament of tournaments) {
     const entries = totals.get(tournament.id);
-    prizeCents += prizeMoneyCents(tournament, entries ? [entries] : [], toCents(entries?.prizes));
+    // One row of totals each for the paid and the unpaid entries: the pool decides which it counts (poolEntries).
+    const rows = entries ? [{ ...entries.paid, paymentConfirmed: true }, { ...entries.unpaid, paymentConfirmed: false }] : [];
+    prizeCents += prizeMoneyCents(tournament, rows, toCents(entries?.prizes));
   }
 
   return {

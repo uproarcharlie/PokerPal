@@ -87,9 +87,7 @@ export const clockDisplaySettingsSchema = z.object({
   /** The prize pool: always, only once the pool is locked (the default: no disputes over an estimate), or never. */
   showPrizePool: z.enum(["always", "when_locked", "never"]).default("when_locked"),
   showPayouts: z.boolean().default(true),
-  /** The club's take, under its label ("AP"). */
-  showAp: z.boolean().default(false),
-  /** The average stack; off, the chips in play are not counted either. */
+  /** The average stack (the chips in play have their own switch, showChipsInPlay). */
   showAverageStack: z.boolean().default(true),
   /** Where the QR code leads: the season leaderboard (falls back to the tournament page), the tournament, seat finder, or no QR. */
   qrTarget: z.enum(["season", "tournament", "seats", "none"]).default("season"),
@@ -102,7 +100,7 @@ export const clockDisplaySettingsSchema = z.object({
   showRebuys: z.boolean().default(false),
   showAddons: z.boolean().default(false),
   showEarlyBirds: z.boolean().default(false),
-  /** Counted only with the average stack (showAverageStack). */
+  /** Every chip on the tables, whether or not the average stack is shown. */
   showChipsInPlay: z.boolean().default(false),
   showTables: z.boolean().default(false),
   /** "Re-buys close in 1:16:30", for a tournament that sells re-buys or add-ons for a while. */
@@ -125,12 +123,40 @@ export type QrTarget = ClockDisplaySettings["qrTarget"];
 
 export const DEFAULT_DISPLAY_SETTINGS: Readonly<ClockDisplaySettings> = Object.freeze(clockDisplaySettingsSchema.parse({}));
 
-/** PATCH /api/tournaments/:id/clock/display: any of the settings, only those sent (no defaults filled in); unknown keys refused. */
+/**
+ * Settings the TV no longer has, still accepted (and ignored) from a page or a stored request made
+ * before they went: `showAp`, the club's take on the TV, went in round 6 (the AP is for the club's
+ * staff only, never on a screen in the room).
+ */
+const retiredDisplaySettings = { showAp: z.boolean().optional() };
+
+/**
+ * PATCH /api/tournaments/:id/clock/display: any of the settings, only those sent (no defaults filled
+ * in); unknown keys refused, retired ones ignored.
+ */
 export const clockDisplaySettingsPatchSchema = clockDisplaySettingsSchema
   .partial()
+  .extend(retiredDisplaySettings)
   .strict()
-  .refine((patch) => Object.keys(patch).length > 0, "Nothing to update");
+  .refine((patch) => Object.keys(patch).length > 0, "Nothing to update")
+  .transform(({ showAp: _retired, ...patch }) => patch);
 export type ClockDisplaySettingsPatch = z.infer<typeof clockDisplaySettingsPatchSchema>;
+
+/**
+ * The TV's own settings: the layer over the clock (the seats after a draw, the payouts at the bubble),
+ * its sounds and its edge margin. A screen holding the clock key may change these from the TV (PATCH
+ * …/clock/display, round 6); what the TV shows (the prize pool, the payouts, the figures, the QR code)
+ * takes a manager of the club.
+ */
+export const SCREEN_DISPLAY_SETTINGS = [
+  "overlay",
+  "soundVolume",
+  "soundMinute",
+  "soundCountdown",
+  "soundLevel",
+  "soundBreak",
+  "edgeMargin",
+] as const satisfies readonly (keyof ClockDisplaySettings)[];
 
 /** Stored settings as the display uses them: each valid field kept, anything else its default. Never throws. */
 export function resolveDisplaySettings(raw: unknown): ClockDisplaySettings {

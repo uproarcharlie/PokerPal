@@ -164,8 +164,8 @@ describe("the editor's sentences", () => {
   });
 
   it("say when there are more places than players", () => {
-    expect(unpaidPlacesNote(5, 3)).toBe("Only 3 players have entered: places below 3rd are paid only if more players enter.");
-    expect(unpaidPlacesNote(3, 1)).toBe("Only 1 player has entered: places below 1st are paid only if more players enter.");
+    expect(unpaidPlacesNote(5, 3)).toBe("Only 3 players have paid: places below 3rd are paid only once more players pay.");
+    expect(unpaidPlacesNote(3, 1)).toBe("Only 1 player has paid: places below 1st are paid only once more players pay.");
     expect(unpaidPlacesNote(3, 3)).toBeNull();
     expect(unpaidPlacesNote(3, 0)).toBeNull();
   });

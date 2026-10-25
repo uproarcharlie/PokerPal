@@ -2,13 +2,13 @@
  * The public page's prize structure: which places it lists and what each pays and scores. Display only:
  * finalize pays from shared/domain. The standings order is shared/domain/standings' `standingsFor`.
  */
+import type { PublicPayoutDto } from "@shared/api/live-display";
 import { allocationFor, pointsForFinish, type PointsRules } from "@shared/domain/points";
-import type { PayoutDisplayRow } from "@shared/domain/prize-pool";
 
 export interface PrizeRow {
   position: number;
   /** What the place pays, when it is paid. */
-  payout: PayoutDisplayRow | undefined;
+  payout: PublicPayoutDto | undefined;
   /** The points finalize awards the place (no knockouts), 0 without a points system. */
   points: number;
 }
@@ -22,9 +22,9 @@ export interface PrizeTable {
 /**
  * The prize structure's rows: every place that is paid, has a points allocation or scores
  * participation points, up to the last paid or allocated place; then one row for everyone after,
- * when they still score (finalize's participation points). The payouts come from payoutsForDisplay.
+ * when they still score (finalize's participation points). The payouts are the server's (PublicPrizesDto).
  */
-export function prizeTable(payouts: readonly PayoutDisplayRow[], rules: PointsRules): PrizeTable {
+export function prizeTable(payouts: readonly PublicPayoutDto[], rules: PointsRules): PrizeTable {
   const placePoints = (position: number) => pointsForFinish(rules, position, 0) ?? 0;
   const lastPaid = payouts[payouts.length - 1]?.position ?? 0;
   const lastAllocated = Math.max(0, ...rules.allocations.map((allocation) => allocation.positionEnd || allocation.position));

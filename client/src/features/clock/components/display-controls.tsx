@@ -36,23 +36,12 @@ const SHORTCUTS_AFTER_ESC: ReadonlyArray<{ keys: string; does: string }> = [
   { keys: "?", does: "These shortcuts" },
 ];
 
-/** The keys that change the TV display (a layer over the clock, the edge margin): the signed-in staff's only. */
-const DISPLAY_KEYS: ReadonlySet<string> = new Set(["S", "$", "E"]);
-
 /**
  * The TV's keyboard, as the help lists it. Esc is promised in full screen only where the page can
  * keep it there (`escapeInFullscreen`, Keyboard Lock); elsewhere the browser keeps Esc for leaving full
- * screen, and S or $ take a layer down (TDN4-TV-ESC-FULLSCREEN). A screen that cannot change the
- * display (`canChangeDisplay`: on its clock key alone) lists none of the keys that would.
+ * screen, and S or $ take a layer down (TDN4-TV-ESC-FULLSCREEN).
  */
-export function shortcutList(escapeInFullscreen: boolean, canChangeDisplay = true): ReadonlyArray<{ keys: string; does: string }> {
-  if (!canChangeDisplay) {
-    return [
-      ...SHORTCUTS_BEFORE_ESC.filter((shortcut) => !DISPLAY_KEYS.has(shortcut.keys)),
-      ...(escapeInFullscreen ? [{ keys: "Esc", does: "Leave full screen" }] : []),
-      ...SHORTCUTS_AFTER_ESC.filter((shortcut) => !DISPLAY_KEYS.has(shortcut.keys)),
-    ];
-  }
+export function shortcutList(escapeInFullscreen: boolean): ReadonlyArray<{ keys: string; does: string }> {
   return [
     ...SHORTCUTS_BEFORE_ESC,
     {
@@ -64,12 +53,6 @@ export function shortcutList(escapeInFullscreen: boolean, canChangeDisplay = tru
     ...SHORTCUTS_AFTER_ESC,
   ];
 }
-
-/** Said when a key asks a screen on its clock key alone to change the display: where that is done instead. */
-const DISPLAY_IS_STAFFS = {
-  title: "Changed from the Clock tab",
-  description: "This screen runs the clock with its clock key. The seats, the payouts and the screen's settings are changed by the club's staff, on the Clock tab.",
-} as const;
 
 /** A layer over the clock, as the TV's settings name it. */
 type Layer = ClockDisplaySettings["overlay"];
@@ -151,12 +134,6 @@ interface DisplayControlsProps {
   undo: ClockUndoDto | null;
   /** The layer over the clock now (ClockDto.displaySettings.overlay). */
   overlay: Layer;
-  /**
-   * The viewer may change the TV display (LiveDisplayDto viewer.canChangeDisplay: signed in as the
-   * club's staff). A screen on its clock key alone runs the clock only: it is shown the settings, and
-   * the layers and the edge margin are changed from the Clock tab.
-   */
-  canChangeDisplay: boolean;
   tools: ScreenTools;
 }
 
@@ -167,11 +144,11 @@ interface DisplayControlsProps {
  * second U, or a U after the TD's phone undid, never puts the change back. The seats and the payouts
  * go up and come down from here too (S, $, Esc, or the bar), not only from the Clock tab: a layer left
  * up covers the countdown and the QR code (TDN3-OVERLAY-STUCK). The screen's settings dialog saves the
- * tournament's sound and edge margin through these controls, as the E key does. On a screen that may
- * not change the display (`canChangeDisplay`), those keys say where it is changed instead, and the
- * settings dialog only shows the settings.
+ * tournament's sound and edge margin through these controls, as the E key does. A screen on its clock
+ * key may do all of this too (round 6: PATCH …/clock/display takes the key for the TV's own settings);
+ * what the TV shows (the pool, the payouts, the figures, the QR code) is the TD's, on the Clock tab.
  */
-export function DisplayControls({ tournamentId, derived, undo: stored, overlay, canChangeDisplay, tools }: DisplayControlsProps) {
+export function DisplayControls({ tournamentId, derived, undo: stored, overlay, tools }: DisplayControlsProps) {
   const { toast } = useToast();
   const { send, busy } = useClockActions(tournamentId);
   const { patchDisplay } = useClockConfig(tournamentId);
@@ -195,18 +172,17 @@ export function DisplayControls({ tournamentId, derived, undo: stored, overlay, 
       },
     );
 
-  const latest = useRef({ act, showLayer, saveSettings, overlay, tools, alsoStartTournament, busy, canChangeDisplay, toast });
+  const latest = useRef({ act, showLayer, saveSettings, overlay, tools, alsoStartTournament, busy });
   useEffect(() => {
-    latest.current = { act, showLayer, saveSettings, overlay, tools, alsoStartTournament, busy, canChangeDisplay, toast };
+    latest.current = { act, showLayer, saveSettings, overlay, tools, alsoStartTournament, busy };
   });
 
-  // The screen's settings dialog saves through these controls while they are on screen, for a viewer who may.
+  // The screen's settings dialog saves through these controls while they are on screen.
   const { offerChanges } = tools.screen;
   useEffect(() => {
-    if (!canChangeDisplay) return;
     offerChanges((patch) => latest.current.saveSettings(patch));
     return () => offerChanges(null);
-  }, [offerChanges, canChangeDisplay]);
+  }, [offerChanges]);
 
   useEffect(() => {
     const lastPress = { level: Number.NEGATIVE_INFINITY, undo: Number.NEGATIVE_INFINITY };
@@ -223,8 +199,7 @@ export function DisplayControls({ tournamentId, derived, undo: stored, overlay, 
         return;
       }
       event.preventDefault();
-      if (!current.canChangeDisplay && ((typeof shortcut === "object" && "layer" in shortcut) || shortcut === "edge")) current.toast(DISPLAY_IS_STAFFS);
-      else if (typeof shortcut === "object" && "layer" in shortcut) current.showLayer(shortcut.layer);
+      if (typeof shortcut === "object" && "layer" in shortcut) current.showLayer(shortcut.layer);
       else if (shortcut === "fullscreen") current.tools.fullscreen.toggle();
       else if (shortcut === "mute") current.tools.sound.toggle();
       else if (shortcut === "edge") void current.saveSettings({ edgeMargin: nextEdgeMargin(current.tools.screen.prefs.edgeMargin) });
@@ -272,28 +247,24 @@ export function DisplayControls({ tournamentId, derived, undo: stored, overlay, 
           layout="bar"
           extra={
             <>
-              {canChangeDisplay ? (
-                <>
-                  <Button
-                    variant={overlay === "seating" ? "secondary" : "ghost"}
-                    aria-pressed={overlay === "seating"}
-                    onMouseDown={keepFocusOnMouseDown}
-                    onClick={() => showLayer("seating")}
-                  >
-                    <Armchair aria-hidden="true" />
-                    Seats
-                  </Button>
-                  <Button
-                    variant={overlay === "payouts" ? "secondary" : "ghost"}
-                    aria-pressed={overlay === "payouts"}
-                    onMouseDown={keepFocusOnMouseDown}
-                    onClick={() => showLayer("payouts")}
-                  >
-                    <Trophy aria-hidden="true" />
-                    Payouts
-                  </Button>
-                </>
-              ) : null}
+              <Button
+                variant={overlay === "seating" ? "secondary" : "ghost"}
+                aria-pressed={overlay === "seating"}
+                onMouseDown={keepFocusOnMouseDown}
+                onClick={() => showLayer("seating")}
+              >
+                <Armchair aria-hidden="true" />
+                Seats
+              </Button>
+              <Button
+                variant={overlay === "payouts" ? "secondary" : "ghost"}
+                aria-pressed={overlay === "payouts"}
+                onMouseDown={keepFocusOnMouseDown}
+                onClick={() => showLayer("payouts")}
+              >
+                <Trophy aria-hidden="true" />
+                Payouts
+              </Button>
               <Button variant="ghost" onMouseDown={keepFocusOnMouseDown} onClick={tools.screen.openSettings}>
                 <Settings2 aria-hidden="true" />
                 Screen
@@ -314,7 +285,7 @@ export function DisplayControls({ tournamentId, derived, undo: stored, overlay, 
             <DialogDescription>Only the club&apos;s staff can control the clock from this screen.</DialogDescription>
           </DialogHeader>
           <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
-            {shortcutList(escapeInFullscreen, canChangeDisplay).map((shortcut) => (
+            {shortcutList(escapeInFullscreen).map((shortcut) => (
               <div key={shortcut.keys} className="contents">
                 <dt className="font-mono font-semibold text-foreground">{shortcut.keys}</dt>
                 <dd className="text-muted-foreground">{shortcut.does}</dd>

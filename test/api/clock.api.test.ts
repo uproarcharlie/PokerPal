@@ -60,7 +60,7 @@ describe("PUT /api/tournaments/:id/clock: setting the clock up (baseHash null)",
     const { agent, tournament } = await setup();
     const structure = presetStructure(CENTRAL_STARS);
 
-    const response = await configure(agent, tournament, { structure, presetKey: CENTRAL_STARS, displaySettings: { showAp: true }, baseHash: null });
+    const response = await configure(agent, tournament, { structure, presetKey: CENTRAL_STARS, displaySettings: { showPayouts: false }, baseHash: null });
 
     expect(response.status, JSON.stringify(response.body)).toBe(201);
     expect(response.body.clock).toEqual({
@@ -73,11 +73,11 @@ describe("PUT /api/tournaments/:id/clock: setting the clock up (baseHash null)",
       structure,
       structureHash: structureHash(structure),
       presetKey: CENTRAL_STARS,
-      displaySettings: { ...DEFAULT_DISPLAY_SETTINGS, showAp: true },
+      displaySettings: { ...DEFAULT_DISPLAY_SETTINGS, showPayouts: false },
       undo: null,
       updatedAt: expect.any(String),
     });
-    expect((await stored(tournament)).displaySettings).toEqual({ showAp: true });
+    expect((await stored(tournament)).displaySettings).toEqual({ showPayouts: false });
     const [entry] = await activity(tournament);
     expect(entry).toMatchObject({ eventType: "clock_structure_updated", description: "Clock set up: Central Stars · One Life Line (24 levels)" });
     expect(JSON.parse(entry.eventData ?? "{}")).toEqual({ presetKey: CENTRAL_STARS, levelCount: 27, structureHash: structureHash(structure) });
@@ -246,14 +246,26 @@ describe("PATCH /api/tournaments/:id/clock/display", () => {
   it("merges the settings, answers the display they make, and logs nothing", async () => {
     const { agent, tournament } = await setup({ clock: { displaySettings: { showPayouts: false } } });
 
-    const response = await patchDisplay(agent, tournament, { showAp: true, qrTarget: "seats" });
+    const response = await patchDisplay(agent, tournament, { showChipsInPlay: true, qrTarget: "seats" });
 
     expect(response.status, JSON.stringify(response.body)).toBe(200);
-    expect(response.body.clock).toMatchObject({ version: 1, displaySettings: { ...DEFAULT_DISPLAY_SETTINGS, showPayouts: false, showAp: true, qrTarget: "seats" } });
+    expect(response.body.clock).toMatchObject({ version: 1, displaySettings: { ...DEFAULT_DISPLAY_SETTINGS, showPayouts: false, showChipsInPlay: true, qrTarget: "seats" } });
     expect(response.body.qr).toEqual({ target: "seats", path: `/tournament/${tournament.id}/seats` });
-    expect(response.body.money.apCents).toBe(0);
-    expect((await stored(tournament)).displaySettings).toEqual({ ...DEFAULT_DISPLAY_SETTINGS, showPayouts: false, showAp: true, qrTarget: "seats" });
+    expect((await stored(tournament)).displaySettings).toEqual({ ...DEFAULT_DISPLAY_SETTINGS, showPayouts: false, showChipsInPlay: true, qrTarget: "seats" });
     expect(await activity(tournament)).toEqual([]);
+  });
+
+  it("takes the retired \"show the AP\" from a page loaded before round 6 and ignores it: the AP is never on the TV", async () => {
+    const { agent, tournament } = await setup({ clock: {} });
+
+    const alone = await patchDisplay(agent, tournament, { showAp: true });
+    const withOthers = await patchDisplay(agent, tournament, { showAp: true, qrTarget: "seats" });
+
+    expect([alone.status, withOthers.status]).toEqual([200, 200]);
+    expect(alone.body.clock.version).toBe(0);
+    expect(withOthers.body.clock.displaySettings).not.toHaveProperty("showAp");
+    expect((await stored(tournament)).displaySettings).toEqual({ ...DEFAULT_DISPLAY_SETTINGS, qrTarget: "seats" });
+    expect(withOthers.body.money).not.toHaveProperty("apCents");
   });
 
   it("writes nothing when the settings already are so", async () => {
@@ -272,7 +284,7 @@ describe("PATCH /api/tournaments/:id/clock/display", () => {
       const response = await patchDisplay(withClock.agent, withClock.tournament, body);
       expect(response.status, JSON.stringify(body)).toBe(400);
     }
-    const missing = await patchDisplay(withoutClock.agent, withoutClock.tournament, { showAp: true });
+    const missing = await patchDisplay(withoutClock.agent, withoutClock.tournament, { qrTarget: "seats" });
     expect(missing.status).toBe(404);
     expect(missing.body.code).toBe("NO_CLOCK");
   });
@@ -280,7 +292,7 @@ describe("PATCH /api/tournaments/:id/clock/display", () => {
   it("refuses a closed tournament (TOURNAMENT_CLOSED)", async () => {
     const { agent, tournament } = await setup({ tournament: { status: "completed" }, clock: {} });
 
-    const response = await patchDisplay(agent, tournament, { showAp: true });
+    const response = await patchDisplay(agent, tournament, { qrTarget: "seats" });
 
     expect(response.status).toBe(409);
     expect(response.body).toMatchObject({ code: "TOURNAMENT_CLOSED", details: { display: { clock: { version: 0 } } } });
@@ -303,7 +315,7 @@ describe("DELETE /api/tournaments/:id/clock", () => {
   });
 
   it("refuses a running or paused clock with 409 CLOCK_IN_USE, keeping it and its settings, until it is reset (TDN2-REMOVE-CLOCK-MIDGAME)", async () => {
-    const settings = { qrTarget: "seats" as const, showAp: true };
+    const settings = { qrTarget: "seats" as const, showPayouts: false };
     const running = await setup({ clock: { state: runningState(T0, 2, 7 * MINUTE_MS, T0 - 50 * MINUTE_MS), displaySettings: settings } });
     const paused = await setup({ clock: { state: { status: "paused", currentLevelIndex: 1, pausedRemainingMs: 4 * MINUTE_MS, startedAt: T0 - 30 * MINUTE_MS } } });
 

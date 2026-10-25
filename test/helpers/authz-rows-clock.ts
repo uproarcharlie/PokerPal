@@ -66,12 +66,13 @@ export const CLOCK_ROUTE_ROWS: Record<string, RouteRow> = {
     missing: () => ({ path: `/api/tournaments/${UNKNOWN_ID}/clock/key` }),
   },
   "PATCH /api/tournaments/:id/clock/display": {
-    guards: MANAGER,
+    // The venue TV's clock key also changes the TV's own settings (test/api/clock-key.api.test.ts); without it, staff only.
+    guards: ["club-manager:Tournament or clock key"],
     cases: single(staffOf(200), async ({ club }) => ({
       path: `/api/tournaments/${(await clockedTournamentIn(club)).id}/clock/display`,
-      json: { showAp: true },
+      json: { qrTarget: "seats" },
     })),
-    missing: () => ({ path: `/api/tournaments/${UNKNOWN_ID}/clock/display`, json: { showAp: true } }),
+    missing: () => ({ path: `/api/tournaments/${UNKNOWN_ID}/clock/display`, json: { qrTarget: "seats" } }),
   },
   "POST /api/tournaments/:id/early-birds": {
     guards: MANAGER,

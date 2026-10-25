@@ -160,7 +160,7 @@ export function ClockScreen({ display, derived, offline, controls }: ClockScreen
   const overlay = clock && derived && !isClosedStatus(display.tournament.status) ? clock.displaySettings.overlay : "none";
   const playing = Boolean(clock && derived) && !isClosedStatus(display.tournament.status);
   const tiles = playing && settings ? displayTiles(display, derived, settings) : [];
-  const money = playing && settings ? moneyText(display.money, display.stats.entrants, settings.showPrizePool) : null;
+  const money = playing && settings ? moneyText(display.money, settings.showPrizePool, display.stats.entrants) : null;
   const caption = display.qr ? qrCaption(display.qr, display.season) : null;
   const clubName = display.club.name.trim() !== display.tournament.name.trim() ? display.club.name : null;
   const showLevel = settings?.showLevel ?? false;

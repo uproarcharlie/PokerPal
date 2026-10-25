@@ -14,7 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { errorMessage, hasErrorCode } from "@/lib/api/http";
 import { formatMoney } from "@/lib/format";
 import { formResolver, showServerFieldErrors } from "@/lib/forms";
-import { tournamentMoney, type TournamentMoney } from "@/lib/prize-pool";
+import { poolPlayersOf, tournamentMoney, type TournamentMoney } from "@/lib/prize-pool";
 import { useRegistrations } from "@/features/tournaments/hooks";
 import { prizePoolAdjustmentSchema, type ApUpdateResponse, type PrizePoolAdjustmentInput } from "@shared/api/prize-pool";
 import type { PublicRegistration } from "@shared/api/public";
@@ -27,7 +27,7 @@ import { useAdjustPrizePool } from "../staff-hooks";
 import { DifferenceChoice } from "./difference-choice";
 import { PoolPreview } from "./pool-preview";
 
-/** Why the TD changed it: one tap each, or typed. Shown in the public activity feed. */
+/** Why the TD changed it: one tap each, or typed. Shown in the activity feed to the club's staff only (round 6). */
 const ADJUSTMENT_REASONS = ["Low turnout", "Promo / freeroll", "Correction"] as const;
 
 const FIVE_DOLLARS: Cents = 500;
@@ -255,7 +255,7 @@ function AdjustForm({ tournament, registrations, label, startMode, onClose }: Ad
                 <FormControl>
                   <Input {...field} maxLength={200} className="h-11" placeholder="Or type a reason" />
                 </FormControl>
-                <FormDescription>Shown in the public activity feed.</FormDescription>
+                <FormDescription>Only the club&apos;s staff see it, in the activity feed.</FormDescription>
                 <FormMessage />
               </FormItem>
             )}
@@ -265,7 +265,7 @@ function AdjustForm({ tournament, registrations, label, startMode, onClose }: Ad
             after={after}
             before={before}
             label={label}
-            entrants={registrations.length}
+            players={poolPlayersOf(before, tournament, registrations)}
             locked={tournament.prizePoolLocked === true}
             carryTarget={carryTarget}
           />

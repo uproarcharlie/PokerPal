@@ -14,7 +14,7 @@ import {
   type UpdateTournamentInput,
 } from "@shared/api/tournaments";
 import { formatMoney, isAmountSet, toCents } from "@shared/domain/money";
-import { computePrizePool, rakeLabel } from "@shared/domain/prize-pool";
+import { computePrizePool, rakeLabel, recordedEntryCounts } from "@shared/domain/prize-pool";
 import { isActiveStatus } from "@shared/domain/tournaments";
 import { waitingListCount } from "@shared/domain/waiting-list";
 import { RAKE_RATE_KEYS, type RakeAmountKey, type RakeRates, type RakeTypeKey } from "@shared/domain/rake-rates";
@@ -85,7 +85,10 @@ export async function tournamentCounts(): Promise<TournamentCountsDto> {
   return counts;
 }
 
-/** GET /api/tournaments. Who has paid is counted only for the viewer's own clubs (P2REV0-SEC-04). */
+/**
+ * GET /api/tournaments. Who has paid, and the club's takings (round 6), only for the viewer's own clubs
+ * (P2REV0-SEC-04).
+ */
 export async function listTournaments(req: Request, query: TournamentsQuery) {
   const [rows, scope] = await Promise.all([
     tournamentsRepo.listTournamentsWithCounts(db, query),
@@ -93,7 +96,7 @@ export async function listTournaments(req: Request, query: TournamentsQuery) {
   ]);
   const runs = (clubId: string) => scope !== null && (scope.all || scope.clubIds.includes(clubId));
   return rows.map(({ tournament, registeredCount, confirmedPlayerCount, inFieldByRightCount }) => ({
-    ...toPublicTournament(tournament),
+    ...toPublicTournament(tournament, runs(tournament.clubId)),
     confirmedPlayerCount: runs(tournament.clubId) ? confirmedPlayerCount : null,
     registeredCount,
     waitingListCount: waitingListCount(registeredCount, inFieldByRightCount, tournament.maxPlayers),
@@ -385,7 +388,8 @@ export async function updateTournament(env: AppEnv, req: Request, id: string, in
       if (input.enableHighHand === false && current.enableHighHand === true) {
         assertNoHighHandEntrants(context.registrations);
       }
-      const repriced = repricedEntries(current, updated, computePrizePool(current, context.registrations).counts);
+      // Every recorded entry, paid or not: a new price re-prices what the desk will ask each player for.
+      const repriced = repricedEntries(current, updated, recordedEntryCounts(current, context.registrations));
       if (ratesSent) {
         const change = { changes: rates, keepOverride: keepRakeOverride, clearOverrideWhenUnchanged: false, reason: null };
         updated = await applyRakeRates(tx, req, { ...context, tournament: updated }, change);

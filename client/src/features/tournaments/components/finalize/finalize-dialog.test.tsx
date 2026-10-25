@@ -55,6 +55,83 @@ beforeEach(() => {
   mockSignedOut();
 });
 
+describe("FinalizeDialog: players who have not paid (round 6)", () => {
+  const dee = { registrationId: "r4", playerId: "p4", playerName: "Dee", amountDueCents: 12_500 };
+  const unpaidPlan = preview({
+    ok: false,
+    code: "UNPAID_PLAYERS",
+    message: "Dee has not paid, so is not in the prize pool: confirm the payment, or leave them out",
+    activePlayers: [alice],
+    unpaid: [dee],
+    warnings,
+  });
+  const readyPlan = preview({ planHash: HASH_A, activePlayers: [alice], rows: [row(alice, 1, 23_800), row(bob, 2, 14_200), row(carl, 3, 9_500)], warnings });
+  const leftOutPlan = preview({ ...readyPlan, unpaid: [dee], warnings: [...warnings, "1 player who has not paid is left out, not ranked, paid or scored: Dee"] });
+
+  it("names who has not paid with what they owe, and finalizes only once they are left out", async () => {
+    const previews = mockPreview((_order, body) => (body.excludeUnpaid ? leftOutPlan : unpaidPlan));
+    const finalizes = mockFinalize(finalized);
+    const user = userEvent.setup();
+    renderDialog();
+
+    const panel = await screen.findByTestId("finalize-unpaid");
+    expect(panel).toHaveTextContent("1 player has not paid");
+    expect(panel).toHaveTextContent("Their money is not in the prize pool");
+    expect(within(panel).getByTestId("unpaid-r4")).toHaveTextContent("DeeOwes $125");
+    expect(screen.getByTestId("confirm-finalize")).toBeDisabled();
+    // The panel says it: the server's refusal sentence is not repeated under the plan.
+    expect(screen.queryByText(/confirm the payment, or leave them out/)).not.toBeInTheDocument();
+
+    await user.click(within(panel).getByRole("button", { name: "Leave them out" }));
+
+    await waitFor(() => expect(screen.getByTestId("confirm-finalize")).toBeEnabled());
+    expect(previews.at(-1)).toEqual({ excludeUnpaid: true });
+    expect(screen.getByTestId("finalize-unpaid")).toHaveTextContent("Left out: 1 not paid");
+    expect(screen.getByTestId("finalize-warnings")).toHaveTextContent("left out, not ranked, paid or scored: Dee");
+    await user.click(screen.getByTestId("confirm-finalize"));
+
+    await waitFor(() => expect(finalizes).toHaveLength(1));
+    expect(finalizes[0]).toEqual({ expectedPlanHash: HASH_A, excludeUnpaid: true });
+  });
+
+  it("confirms a payment from the dialog, works the plan out again and then finalizes with everyone paid", async () => {
+    let paid = false;
+    const previews = mockPreview(() => (paid ? readyPlan : unpaidPlan));
+    const confirmed: string[] = [];
+    server.use(
+      http.patch("/api/registrations/:id/confirm-payment", ({ params }) => {
+        confirmed.push(String(params.id));
+        paid = true;
+        return HttpResponse.json({ id: "r4", player: { id: "p4", name: "Dee", imageUrl: null }, paymentConfirmed: true, seating: { status: "off" } });
+      }),
+    );
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(await screen.findByRole("button", { name: "Confirm Dee's payment" }));
+
+    await waitFor(() => expect(screen.queryByTestId("finalize-unpaid")).not.toBeInTheDocument());
+    expect(confirmed).toEqual(["r4"]);
+    expect(previews.length).toBeGreaterThanOrEqual(2);
+    expect(await screen.findByText("Dee has paid: $125 is in the prize pool.")).toBeInTheDocument();
+    expect(screen.getByTestId("confirm-finalize")).toBeEnabled();
+  });
+
+  it("keeps the dialog's plan when the payment is refused, and says why", async () => {
+    mockPreview(() => unpaidPlan);
+    server.use(http.patch("/api/registrations/:id/confirm-payment", () => apiError(409, "TOURNAMENT_FULL", "18 of 18 players accepted: raise Max players to accept more")));
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(await screen.findByRole("button", { name: "Confirm Dee's payment" }));
+
+    expect(await screen.findByText("18 of 18 players accepted: raise Max players to accept more")).toBeInTheDocument();
+    expect(screen.getByText("Tournament full")).toBeInTheDocument();
+    expect(screen.getByTestId("finalize-unpaid")).toBeInTheDocument();
+    expect(screen.getByTestId("confirm-finalize")).toBeDisabled();
+  });
+});
+
 describe("FinalizeDialog", () => {
   it("shows beside a pool fixed by hand what the club keeps or adds, not the rates' AP the fixed pool overrides (MONEY-AP-03)", async () => {
     // $500 in, $25 AP by the rates, the pool fixed at $600: the club adds $100.
@@ -77,7 +154,7 @@ describe("FinalizeDialog", () => {
     // $500 in, $25 AP: $475 available. The pool fixed at $400 carries $75 over to the season's next tournament.
     const breakdown = computePrizePool(
       { buyInAmount: "100.00", rakeType: "fixed", rakeAmount: "5.00", payoutStructure: "standard", manualPrizePool: "400.00", prizeDifference: "carry" },
-      [{ buyIns: 2 }, { buyIns: 2 }, { buyIns: 1 }],
+      [2, 2, 1].map((buyIns) => ({ buyIns, paymentConfirmed: true })),
     );
     mockPreview(() => preview({ planHash: HASH_A, prizePool: { ...previewPrizePool, breakdown, carryTarget: "Winter League" } }));
     renderDialog();

@@ -10,7 +10,7 @@ import session from "express-session";
 import request from "supertest";
 import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { Json } from "@shared/api/common";
-import { findForbiddenKeys, PUBLIC_TOURNAMENT_FIELDS } from "@shared/api/public";
+import { findForbiddenKeys, findTakingsKeys, PUBLIC_TOURNAMENT_FIELDS, TOURNAMENT_TAKINGS_FIELDS } from "@shared/api/public";
 import { MAX_UPCOMING_TOURNAMENTS_PER_CLUB, type TournamentDetailDto, type TournamentListItemDto } from "@shared/api/tournaments";
 import { activityLog, auditLog, tournamentRegistrations, tournaments, type Tournament } from "@shared/schema";
 import { createApp } from "../../server/app";
@@ -50,15 +50,17 @@ const activityFor = async (tournamentId: string) =>
 
 const auditFor = (targetId: string) => testDb().select().from(auditLog).where(eq(auditLog.targetId, targetId));
 
-/** The tournament as the public may see it. */
-const publicView = (row: Tournament) => {
+/** The tournament as the public may see it, and with the club's takings for someone who runs the club (round 6). */
+const publicView = (row: Tournament, canManage = false) => {
   const json = asJson(row) as Record<string, unknown>;
-  return Object.fromEntries(PUBLIC_TOURNAMENT_FIELDS.map((key) => [key, json[key] ?? null]));
+  const fields = canManage ? [...PUBLIC_TOURNAMENT_FIELDS, ...TOURNAMENT_TAKINGS_FIELDS] : PUBLIC_TOURNAMENT_FIELDS;
+  return Object.fromEntries(fields.map((key) => [key, json[key] ?? null]));
 };
 
+/** The finalize snapshot goes only to someone who runs the club: the public read the prizes from GET /api/public/tournaments/:id/prizes. */
 const detail = (row: Tournament, canManage: boolean, canOwn = canManage) => ({
-  ...publicView(row),
-  prizePoolSnapshot: row.prizePoolSnapshot ?? null,
+  ...publicView(row, canManage),
+  prizePoolSnapshot: canManage ? (row.prizePoolSnapshot ?? null) : null,
   viewer: { canManage, canOwn },
 });
 
@@ -326,6 +328,9 @@ describe("GET /api/tournaments/:id", () => {
     expect(anonymous.status).toBe(200);
     expect(anonymous.body).toEqual(detail(tournament, false));
     expect(findForbiddenKeys(anonymous.body)).toEqual([]);
+    // The club's takings go to its staff only (round 6).
+    expect(findTakingsKeys(anonymous.body)).toEqual([]);
+    expect(manager.body).toMatchObject({ rakeType: "percentage", rakeAmount: "10.00" });
     expect(anonymous.body).not.toHaveProperty("confirmedPlayerCount");
     expect(manager.body.viewer).toEqual({ canManage: true, canOwn: false });
   });
@@ -401,6 +406,19 @@ describe("GET /api/tournaments", () => {
     expect(await counts(manager.agent)).toEqual({ [mine.id]: 1, [theirs.id]: null });
     expect(await counts(stranger.agent)).toEqual({ [mine.id]: null, [theirs.id]: null });
     expect(await counts(admin.agent)).toEqual({ [mine.id]: 1, [theirs.id]: 1 });
+  });
+
+  it("sends the club's takings only for the viewer's own clubs, so the TD's list can edit them and nobody else sees them (round 6)", async () => {
+    const { club, manager, stranger } = await clubWithStaff();
+    const mine = await createTournament({ clubId: club.id, rakeType: "fixed", rakeAmount: "5.00", rakeOverride: "20.00", prizePoolAdjustmentReason: "Low turnout" });
+    const theirs = await createTournament({ clubId: (await createClub()).id, rakeType: "percentage", rakeAmount: "10.00" });
+    const rows = async (agent: { get: (path: string) => Promise<{ body: unknown }> }) =>
+      Object.fromEntries(((await agent.get("/api/tournaments")).body as TournamentListItemDto[]).map((t) => [t.id, t]));
+
+    const forManager = await rows(manager.agent);
+    expect(forManager[mine.id]).toMatchObject({ rakeType: "fixed", rakeAmount: "5.00", rakeOverride: "20.00", prizePoolAdjustmentReason: "Low turnout" });
+    expect(findTakingsKeys(forManager[theirs.id])).toEqual([]);
+    for (const agent of [stranger.agent, await anon()]) expect(findTakingsKeys(Object.values(await rows(agent)))).toEqual([]);
   });
 
   it("gives the tournaments not started yet, soonest first, with ?upcoming=true, and only the first few with ?limit= (P2REV0-SEC-02)", async () => {
@@ -556,7 +574,7 @@ describe("PUT /api/tournaments/:id", () => {
 
     it("never asks to confirm a re-pricing that would then be refused: the refusal comes first", async () => {
       const { tournament, agent } = await staffedTournament({ buyInAmount: "50.00", rakeOverride: "100.00" });
-      for (let i = 0; i < 4; i++) await createRegistration({ tournamentId: tournament.id, playerId: (await createPlayer()).id });
+      for (let i = 0; i < 4; i++) await createRegistration({ tournamentId: tournament.id, playerId: (await createPlayer()).id, paymentConfirmed: true });
 
       const refused = await agent.put(`/api/tournaments/${tournament.id}`).send({ buyInAmount: "20" });
       const asked = await agent.put(`/api/tournaments/${tournament.id}`).send({ buyInAmount: "25" });
@@ -795,7 +813,7 @@ describe("PUT /api/tournaments/:id", () => {
 
     it("refuses new entry prices that would leave a manual AP total above what is taken in", async () => {
       const { tournament, agent } = await staffedTournament({ buyInAmount: "50.00", rakeOverride: "100.00" });
-      for (let i = 0; i < 4; i++) await createRegistration({ tournamentId: tournament.id, playerId: (await createPlayer()).id });
+      for (let i = 0; i < 4; i++) await createRegistration({ tournamentId: tournament.id, playerId: (await createPlayer()).id, paymentConfirmed: true });
 
       const tooLow = await agent.put(`/api/tournaments/${tournament.id}`).send({ buyInAmount: "20", repriceEntries: true });
       const fine = await agent.put(`/api/tournaments/${tournament.id}`).send({ buyInAmount: "25", repriceEntries: true });

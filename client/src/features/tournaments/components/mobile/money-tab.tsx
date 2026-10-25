@@ -1,6 +1,7 @@
 import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import type { Cents } from "@shared/domain/money";
+import { recordedEntryCounts } from "@shared/domain/prize-pool";
 import { isClosedStatus } from "@shared/domain/tournaments";
 import { lineupOf } from "@/features/public-tournament/waiting-list";
 import type { TournamentMoney } from "@/lib/prize-pool";
@@ -15,13 +16,15 @@ interface MoneyTabProps {
   rakeLabel: string;
   timeZone: string;
   highHandAwardsCents: readonly Cents[];
+  /** Opens the Take payment sheet, from the note that says who has not paid (R6REV1-PHONE-02). */
+  onTakePayments?: () => void;
 }
 
 /**
  * The phone's Money tab (round5-contracts §8.1): the figures the TD reads out, what the pool pays, the
  * AP and its adjustments, then the payment desk (staff only; followed only while the tab is open).
  */
-export function MoneyTab({ tournament, registrations, money, rakeLabel, timeZone, highHandAwardsCents }: MoneyTabProps) {
+export function MoneyTab({ tournament, registrations, money, rakeLabel, timeZone, highHandAwardsCents, onTakePayments }: MoneyTabProps) {
   const closed = isClosedStatus(tournament.status);
   const canManage = tournament.viewer.canManage;
   // The waiting list behind a full field is not in it (round 5, item 15).
@@ -33,6 +36,7 @@ export function MoneyTab({ tournament, registrations, money, rakeLabel, timeZone
         money={money}
         totalPlayers={lineup.field.length}
         waitingList={lineup.waiting.length}
+        entries={recordedEntryCounts(tournament, registrations)}
         rakeLabel={rakeLabel}
         canEditPlayers={canManage && !closed}
         canEditPool={canManage && !closed && tournament.prizePoolLocked !== true}
@@ -45,6 +49,7 @@ export function MoneyTab({ tournament, registrations, money, rakeLabel, timeZone
         highHandAwardsCents={highHandAwardsCents}
         timeZone={timeZone}
         withDetails={false}
+        onTakePayments={onTakePayments}
       />
       {canManage ? (
         <section aria-label="Payments" className="space-y-4">

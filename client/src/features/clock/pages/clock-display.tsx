@@ -56,7 +56,6 @@ export default function ClockDisplayPage() {
                         derived={derived}
                         undo={display.clock?.undo ?? null}
                         overlay={display.clock?.displaySettings.overlay ?? "none"}
-                        canChangeDisplay={display.viewer.canChangeDisplay}
                         tools={tools}
                       />
                     </ControlsBoundary>

@@ -118,20 +118,37 @@ export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 /** The before/after of the fields a change touched, keyed by field. */
 type FieldChanges = { before: Record<string, unknown>; after: Record<string, unknown> };
 
-/** What finalize records about the pool it paid. */
+/**
+ * What finalize records about the pool it paid. The optional fields are written only when they apply,
+ * so entries from before they existed simply lack them.
+ */
 type FinalizedPool = {
   netCents: Cents;
   netSource: NetSource;
   planHash: string;
   /** Player requests still waiting that finalize discarded. */
   requestsCleared: number;
-  /** The deal the players still in made (round 5), as the snapshot records it. */
+  /** Round 5: the deal the players still in made, as the snapshot records it. Only with a deal. */
   deal?: SnapshotDeal;
-  /** Round 5 (item 16): where a difference between the prizes and the money available went, as the snapshot records it. */
+  /**
+   * Round 5 (item 16): where a difference between the prizes as set and the money available went
+   * (kept by the club, added to the places, carried over with its `carryTarget`, or added by the club),
+   * as the snapshot records it. Only when there was a difference.
+   */
   difference?: SnapshotDifference;
+  /**
+   * Round 6: the registrations left out of the results because their payment was not confirmed
+   * (excludeUnpaid): not ranked, paid or scored. Only when anyone was left out.
+   */
+  unpaidLeftOut?: string[];
+  /** Round 6: the registrations whose place, prize and points from an earlier finalize were cleared. Only when any were. */
+  resultsCleared?: string[];
 };
 
-/** Round 5 (item 16): tournaments.prize_difference (where a difference goes; null: the club keeps it) before and after. */
+/**
+ * Round 5 (item 16): tournaments.prize_difference before and after: "club" (the club keeps it), "first",
+ * "pro_rata", "carry", or null (never chosen: the club keeps it).
+ */
 type PrizeDifferenceChange = { before: string | null; after: string | null };
 
 /**
@@ -164,7 +181,7 @@ export type AuditData = {
     previous: { manualPrizePool: string | null; rakeOverride: string | null; reason: string | null };
     netCentsBefore: Cents;
     netCentsAfter: Cents;
-    /** When the change also said where a manual pool's difference goes. */
+    /** Round 5 (item 16): only when a manual pool's change also changed where its difference goes. */
     prizeDifference?: PrizeDifferenceChange;
   };
   /** The AP rate columns before and after, and whether the manual AP total was cleared. */
@@ -175,7 +192,7 @@ export type AuditData = {
     after: { payoutStructure: string; customPayouts: string | null };
     reason: string | null;
     netCents: Cents;
-    /** Recorded since round 5 (absent from earlier entries). */
+    /** Round 5 (item 16): only when the change also changed where a leftover goes (absent from earlier entries). */
     prizeDifference?: PrizeDifferenceChange;
   };
   "tournament.finalize": FinalizedPool;

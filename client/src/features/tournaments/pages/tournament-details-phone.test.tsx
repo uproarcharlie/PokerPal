@@ -19,12 +19,12 @@ import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { playerName } from "../player-name";
 import TournamentDetailsPage from "./tournament-details";
 
-/** Ann signed up first and Cat last: the bust sheet lists the newest first. */
-const field = [
+/** Ann signed up first and Cat last: the bust sheet lists the newest first. All paid: only paid players are in the pool (round 6). */
+const field: ManagedRegistration[] = [
   registrationDto("r1", "Ann", 2, { registrationTime: "2026-10-23T06:00:00.000Z" }),
   registrationDto("r2", "Bob", 2, { registrationTime: "2026-10-23T06:10:00.000Z" }),
   registrationDto("r3", "Cat", 1, { registrationTime: "2026-10-23T06:20:00.000Z" }),
-];
+].map((registration) => ({ ...registration, paymentConfirmed: true }));
 
 function mockDesk({
   tournament = {},
@@ -490,6 +490,39 @@ describe("TournamentDetailsPage on a phone: re-buys and add-ons at the desk", ()
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
+  it("marks a player who has not paid: their re-buy joins the prize pool once their payment is, which the sheet confirms (R6REV1-PHONE-04)", async () => {
+    mockDesk({ tournament: rebuys, registrations: [field[0], { ...field[1], paymentConfirmed: false }, field[2]] });
+    const confirmed: string[] = [];
+    server.use(
+      http.patch("/api/registrations/:id/confirm-payment", ({ params }) => {
+        confirmed.push(String(params.id));
+        return HttpResponse.json({ ...field[1], paymentConfirmed: true, seating: null, highHandUnawardedCents: 0 } satisfies PaymentConfirmedDto);
+      }),
+      http.post("/api/registrations/r2/counts", () => HttpResponse.json({ ...field[1], rebuys: 1, paymentConfirmed: false })),
+    );
+    const { user } = renderPhone();
+
+    await quickAction(user, "Re-buy");
+    const sheet = await screen.findByRole("dialog", { name: "Re-buy · $25" });
+    expect(within(sheet).getByTestId("rebuy-pick-r2")).toHaveTextContent("Bob 0 of 1 re-buy · Not paid yet");
+    expect(within(sheet).getByTestId("rebuy-pick-r1")).not.toHaveTextContent("Not paid yet");
+    await user.click(within(sheet).getByTestId("rebuy-pick-r2"));
+
+    const confirm = await screen.findByRole("dialog", { name: "Re-buy for Bob" });
+    expect(within(confirm).getByTestId("top-up-unpaid")).toHaveTextContent("Bob's buy-in is not confirmed: this re-buy joins the prize pool once their payment is.");
+    await user.click(within(confirm).getByRole("button", { name: "Record re-buy ($25)" }));
+    expect(await notifications().findByText("Bob: 1st re-buy ($25). It joins the prize pool once their payment is confirmed.")).toBeInTheDocument();
+
+    // Next time the TD takes Bob's payment from the same step first.
+    await quickAction(user, "Re-buy");
+    await user.click(within(await screen.findByRole("dialog", { name: "Re-buy · $25" })).getByTestId("rebuy-pick-r2"));
+    const again = await screen.findByRole("dialog", { name: "Re-buy for Bob" });
+    await user.click(within(again).getByRole("button", { name: "Confirm payment" }));
+    expect(await notifications().findByText("Bob has paid: their entries are in the prize pool.")).toBeInTheDocument();
+    expect(confirmed).toEqual(["r2"]);
+    expect(within(again).queryByTestId("top-up-unpaid")).not.toBeInTheDocument();
+  });
+
   it("greys out a player the house rules allow no more: one re-buy OR one add-on", async () => {
     mockDesk({
       tournament: rebuys,
@@ -594,7 +627,7 @@ describe("TournamentDetailsPage on a phone: the Money tab", () => {
       http.get("/api/tournaments/t1/pending-registrations", () => HttpResponse.json([cat])),
       http.get("/api/tournaments/t1/confirmed-registrations", () => HttpResponse.json([ann])),
       http.patch("/api/registrations/r3/confirm-payment", () =>
-        HttpResponse.json({ ...field[2], paymentConfirmed: true, seating: { status: "seated", seat: seatRef("tb1", 1, 4) } } satisfies PaymentConfirmedDto),
+        HttpResponse.json({ ...field[2], paymentConfirmed: true, seating: { status: "seated", seat: seatRef("tb1", 1, 4) }, highHandUnawardedCents: 0 } satisfies PaymentConfirmedDto),
       ),
     );
     const { user } = renderPhone("/admin/tournaments/t1?tab=money");
@@ -608,7 +641,7 @@ describe("TournamentDetailsPage on a phone: the Money tab", () => {
   });
 
   it("takes a payment from the quick actions, saying how many wait to pay before they are seated (R5REV-HOST-09)", async () => {
-    mockDesk();
+    mockDesk({ registrations: [field[0], field[1], { ...field[2], paymentConfirmed: false }] });
     const cat: PendingRegistrationDto = { ...field[2], paymentConfirmed: false, player: staffPlayer("p-r3", "Cat"), amountOwed: 100 };
     // "Once they've paid": Cat signed up late and waits at the desk to pay before she is seated.
     mockSeating(seatingDto({ tables: [{ id: "tb1", number: 1, seated: { 1: { id: "r1", name: "Ann" }, 2: { id: "r2", name: "Bob" } } }], settings: { autoSeat: "once_paid" }, advisor: { notArrived: 1 } }));
@@ -619,7 +652,7 @@ describe("TournamentDetailsPage on a phone: the Money tab", () => {
         return HttpResponse.json([cat]);
       }),
       http.patch("/api/registrations/r3/confirm-payment", () =>
-        HttpResponse.json({ ...field[2], paymentConfirmed: true, seating: { status: "seated", seat: seatRef("tb1", 1, 4) } } satisfies PaymentConfirmedDto),
+        HttpResponse.json({ ...field[2], paymentConfirmed: true, seating: { status: "seated", seat: seatRef("tb1", 1, 4) }, highHandUnawardedCents: 0 } satisfies PaymentConfirmedDto),
       ),
     );
     const { user } = renderPhone();
@@ -634,6 +667,37 @@ describe("TournamentDetailsPage on a phone: the Money tab", () => {
     const sheet = await screen.findByRole("dialog", { name: "Take payment" });
     await user.click(await within(sheet).findByTestId("confirm-payment-r3"));
     expect(await notifications().findByText("Cat has paid. Seated at Table 1, Seat 4.")).toBeInTheDocument();
+  });
+});
+
+describe("TournamentDetailsPage on a phone: taking payments without leaving the desk (R6REV1-PHONE-02)", () => {
+  const staffPlayer = (id: string, name: string) => ({ id, name, email: null, phone: null, imageUrl: null, createdAt: null, canEdit: true }) as const;
+  const unpaidCat = { ...field[2], paymentConfirmed: false };
+
+  it("opens the Take payment sheet from the Money tab's note, and keeps the tab bar and the quick actions", async () => {
+    mockDesk({ registrations: [field[0], field[1], unpaidCat] });
+    const cat: PendingRegistrationDto = { ...unpaidCat, player: staffPlayer("p-r3", "Cat"), amountOwed: 100 };
+    server.use(http.get("/api/tournaments/t1/pending-registrations", () => HttpResponse.json([cat])));
+    const { user, location } = renderPhone("/admin/tournaments/t1?tab=money");
+
+    const note = await screen.findByTestId("paid-players-note");
+    expect(note).toHaveTextContent("Prize pool from 2 paid players · 1 not paid yet (not in the pool)");
+    expect(within(note).queryByRole("link")).not.toBeInTheDocument();
+    await user.click(within(note).getByRole("button", { name: "Take payments" }));
+
+    const sheet = await screen.findByRole("dialog", { name: "Take payment" });
+    expect(await within(sheet).findByTestId("confirm-payment-r3")).toBeInTheDocument();
+    expect(location()).toBe("/admin/tournaments/t1?tab=money");
+  });
+
+  it("counts everyone in the field who has not paid beside Take payment, whatever the seating mode", async () => {
+    mockDesk({ registrations: [field[0], field[1], unpaidCat] });
+    mockSeating(seatingDto({ tables: [], settings: { autoSeat: "off" } }));
+    const { user } = renderPhone();
+
+    await user.click(await screen.findByRole("button", { name: "Quick actions" }));
+    const item = await screen.findByRole("menuitem", { name: /Take payment/ });
+    expect(item).toHaveTextContent("Take payment1 waiting to pay");
   });
 });
 
