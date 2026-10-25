@@ -36,6 +36,8 @@ interface ConfirmDialogProps {
   /** Where focus goes on close when what opened the dialog is gone: the trigger of the menu it was chosen from. */
   returnFocusTo?: RefObject<HTMLElement | null>;
   confirmTestId?: string;
+  /** A choice that shapes the action (a checkbox), between the question and the buttons; the caller holds its state. */
+  children?: ReactNode;
   /**
    * Runs on confirm. The dialog stays open, its buttons busy (they ignore presses but keep focus, so a
    * refusal leaves the person on the button they pressed), until it settles: it closes when the
@@ -90,6 +92,7 @@ function ConfirmBody({
   destructive = false,
   confirmText,
   confirmTestId,
+  children,
   onConfirm,
   pending,
   setPending,
@@ -121,6 +124,7 @@ function ConfirmBody({
           {typeof description === "string" ? description : <div>{description}</div>}
         </AlertDialogDescription>
       </AlertDialogHeader>
+      {children}
       {confirmText !== undefined ? (
         <div className="space-y-2">
           <Label htmlFor={typedId}>

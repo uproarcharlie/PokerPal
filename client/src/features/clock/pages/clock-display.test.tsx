@@ -1,7 +1,7 @@
 import { act, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { delay, http, HttpResponse } from "msw";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { clockDto, liveDisplayDto, mockDisplay, pausedClock, recordClockActions, resetServerTime, runningClock, serveDisplay } from "@test/helpers/clock-dto";
 import { server } from "@test/msw/server";
 import { apiError, mockSignedOut, renderWithApp } from "@test/helpers/web";
@@ -44,6 +44,13 @@ const beeps = () => FakeAudioContext.instances.flatMap((context) => context.beep
 function showPage() {
   return renderWithApp(<ClockDisplayPage />, { path: "/clock/t1", route: "/clock/:tournamentId" });
 }
+
+// The staff's controls load on demand (a script of their own). Their first load compiles that module
+// graph, which can take seconds when every worker is busy: loaded once here, under the hook's own limit,
+// the 1 s waits below never time a compile, whichever test draws the controls first.
+beforeAll(async () => {
+  await import("../components/display-controls");
+});
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });

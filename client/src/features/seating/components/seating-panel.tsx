@@ -13,7 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 import { qk } from "@/lib/api/query-keys";
 import { usePaidOnly } from "../paid-only";
 import { seatingEntries, seatPress } from "../seat-selection";
-import { changeOutcome, FAILED, seatingRefusal, type AnnouncedMoves } from "../seating-text";
+import { changeOutcome, failedTitle, seatingRefusal, type AnnouncedMoves } from "../seating-text";
 import { plural } from "@/lib/format";
 import { seatingInterval, useSeating, useSeatingBusy, useSeatingMutations, type SeatingChange } from "../staff-hooks";
 import { AddTablesDialog } from "./add-tables-dialog";
@@ -107,14 +107,18 @@ function SeatingDesk({ tournamentId, seating, registrations }: SeatingDeskProps)
   const settingsTable = dialog?.kind === "settings" ? (active.find((table) => table.id === dialog.tableId) ?? null) : null;
   const eliminating = eliminatingId === null ? null : (registrations.find((registration) => registration.id === eliminatingId) ?? null);
 
-  /** Saves a change and says what it did; a refusal is the caller's to show (the forms put it on a field). */
+  /**
+   * Saves a change and says what it did, a move made by hand with an Undo that puts it back (a tap on
+   * the wrong seat is easy on a phone: TDN4-UNSEAT-NO-UNDO); a refusal is the caller's to show (the
+   * forms put it on a field).
+   */
   const perform = async (next: SeatingChange): Promise<SeatingMutationDto> => {
     const result = await change.mutateAsync(next);
     setSelectedId(null);
     setHint(null);
-    const outcome = changeOutcome(next, result);
-    if (outcome.announce) setAnnounced(outcome.announce);
-    if (outcome.toast) toast(outcome.toast);
+    const { announce, toast: told, undo } = changeOutcome(next, result);
+    if (announce) setAnnounced(announce);
+    if (told) toast({ ...told, action: undo ? { label: "Undo", onClick: () => void run(undo) } : undefined });
     return result;
   };
   /** Saves a change, and shows a refusal in a toast. One at a time: a tap while one is saving does nothing. */
@@ -123,7 +127,7 @@ function SeatingDesk({ tournamentId, seating, registrations }: SeatingDeskProps)
     try {
       await perform(next);
     } catch (error) {
-      toast({ title: FAILED[next.kind], description: seatingRefusal(error, next), variant: "destructive" });
+      toast({ title: failedTitle(next), description: seatingRefusal(error, next), variant: "destructive" });
     }
   };
   const closeDialog = (kind: OpenDialog["kind"]) => setDialog((open) => (open?.kind === kind ? null : open));
@@ -140,7 +144,8 @@ function SeatingDesk({ tournamentId, seating, registrations }: SeatingDeskProps)
 
   const tableActions = (table: TableDto): TableAction[] => {
     const actions: TableAction[] = ["settings"];
-    if (active.length > 1 && table.seatCount >= seating.stats.activePlayers) actions.push("finalTable");
+    // The server's rule: the final table seats the players at the tables (the waiting can be included when it has room).
+    if (active.length > 1 && table.seatCount >= seating.stats.seated) actions.push("finalTable");
     if (active.length > 1 && table.occupied > 0) actions.push("break");
     if (table.occupied === 0) actions.push("remove");
     return actions;

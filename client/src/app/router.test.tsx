@@ -1,5 +1,5 @@
 import { act, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { mockSignedIn, mockSignedOut, renderWithApp } from "@test/helpers/web";
 import { AppRouter } from "./router";
 
@@ -39,6 +39,14 @@ vi.mock("@/features/tournaments/pages/tournament-details", () => ({
 const TESS = { id: "u1", name: "Tess TD", email: "tess@club.test", role: "full_member" } as const;
 
 describe("AppRouter", () => {
+  // The staff layout (the sidebar and its menus) and the not-found page are the real modules, loaded
+  // on demand. Their first load compiles that whole module graph, which takes seconds when every
+  // worker is busy, so the first staff test ran out of its 1 s wait on the loading spinner. Loaded
+  // once here instead, under the hook's own limit, the waits below time only the routing.
+  beforeAll(async () => {
+    await Promise.all([import("./layouts/admin-layout"), import("./not-found")]);
+  });
+
   it("shows public pages on their own, without the staff sidebar", async () => {
     mockSignedOut();
     renderWithApp(<AppRouter />, { path: "/register/t1" });

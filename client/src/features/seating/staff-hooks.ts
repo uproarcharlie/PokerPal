@@ -22,7 +22,7 @@ import type {
   UnseatInput,
   UpdateTableInput,
 } from "@shared/api/seating";
-import { hasErrorCode, isApiError } from "@/lib/api/http";
+import { errorDetails, hasErrorCode, isApiError, isRecord } from "@/lib/api/http";
 import { invalidateTournament } from "@/lib/api/invalidate";
 import { qk } from "@/lib/api/query-keys";
 import { unlessRefused } from "@/lib/live-refresh";
@@ -78,7 +78,7 @@ export function useSeating(tournamentId: string, { poll, enabled = true }: { pol
   });
 }
 
-/** One change to the seating, as the panel asks for it. */
+/** One change to the seating, as the panel asks for it; `undoing` marks a toast's Undo of a move made by hand. */
 export type SeatingChange =
   | { kind: "setup"; input: SeatingSetupInput }
   | { kind: "addTables"; input: CreateTablesInput }
@@ -86,8 +86,8 @@ export type SeatingChange =
   | { kind: "removeTable"; tableId: string }
   | { kind: "breakTable"; tableId: string; input: BreakTableInput }
   | { kind: "draw"; input: DrawSeatsInput }
-  | { kind: "assign"; input: AssignSeatInput }
-  | { kind: "unseat"; input: UnseatInput }
+  | { kind: "assign"; input: AssignSeatInput; undoing?: true }
+  | { kind: "unseat"; input: UnseatInput; undoing?: true }
   | { kind: "balance"; input: BalanceInput }
   | { kind: "finalTable"; input: FinalTableInput };
 
@@ -118,11 +118,9 @@ function send(tournamentId: string, change: SeatingChange): Promise<SeatingMutat
 
 /** The fresh seating a STALE_PLAN refusal carries (details.seating), if it carries one. */
 export function staleSeating(error: unknown): SeatingDto | null {
-  if (!hasErrorCode(error, "STALE_PLAN")) return null;
-  const seating: unknown = typeof error.details === "object" && error.details !== null ? (error.details as { seating?: unknown }).seating : undefined;
-  if (typeof seating !== "object" || seating === null) return null;
-  const candidate = seating as Partial<SeatingDto>;
-  return typeof candidate.version === "string" && Array.isArray(candidate.tables) && Array.isArray(candidate.unseated) ? (seating as SeatingDto) : null;
+  const seating = errorDetails(error, "STALE_PLAN")?.seating;
+  if (!isRecord(seating)) return null;
+  return typeof seating.version === "string" && Array.isArray(seating.tables) && Array.isArray(seating.unseated) ? (seating as unknown as SeatingDto) : null;
 }
 
 /** The seating as the server just sent it, on screen at once: a poll already on its way is cancelled first, so it cannot put the old seating back. */

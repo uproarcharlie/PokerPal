@@ -156,6 +156,19 @@ describe("PlayerActionsPage: requests", () => {
     expect(screen.getByRole("option", { name: "Cal Iti (out: buy back in)" })).toBeInTheDocument();
   });
 
+  it("closes the players the house rules allow no more: the add-on limit, and one re-buy OR one add-on (TDN4-HOUSE-RULES-UNSET)", async () => {
+    const field = [registrationDto("r1", "Ann Ngata"), registrationDto("r2", "Ben Hale", { rebuys: 1 }), registrationDto("r4", "Dee Rua", { addons: 1 })];
+    mockTournamentPages(running({ maxRebuys: 1, maxAddons: 1, rebuyOrAddon: true }), field);
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: /^Add-on/ }));
+    await user.click(await screen.findByRole("combobox", { name: "Select Player" }));
+    expect(await screen.findByRole("option", { name: "Ann Ngata (0 of 1 add-ons)" })).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByRole("option", { name: "Ben Hale (took a re-buy: not both)" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("option", { name: "Dee Rua (1 of 1 add-ons: limit reached)" })).toHaveAttribute("aria-disabled", "true");
+  });
+
   it("records a knockout claim against another player still in", async () => {
     mockTournamentPages(running(), players);
     const sent = mockRequests();

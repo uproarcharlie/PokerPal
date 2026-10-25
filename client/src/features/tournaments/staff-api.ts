@@ -19,11 +19,21 @@ import type {
   UpdateRegistrationInput,
 } from "@shared/api/registrations";
 import type { CreateTournamentInput, TournamentDetailDto, UpdateTournamentInput } from "@shared/api/tournaments";
-import { apiGet, apiSend, hasErrorCode, segment } from "@/lib/api/http";
+import { apiGet, apiSend, errorDetails, isRecord, segment } from "@/lib/api/http";
 import { qk } from "@/lib/api/query-keys";
 import { tournamentPath } from "./api";
 
 export const tournamentDeskQueries = {
+  /**
+   * The registrations as the club's staff get them (ManagedRegistration: with payment status): the same
+   * read, and the same cache entry, as tournamentQueries.registrations, typed for what the server sends
+   * a manager (R4-CQ-04).
+   */
+  managedRegistrations: (id: string) =>
+    queryOptions({
+      queryKey: qk.tournaments.registrations(id),
+      queryFn: ({ signal }) => apiGet<ManagedRegistration[]>(`${tournamentPath(id)}/registrations`, { signal }),
+    }),
   pendingActions: (id: string) =>
     queryOptions({
       queryKey: qk.tournaments.pendingActions(id),
@@ -87,13 +97,11 @@ export const dismissPendingAction = (actionId: string) =>
 export const finalizeTournament = (id: string, input: FinalizeInput) =>
   apiSend<FinalizeResultDto>("POST", `${tournamentPath(id)}/finalize`, input);
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 const isTextOrNull = (value: unknown) => value === null || typeof value === "string";
 
 /** The new plan a 409 PLAN_CHANGED carries (`details.preview`), when it carries one. */
 export function planChangedPreview(error: unknown): FinalizePreviewDto | undefined {
-  if (!hasErrorCode(error, "PLAN_CHANGED") || !isRecord(error.details)) return undefined;
-  const { preview } = error.details;
+  const preview = errorDetails(error, "PLAN_CHANGED")?.preview;
   return isRecord(preview) && typeof preview.ok === "boolean" && Array.isArray(preview.rows) && Array.isArray(preview.activePlayers)
     ? (preview as unknown as FinalizePreviewDto)
     : undefined;
@@ -101,8 +109,9 @@ export function planChangedPreview(error: unknown): FinalizePreviewDto | undefin
 
 /** What a 409 REBUY_BEFORE_ELIMINATION says about the player, for the TD's question; undefined for anything else. */
 export function rebuyBeforeEliminationDetails(error: unknown): RebuyBeforeEliminationDetails | undefined {
-  if (!hasErrorCode(error, "REBUY_BEFORE_ELIMINATION") || !isRecord(error.details)) return undefined;
-  const { playerName, requestedAt, eliminatedAt } = error.details;
+  const details = errorDetails(error, "REBUY_BEFORE_ELIMINATION");
+  if (!details) return undefined;
+  const { playerName, requestedAt, eliminatedAt } = details;
   return typeof playerName === "string" && isTextOrNull(requestedAt ?? null) && isTextOrNull(eliminatedAt ?? null)
     ? { playerName, requestedAt: (requestedAt as string | null | undefined) ?? null, eliminatedAt: (eliminatedAt as string | null | undefined) ?? null }
     : undefined;

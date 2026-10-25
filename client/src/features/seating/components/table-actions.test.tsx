@@ -131,11 +131,85 @@ describe("SeatingPanel: a table's menu", () => {
 
     await openMenu(user, "Table 3", "Final table here…");
     const confirm = await screen.findByRole("alertdialog", { name: "Draw the final table at Table 3?" });
-    expect(confirm).toHaveTextContent("Everyone still in (5 players) gets a new random seat at Table 3");
+    expect(confirm).toHaveTextContent("Everyone seated (5 players) gets a new random seat at Table 3");
     await user.click(within(confirm).getByRole("button", { name: "Draw the final table" }));
 
     await waitFor(() => expect(bodies).toEqual([{ tableId: "tC" }]));
     expect(await screen.findByRole("dialog", { name: "Final table drawn" })).toBeInTheDocument();
+  });
+
+  describe("with players waiting for a seat (TDN4-FINAL-TABLE-WORDS)", () => {
+    // 8 seated at two tables of 9 and 2 waiting (unpaid): the final table fits everyone seated, not everyone still in.
+    const seatedAt = (prefix: string, count: number) => Object.fromEntries(Array.from({ length: count }, (_, i) => [i + 1, { id: `${prefix}${i + 1}`, name: `${prefix.toUpperCase()} ${i + 1}` }]));
+    const crowded: SeatingSpec = {
+      version: "c0ffee00",
+      tables: [
+        { id: "tA", number: 1, seats: 9, seated: seatedAt("a", 4) },
+        { id: "tB", number: 2, seats: 9, seated: seatedAt("b", 4) },
+      ],
+      unseated: [
+        { id: "w1", name: "Wiremu", paid: false },
+        { id: "w2", name: "Xena", paid: false },
+      ],
+      suggestions: { finalTable: { tableId: "tA", tableNumber: 1 } },
+    };
+
+    it("offers the final table here by the players seated, as the server counts them, and says who stays waiting", async () => {
+      mockSeating(seatingDto(crowded));
+      const after = seatingDto({ tables: [{ id: "tA", number: 1, seats: 9, seated: { ...seatedAt("a", 4), 5: { id: "b1", name: "B 1" } } }, { id: "tB", number: 2, status: "broken" }], unseated: crowded.unseated });
+      const bodies = recordWrite("post", "/api/tournaments/t1/seating/final-table", () => HttpResponse.json(seatingMutation(after, [seatMove("b1", "B 1", seatRef("tB", 2, 1), seatRef("tA", 1, 5), "final_table")])));
+      const user = userEvent.setup();
+      renderWithApp(<SeatingPanel tournament={tournament} registrations={[]} />);
+
+      const advice = await screen.findByTestId("seating-advice");
+      expect(advice).toHaveTextContent("Everyone seated (8 players) fits at Table 1.");
+      expect(advice).toHaveTextContent("2 players are waiting for a seat (2 unpaid): they keep waiting.");
+      // 8 seated fit at Table 2's 9 seats, though 10 are still in: the server would draw it, so the menu offers it.
+      await user.click(screen.getByRole("button", { name: "Table 2 options" }));
+      expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toContain("Final table here…");
+      await user.keyboard("{Escape}");
+
+      await user.click(within(advice).getByRole("button", { name: "Draw the final table" }));
+      const confirm = await screen.findByRole("alertdialog", { name: "Draw the final table at Table 1?" });
+      expect(confirm).toHaveTextContent(
+        "Everyone seated (8 players) gets a new random seat at Table 1, and the other tables are archived. 2 players are waiting for a seat (2 unpaid): they keep waiting (Table 1 has 9 seats).",
+      );
+      // Table 1 has no seat for all 10 still in: there is nothing to include them in.
+      expect(within(confirm).queryByRole("checkbox")).not.toBeInTheDocument();
+      await user.click(within(confirm).getByRole("button", { name: "Draw the final table" }));
+
+      await waitFor(() => expect(bodies).toEqual([{ tableId: "tA" }]));
+      const moves = await screen.findByRole("dialog", { name: "Final table drawn" });
+      expect(within(moves).getByTestId("still-waiting")).toHaveTextContent("2 players are waiting for a seat (2 unpaid): Wiremu, Xena. 4 open seats left.");
+    });
+
+    it("draws the waiting players too when asked, while the table has a seat for everyone still in", async () => {
+      const roomy: SeatingSpec = { ...crowded, tables: [{ id: "tA", number: 1, seats: 10, seated: seatedAt("a", 4) }, crowded.tables![1]] };
+      mockSeating(seatingDto(roomy));
+      const bodies = recordWrite("post", "/api/tournaments/t1/seating/final-table", () => HttpResponse.json(seatingMutation(seatingDto(roomy), [seatMove("w1", "Wiremu", null, seatRef("tA", 1, 9), "final_table")])));
+      const user = userEvent.setup();
+      renderWithApp(<SeatingPanel tournament={tournament} registrations={[]} />);
+
+      await user.click(within(await screen.findByTestId("seating-advice")).getByRole("button", { name: "Draw the final table" }));
+      const confirm = await screen.findByRole("alertdialog", { name: "Draw the final table at Table 1?" });
+      expect(confirm).toHaveTextContent("they keep waiting unless you include them.");
+      await user.click(within(confirm).getByRole("checkbox", { name: /Include them in the draw/ }));
+      expect(confirm).toHaveTextContent("Everyone still in (10 players) gets a new random seat at Table 1, and the other tables are archived.");
+      await user.click(within(confirm).getByRole("button", { name: "Draw the final table" }));
+
+      await waitFor(() => expect(bodies).toEqual([{ tableId: "tA", includeWaiting: true }]));
+    });
+
+    it("says who a break leaves waiting", async () => {
+      mockSeating(seatingDto({ ...crowded, suggestions: { breakTable: { tableId: "tB", tableNumber: 2, playersToMove: 4 } } }));
+      const user = userEvent.setup();
+      renderWithApp(<SeatingPanel tournament={tournament} registrations={[]} />);
+
+      const advice = await screen.findByTestId("seating-advice");
+      expect(advice).toHaveTextContent("Its 4 players fit at the other tables.2 players are waiting for a seat (2 unpaid): they keep waiting.");
+      await user.click(within(advice).getByRole("button", { name: "Break Table 2" }));
+      expect(await screen.findByRole("alertdialog", { name: "Break Table 2?" })).toHaveTextContent("Table 2 is archived (it can be reopened). 2 players are waiting for a seat (2 unpaid): they keep waiting.");
+    });
   });
 
   it("reopens an archived table", async () => {

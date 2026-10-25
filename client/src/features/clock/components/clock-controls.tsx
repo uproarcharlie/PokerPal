@@ -70,7 +70,10 @@ export function ClockControls({ tournament, clock, derived, openRequest = null }
   const startable = tournament.status === "scheduled" || tournament.status === "registration";
   const alsoStartTournament = startable && alsoStart;
   const levels = clock.structure.levels;
-  const jumpIndex = jumpTo ?? String(derived.levelIndex);
+  // The level chosen is followed by its id, so a structure edit that moves rows (a poll from another
+  // device) keeps the box on the same level rather than on whatever row now has its place (P4REV1-R2-03).
+  const chosenIndex = jumpTo === null ? -1 : levels.findIndex((level) => level.id === jumpTo);
+  const jumpIndex = chosenIndex === -1 ? derived.levelIndex : chosenIndex;
 
   const setTime = async (remainingSeconds: number) => {
     if (!timeFor) return;
@@ -118,9 +121,9 @@ export function ClockControls({ tournament, clock, derived, openRequest = null }
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
         <div className="min-w-0 flex-1 space-y-2">
           <Label htmlFor={jumpId}>Jump to level</Label>
-          <NativeSelect id={jumpId} value={jumpIndex} onChange={(event) => setJumpTo(event.target.value)} disabled={finished}>
+          <NativeSelect id={jumpId} value={levels[jumpIndex]?.id ?? ""} onChange={(event) => setJumpTo(event.target.value)} disabled={finished}>
             {levels.map((level, index) => (
-              <option key={level.id} value={String(index)}>
+              <option key={level.id} value={level.id}>
                 {levelOption(levels, index)}
               </option>
             ))}
@@ -130,7 +133,7 @@ export function ClockControls({ tournament, clock, derived, openRequest = null }
           variant="outline"
           busy={busy.has("jump")}
           disabled={finished}
-          onClick={() => void act({ action: "jump", levelIndex: Number(jumpIndex) }).then((done) => done && setJumpTo(null))}
+          onClick={() => void act({ action: "jump", levelIndex: jumpIndex }).then((done) => done && setJumpTo(null))}
         >
           Go to level
         </Button>

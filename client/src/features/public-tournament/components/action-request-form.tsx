@@ -24,15 +24,23 @@ const SUBMIT_LABELS: Readonly<Record<PlayerActionType, string>> = {
   knockout: "Submit Knockout",
 };
 
-/** A player as the picker lists them: their counts, and whether the request could be confirmed for them now (PUB-14). */
+/** "1 of 2 add-ons", or "1 add-ons" with no limit. */
+const countText = (count: number, max: number | null | undefined, what: string) => (max != null ? `${count} of ${max} ${what}` : `${count} ${what}`);
+
+/**
+ * A player as the picker lists them: their counts, and whether the request could be confirmed for them
+ * now (PUB-14): greyed out with the reason when the house rules allow no more (a limit reached, or the
+ * other kind already taken under "re-buys OR add-ons": TDN4-HOUSE-RULES-UNSET).
+ */
 function requesterOption(tournament: TournamentDetailDto, registration: PublicRegistration, actionType: PlayerActionType) {
   const name = registration.player?.name ?? "Unknown player";
-  if (actionType === "addon") return { text: `${name} (${registration.addons ?? 0} add-ons)`, disabled: false };
   if (actionType === "knockout") return { text: name, disabled: false };
-  const rebuys = registration.rebuys ?? 0;
-  const count = tournament.maxRebuys != null ? `${rebuys} of ${tournament.maxRebuys} re-buys` : `${rebuys} re-buys`;
-  if (requestRefusal(tournament, registration, "rebuy")?.code === "MAX_REBUYS_REACHED") return { text: `${name} (${count}: limit reached)`, disabled: true };
-  return { text: registration.isEliminated ? `${name} (out: buy back in)` : `${name} (${count})`, disabled: false };
+  const count =
+    actionType === "addon" ? countText(registration.addons ?? 0, tournament.maxAddons, "add-ons") : countText(registration.rebuys ?? 0, tournament.maxRebuys, "re-buys");
+  const refusal = requestRefusal(tournament, registration, actionType)?.code;
+  if (refusal === "MAX_REBUYS_REACHED" || refusal === "MAX_ADDONS_REACHED") return { text: `${name} (${count}: limit reached)`, disabled: true };
+  if (refusal === "REBUY_OR_ADDON") return { text: `${name} (took ${actionType === "addon" ? "a re-buy" : "an add-on"}: not both)`, disabled: true };
+  return { text: actionType === "rebuy" && registration.isEliminated ? `${name} (out: buy back in)` : `${name} (${count})`, disabled: false };
 }
 
 function PlayerOption({ registration, text, disabled = false }: { registration: PublicRegistration; text: string; disabled?: boolean }) {

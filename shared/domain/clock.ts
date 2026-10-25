@@ -670,7 +670,13 @@ export function rebaseOnStructureChange(
     if (normalized.status !== "idle") return { ok: false, problem: "CURRENT_LEVEL_REMOVED" };
     return { ok: true, state: { ...normalized, currentLevelIndex: Math.min(normalized.currentLevelIndex, newLevels.length - 1), pausedRemainingMs: null } };
   }
-  const remainingMs = (deriveClock(normalized, oldLevels, nowMs) as DerivedClock).remainingMs;
+  // A running clock's time left is not clamped at 0:00: a final level that has held there for 10
+  // minutes has been played for 10 minutes more than its length, and lengthening it must count them
+  // (P4REV1-R2-02). Paused and idle clocks keep what they hold.
+  const remainingMs =
+    normalized.status === "running" && normalized.periodEndsAt !== null
+      ? normalized.periodEndsAt - nowMs
+      : (deriveClock(normalized, oldLevels, nowMs) as DerivedClock).remainingMs;
   const rebased = clamp(remainingMs + levelDurationMs(newLevels[newIndex]) - levelDurationMs(current), 0, CLOCK_LIMITS.maxRemainingMs);
   if (normalized.status === "running") {
     return { ok: true, state: { ...normalized, currentLevelIndex: newIndex, periodEndsAt: nowMs + rebased, pausedRemainingMs: null } };

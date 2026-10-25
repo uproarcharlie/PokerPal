@@ -4,7 +4,9 @@
  * codes, never on the server's sentence.
  */
 import type { SeatingDto, SeatingMutationDto, SeatMoveDto, SeatRefDto } from "@shared/api/seating";
-import { errorMessage, hasErrorCode } from "@/lib/api/http";
+import { waitingText } from "@shared/domain/seating";
+import { playerName } from "@/features/tournaments/player-name";
+import { errorDetails, errorMessage, hasErrorCode } from "@/lib/api/http";
 import { plural } from "@/lib/format";
 import type { SeatingChange } from "./staff-hooks";
 
@@ -13,6 +15,25 @@ export const seatText = (seat: Pick<SeatRefDto, "tableName" | "seatNumber">): st
 
 /** "Alice → Table 1, Seat 3", or "Alice unseated". */
 export const moveText = (move: SeatMoveDto): string => (move.to ? `${move.playerName} → ${seatText(move.to)}` : `${move.playerName} unseated`);
+
+/** "Table 1, Table 2" as one says it: "Tables 1 and 2" (named tables by name: "Feature table and Table 2"). */
+export function tablesText(tables: ReadonlyArray<{ name: string | null; displayName: string; tableNumber: number }>): string {
+  if (tables.length === 1) return tables[0].displayName;
+  const numbered = tables.every((table) => table.name === null);
+  const names = tables.map((table) => (numbered ? String(table.tableNumber) : table.displayName));
+  const list = `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return numbered ? `Tables ${list}` : list;
+}
+
+/**
+ * "2 players are waiting for a seat (1 unpaid): they keep waiting." Breaking a table, balancing and
+ * the final table plan around the players at the tables, so the TD is told who they leave out
+ * (TDN4-FINAL-TABLE-WORDS). Null when nobody is waiting.
+ */
+export function leftWaitingText(stats: Pick<SeatingDto["stats"], "unseated" | "unconfirmedUnseated">): string | null {
+  const waiting = waitingText(stats.unseated, stats.unconfirmedUnseated);
+  return waiting ? `${waiting}: they keep waiting.` : null;
+}
 
 /** Moves in the order players listen for them: by name. */
 export const movesByName = (moves: readonly SeatMoveDto[]): SeatMoveDto[] => [...moves].sort((a, b) => a.playerName.localeCompare(b.playerName));
@@ -36,7 +57,7 @@ const isCount = (value: unknown): value is number => typeof value === "number" &
  */
 export function seatingRefusal(error: unknown, change?: SeatingChange): string {
   if (hasErrorCode(error, "INSUFFICIENT_SEATS") && change?.kind !== "finalTable") {
-    const details = (typeof error.details === "object" && error.details !== null ? error.details : {}) as { needed?: unknown; available?: unknown };
+    const details = errorDetails(error) ?? {};
     if (isCount(details.needed) && isCount(details.available) && details.needed > details.available) {
       return `Need ${plural(details.needed - details.available, "more seat")} — add a table?`;
     }
@@ -52,12 +73,19 @@ export interface AnnouncedMoves {
   moves: readonly SeatMoveDto[];
   /** Draw and setup: players left out because they have not paid. */
   excludedUnconfirmed?: number;
+  /**
+   * A break, a balance or the final table: who is still waiting for a seat after it, by name, and how
+   * many seats are open for them (TDN4-FINAL-TABLE-WORDS). Absent when nobody is.
+   */
+  waiting?: { text: string; names: readonly string[]; openSeats: number };
 }
 
-/** What the TD is told after a change: the moves to call out, or a toast. */
+/** What the TD is told after a change: the moves to call out, or a toast, with an Undo for a move made by hand. */
 export interface ChangeOutcome {
   announce: AnnouncedMoves | null;
   toast: { title: string; description?: string } | null;
+  /** The change that puts a hand-made move, swap or unseat back, for the toast's Undo (TDN4-UNSEAT-NO-UNDO). */
+  undo: SeatingChange | null;
 }
 
 const tableName = (seating: SeatingDto, tableId: string) => seating.tables.find((table) => table.id === tableId)?.displayName ?? "The table";
@@ -79,9 +107,18 @@ function announceTitle(change: SeatingChange, result: SeatingMutationDto): strin
   }
 }
 
+/** "Alice is back at Table 1, Seat 3": what the Undo of a move made by hand says it did. */
+function undoneToast(result: SeatingMutationDto): ChangeOutcome["toast"] {
+  const [first, second] = result.moves;
+  if (!first) return null;
+  if (second) return { title: "Swap undone", description: `${first.playerName} and ${second.playerName} are back in their seats.` };
+  return { title: "Move undone", description: first.to ? `${first.playerName} is back at ${seatText(first.to)}.` : `${first.playerName} is waiting for a seat again.` };
+}
+
 function quietToast(change: SeatingChange, result: SeatingMutationDto): ChangeOutcome["toast"] {
   const excluded = result.excludedUnconfirmed ?? 0;
   const [first, second] = result.moves;
+  if ((change.kind === "assign" || change.kind === "unseat") && change.undoing) return undoneToast(result);
   switch (change.kind) {
     case "setup":
       return { title: "Tables set up", description: excluded > 0 ? `Nobody seated: ${unpaidLeftOut(excluded)}.` : "Nobody to seat yet." };
@@ -97,9 +134,9 @@ function quietToast(change: SeatingChange, result: SeatingMutationDto): ChangeOu
       return excluded > 0 ? { title: "Nobody seated", description: `${unpaidLeftOut(excluded)} (paid players only).` } : { title: "Everyone is seated" };
     case "assign":
       if (first && second) return { title: "Seats swapped", description: `${first.playerName} and ${second.playerName} swapped seats.` };
-      return first ? { title: "Player moved", description: moveText(first) } : null;
+      return first ? { title: "Player moved", description: first.from ? `${moveText(first)} (from ${seatText(first.from)})` : moveText(first) } : null;
     case "unseat":
-      return first ? { title: "Player unseated", description: `${first.playerName} is waiting for a seat.` } : null;
+      return first ? { title: "Player unseated", description: first.from ? `${first.playerName} left ${seatText(first.from)} and is waiting for a seat.` : `${first.playerName} is waiting for a seat.` } : null;
     case "balance":
       return { title: "Tables are already balanced" };
     case "finalTable":
@@ -107,12 +144,43 @@ function quietToast(change: SeatingChange, result: SeatingMutationDto): ChangeOu
   }
 }
 
+/**
+ * What puts a move, a swap or an unseat made by hand back: the player (for a swap, the one who was
+ * moved) goes back to the seat they left, or back to waiting when they had none. It is sent against
+ * the seating the change left, so once anything else has changed the server refuses it (STALE_PLAN)
+ * rather than undo over someone else's change. An undo is not itself undone.
+ */
+function undoOf(change: SeatingChange, result: SeatingMutationDto): SeatingChange | null {
+  if ((change.kind !== "assign" && change.kind !== "unseat") || change.undoing) return null;
+  const moved = result.moves.find((move) => move.registrationId === change.input.registrationId);
+  if (!moved) return null;
+  const { registrationId } = moved;
+  if (!moved.from) return { kind: "unseat", input: { registrationId }, undoing: true };
+  const back = { registrationId, tableId: moved.from.tableId, seatNumber: moved.from.seatNumber, expectedVersion: result.seating.version };
+  return { kind: "assign", input: { ...back, swap: result.moves.length > 1 }, undoing: true };
+}
+
+/** Who is still waiting for a seat after a break, a balance or the final table, which leave them out. */
+function stillWaiting(change: SeatingChange, seating: SeatingDto): AnnouncedMoves["waiting"] {
+  if (change.kind !== "breakTable" && change.kind !== "balance" && change.kind !== "finalTable") return undefined;
+  const text = waitingText(seating.stats.unseated, seating.stats.unconfirmedUnseated);
+  return text ? { text, names: seating.unseated.map((entry) => playerName(entry)), openSeats: seating.stats.openSeats } : undefined;
+}
+
 /** After a change: the moves to call out when the system chose them, else a toast saying what happened (or nothing). */
 export function changeOutcome(change: SeatingChange, result: SeatingMutationDto): ChangeOutcome {
   if (result.moves.length > 0 && announcesMoves(change)) {
-    return { announce: { title: announceTitle(change, result), moves: result.moves, excludedUnconfirmed: result.excludedUnconfirmed ?? 0 }, toast: null };
+    const announce: AnnouncedMoves = { title: announceTitle(change, result), moves: result.moves, excludedUnconfirmed: result.excludedUnconfirmed ?? 0 };
+    const waiting = stillWaiting(change, result.seating);
+    return { announce: waiting ? { ...announce, waiting } : announce, toast: null, undo: null };
   }
-  return { announce: null, toast: quietToast(change, result) };
+  return { announce: null, toast: quietToast(change, result), undo: undoOf(change, result) };
+}
+
+/** A refused change's toast title (an Undo's says it could not undo). */
+export function failedTitle(change: SeatingChange): string {
+  if ((change.kind === "assign" || change.kind === "unseat") && change.undoing) return "Could not undo";
+  return FAILED[change.kind];
 }
 
 /** A refused change's toast title. */

@@ -26,8 +26,8 @@ import {
   nextHighHandAward,
   splitHighHandAward,
 } from "@shared/domain/prize-pool";
-import type { InsertTournamentRegistration, Player, Tournament, TournamentRegistration } from "@shared/schema";
-import { db, type Transaction } from "../db";
+import type { InsertTournamentRegistration, PendingAction, Player, Tournament, TournamentRegistration } from "@shared/schema";
+import { db, type Executor, type Transaction } from "../db";
 import { viewerFor, type ClubScope } from "../http/authz";
 import { badRequest, conflict, HttpError, notFound } from "../http/errors";
 import { insertActivity } from "../repositories/activity";
@@ -114,15 +114,27 @@ function assertTopUpsAllowed(tournament: Tournament, before: TopUpCounts, after:
   if (refusal) throw conflict(refusal.code, refusal.message);
 }
 
+/** The tournament clock's time now (ms since level 1 began, breaks included); null without a clock. */
+export async function clockElapsedMsNow(ex: Executor, tournamentId: string): Promise<number | null> {
+  const clock = await getClock(ex, tournamentId);
+  const derived = clock ? deriveClock(clockStateOf(clock), clock.levels, Date.now()) : null;
+  return derived ? Math.round(derived.elapsedClockMs) : null;
+}
+
+/** A player's confirmed request: when they asked, and the clock's time then (null when unknown). */
+export type TopUpRequest = Pick<PendingAction, "timestamp" | "clockElapsedMs">;
+
 /**
- * "after the re-buy period, which ended at 2:15 on the clock" when `at` is past the tournament's re-buy
- * period on its clock; null without a period, without a clock, or before its end (TDN3-HOUSE-RULES).
+ * "after the re-buy period, which ended at 2:15 on the clock" when the sale's clock time is past the
+ * tournament's re-buy period; null without a period, without a clock, or before its end
+ * (TDN3-HOUSE-RULES). A request's clock time is the one recorded when the player asked: the clock's
+ * anchors as they are now cannot give it back once anyone has paused or moved the clock since
+ * (P4REV1-R2-01), so a request without one is never called late. A desk sale's is now.
  */
-async function lateTopUpOf(tx: Transaction, tournament: Tournament, at: Date): Promise<string | null> {
+async function lateTopUpOf(tx: Transaction, tournament: Tournament, request: TopUpRequest | undefined): Promise<string | null> {
   if (tournament.rebuyPeriodMinutes === null) return null;
-  const clock = await getClock(tx, tournament.id);
-  const derived = clock ? deriveClock(clockStateOf(clock), clock.levels, at.getTime()) : null;
-  return lateTopUpText(tournament.rebuyPeriodMinutes, derived?.elapsedClockMs ?? null);
+  const elapsedClockMs = request ? request.clockElapsedMs : await clockElapsedMsNow(tx, tournament.id);
+  return lateTopUpText(tournament.rebuyPeriodMinutes, elapsedClockMs);
 }
 
 async function logActivity(
@@ -143,7 +155,8 @@ async function logActivity(
 
 /**
  * The re-buy and add-on entries. One sold after the re-buy period says so ("… after the re-buy period,
- * which ended at 2:15 on the clock"): allowed, but never without a word. `at` is when it was asked for.
+ * which ended at 2:15 on the clock"): allowed, but never without a word. `request` is the player's
+ * request it confirms, if any.
  */
 async function logIncreases(
   tx: Transaction,
@@ -151,10 +164,10 @@ async function logIncreases(
   registration: TournamentRegistration,
   player: Player | undefined,
   added: { rebuys: number; addons: number },
-  at = new Date(),
+  request?: TopUpRequest,
 ): Promise<void> {
   if (added.rebuys <= 0 && added.addons <= 0) return;
-  const late = await lateTopUpOf(tx, tournament, at);
+  const late = await lateTopUpOf(tx, tournament, request);
   const note = late ? ` ${late}` : "";
   const data = late ? { afterRebuyPeriod: true, rebuyPeriodMinutes: tournament.rebuyPeriodMinutes } : undefined;
   if (added.rebuys > 0) {
@@ -178,9 +191,9 @@ function requestedBeforeLock(tournament: Tournament, requestedAt: Date | null | 
  * A re-buy by a player who is out is their re-entry: they are back in, and whoever knocked them out
  * keeps that knockout (unlike a restore, which undoes a mistaken elimination).
  *
- * `requestedAt` is when the player asked, for a confirmed request: one made before the pool was locked
- * is still applied after the lock, since the player paid at the table in time and the TD may lock at
- * the end of the re-buy break and then work through the queue (TN2-01). The lock still refuses
+ * `request` is the player's request it confirms: one made before the pool was locked is still applied
+ * after the lock, since the player paid at the table in time and the TD may lock at the end of the
+ * re-buy break and then work through the queue (TN2-01). The lock still refuses
  * anything asked for, or added by staff, after it. `reenter: false` records a re-buy for a player who
  * is out without putting them back in: one they asked and paid for before going out (TN-RV2-01).
  */
@@ -188,7 +201,7 @@ export async function applyCountChange(
   tx: Transaction,
   { tournament, registration }: LockedRegistration,
   deltas: AdjustCountsInput,
-  { requestedAt, reenter = true }: { requestedAt?: Date | null; reenter?: boolean } = {},
+  { request, reenter = true }: { request?: TopUpRequest; reenter?: boolean } = {},
 ): Promise<TournamentRegistration> {
   assertOpen(tournament);
   const delta = { rebuys: deltas.rebuys ?? 0, addons: deltas.addons ?? 0, knockouts: deltas.knockouts ?? 0 };
@@ -197,7 +210,7 @@ export async function applyCountChange(
     addons: (registration.addons ?? 0) + delta.addons,
     knockouts: (registration.knockouts ?? 0) + delta.knockouts,
   };
-  if (tournament.prizePoolLocked && (delta.rebuys > 0 || delta.addons > 0) && !requestedBeforeLock(tournament, requestedAt)) {
+  if (tournament.prizePoolLocked && (delta.rebuys > 0 || delta.addons > 0) && !requestedBeforeLock(tournament, request?.timestamp)) {
     throw conflict("PRIZE_POOL_LOCKED", PRIZE_POOL_LOCKED_MESSAGE);
   }
   assertTopUpsAllowed(tournament, { rebuys: registration.rebuys ?? 0, addons: registration.addons ?? 0 }, next);
@@ -220,8 +233,7 @@ export async function applyCountChange(
     await assertApStillWithinGross(tx, tournament, await registrationsRepo.registrationsOf(tx, tournament.id));
   }
   const player = await getPlayer(tx, registration.playerId);
-  const askedAt = requestedAt instanceof Date && requestedAt.getTime() < Date.now() ? requestedAt : new Date();
-  await logIncreases(tx, tournament, updated, player, { rebuys: Math.max(delta.rebuys, 0), addons: Math.max(delta.addons, 0) }, askedAt);
+  await logIncreases(tx, tournament, updated, player, { rebuys: Math.max(delta.rebuys, 0), addons: Math.max(delta.addons, 0) }, request);
   if (reentry) await logActivity(tx, updated, "reentry", `${playerName(player)} is back in with a re-buy`);
   if (reentry) await restoreSeatAfterReturn(tx, tournament.id, registration.id);
   return updated;

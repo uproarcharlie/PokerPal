@@ -177,9 +177,26 @@ describe("ApAdjustDialog", () => {
     expect(await screen.findByText("AP back to the calculated $60")).toBeInTheDocument();
   });
 
-  it("warns that published payouts change once the pool is locked", async () => {
-    renderDialog(apTournament({ prizePoolLocked: true }));
-    expect(await screen.findByTestId("locked-warning")).toHaveTextContent("Prize pool is locked — published payouts will change.");
+  it("warns that published payouts change once the pool is locked, only for a change that moves the pool (P4REV2R3-MONEY-01)", async () => {
+    const { user } = renderDialog(apTournament({ prizePoolLocked: true }));
+    // Calculated, as it is now: the pool is unchanged, and so are the payouts players were shown.
+    expect(await screen.findByTestId("preview-pool")).toHaveTextContent("Prize pool $540 (unchanged)");
+    expect(screen.queryByTestId("locked-warning")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "Set AP total" }));
+    await user.clear(amountBox());
+    await user.type(amountBox(), "20");
+    expect(screen.getByTestId("locked-warning")).toHaveTextContent("Prize pool is locked — published payouts will change.");
+  });
+
+  it("says a pool of $0 pays no places, not that nobody has entered (P4REV2R3-MONEY-01)", async () => {
+    const { user } = renderDialog();
+    await user.click(await screen.findByRole("radio", { name: "Set AP total" }));
+    await user.clear(amountBox());
+    await user.type(amountBox(), "600");
+
+    expect(screen.getByTestId("preview-pool")).toHaveTextContent("Prize pool $0 (now $540)");
+    expect(screen.getByTestId("preview-no-places")).toHaveTextContent("The prize pool is $0 or less, so no places are paid.");
   });
 
   it("says Save is busy while the change is sent", async () => {

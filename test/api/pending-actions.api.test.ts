@@ -6,8 +6,10 @@
 import { asc, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { findForbiddenKeys } from "@shared/api/public";
-import { activityLog, auditLog, pendingActions, tournamentRegistrations, tournaments, type Player } from "@shared/schema";
+import type { PendingActionDto } from "@shared/api/pending-actions";
+import { activityLog, auditLog, pendingActions, tournamentClocks, tournamentRegistrations, tournaments, type Player } from "@shared/schema";
 import { createClub, createPlayer, createRegistration, createTournament, createUser, type NewTournament } from "../factories";
+import { createClock, MINUTE_MS, runningState } from "../factories/clock";
 import { anon, asJson, loginAs, resetDb, signIn, testDb, UNKNOWN_ID } from "../helpers";
 import { CLUB_ROLES, signInClubRole, signInDeactivatedManager, STAFF_ROLES } from "../helpers/club-staff";
 
@@ -69,11 +71,13 @@ describe("POST /api/tournaments/:id/pending-actions", () => {
       actionType: "rebuy",
       targetPlayerId: null,
       timestamp: expect.any(String),
+      clockElapsedMs: null,
+      lateNote: null,
       player: null,
       targetPlayer: null,
     });
     expect(findForbiddenKeys(response.body)).toEqual([]);
-    const { player: _player, targetPlayer: _target, ...row } = response.body;
+    const { player: _player, targetPlayer: _target, lateNote: _late, ...row } = response.body;
     expect(asJson(await actionsOf(tournament.id))).toEqual([row]);
   });
 
@@ -200,8 +204,8 @@ describe("GET /api/tournaments/:id/pending-actions", () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual([
-      { ...(asJson(rebuy) as object), player: publicPlayer(alice), targetPlayer: null },
-      { ...(asJson(knockout) as object), player: publicPlayer(bob), targetPlayer: publicPlayer(alice) },
+      { ...(asJson(rebuy) as object), lateNote: null, player: publicPlayer(alice), targetPlayer: null },
+      { ...(asJson(knockout) as object), lateNote: null, player: publicPlayer(bob), targetPlayer: publicPlayer(alice) },
     ]);
     expect(findForbiddenKeys(response.body)).toEqual([]);
   });
@@ -513,6 +517,41 @@ describe("POST /api/pending-actions/:id/confirm", () => {
 
     expect([response.status, response.body.code]).toEqual([409, "PRIZE_POOL_LOCKED"]);
     expect(await actionsOf(tournament.id)).toHaveLength(1);
+  });
+
+  it("judges a re-buy or add-on late by the clock when the player asked, however the clock moved since (P4REV1-R2-01)", async () => {
+    // Re-buys close 55 minutes in (the test clock's 20 + 20-minute levels and 15-minute break).
+    const { tournament, alice, bob, agent } = await liveTournament({ rebuyPeriodMinutes: 55 });
+    // 45 minutes in: five minutes into the break.
+    await createClock({ tournamentId: tournament.id, state: runningState(Date.now(), 2, 10 * MINUTE_MS, Date.now() - 45 * MINUTE_MS) });
+    const inTime = await request(tournament.id, { playerId: alice.id, actionType: "rebuy" });
+    // The TD pauses two minutes into Level 3, at 57 minutes, then works through the queue.
+    await testDb()
+      .update(tournamentClocks)
+      .set({ status: "paused", currentLevelIndex: 3, periodEndsAt: null, pausedRemainingMs: 13 * MINUTE_MS })
+      .where(eq(tournamentClocks.tournamentId, tournament.id));
+    const late = await request(tournament.id, { playerId: bob.id, actionType: "addon" });
+    // Asked for before the clock time was recorded: never called late.
+    const unknown = await insertAction({ tournamentId: tournament.id, playerId: alice.id, actionType: "addon" });
+    const listed = await agent.get(`/api/tournaments/${tournament.id}/pending-actions`);
+
+    const confirmed = [];
+    for (const id of [inTime.body.id, late.body.id, unknown.id]) confirmed.push((await agent.post(`/api/pending-actions/${id}/confirm`)).status);
+
+    const after = "after the re-buy period, which ended at 0:55 on the clock";
+    expect([inTime.status, late.status, listed.status]).toEqual([201, 201, 200]);
+    expect(inTime.body.clockElapsedMs).toBeGreaterThanOrEqual(45 * MINUTE_MS);
+    expect(inTime.body.clockElapsedMs).toBeLessThan(46 * MINUTE_MS);
+    expect(inTime.body.lateNote).toBeNull();
+    expect(late.body).toMatchObject({ clockElapsedMs: 57 * MINUTE_MS, lateNote: after });
+    const notes = new Map((listed.body as PendingActionDto[]).map((action) => [action.id, action.lateNote]));
+    expect([notes.get(inTime.body.id), notes.get(late.body.id), notes.get(unknown.id)]).toEqual([null, after, null]);
+    expect(confirmed).toEqual([200, 200, 200]);
+    expect(await activityOf(tournament.id)).toEqual([
+      ["rebuy", "Alice made 1 re-buy"],
+      ["addon", `Bob purchased 1 add-on ${after}`],
+      ["addon", "Alice purchased 1 add-on"],
+    ]);
   });
 
   it("applies re-buys and add-ons the players asked for before the TD locked the pool (TN2-01)", async () => {

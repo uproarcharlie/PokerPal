@@ -9,7 +9,7 @@ import type { ClockDisplaySettings, ClockUndoDto } from "@shared/api/clock";
 import { mockSignedOut, renderWithApp } from "@test/helpers/web";
 import { deriveClock, type DerivedClock } from "@shared/domain/clock";
 import { clockStateOf } from "../hooks";
-import { DisplayControls, LEVEL_KEY_DEBOUNCE_MS, SHORTCUTS } from "./display-controls";
+import { DisplayControls, LEVEL_KEY_DEBOUNCE_MS, shortcutList } from "./display-controls";
 import type { ScreenTools } from "./public/clock-screen";
 
 function tools(): ScreenTools {
@@ -192,7 +192,48 @@ describe("the TV's staff controls", () => {
 
     await keys.keyboard("?");
     const help = await screen.findByRole("dialog", { name: "Keyboard shortcuts" });
-    expect(help).toHaveTextContent(SHORTCUTS.map((shortcut) => `${shortcut.keys}${shortcut.does}`).join(""));
+    expect(help).toHaveTextContent(shortcutList(false).map((shortcut) => `${shortcut.keys}${shortcut.does}`).join(""));
+    // Without Keyboard Lock the browser keeps Esc in full screen: the list says so, and what to press instead.
+    expect(help).toHaveTextContent("not in full screen, where Esc leaves it: press S or $ again");
+  });
+
+  describe("Esc in full screen (TDN4-TV-ESC-FULLSCREEN)", () => {
+    const keyboard = { lock: vi.fn(() => Promise.resolve()), unlock: vi.fn() };
+    beforeEach(() => {
+      keyboard.lock.mockClear();
+      keyboard.unlock.mockClear();
+      Object.defineProperty(navigator, "keyboard", { configurable: true, value: keyboard });
+    });
+    afterEach(() => {
+      Reflect.deleteProperty(navigator, "keyboard");
+    });
+
+    const inFullscreen = (): ScreenTools => ({ ...tools(), fullscreen: { supported: true, active: true, toggle: vi.fn() } });
+
+    it("keeps Esc for the page while it fills the screen, so Esc takes the seats down there", async () => {
+      const { layers, unmount } = showControls(derivedAt(1), inFullscreen(), null, "seating");
+      expect(keyboard.lock).toHaveBeenCalledWith(["Escape"]);
+
+      await user().keyboard("{Escape}");
+      await vi.waitFor(() => expect(layers).toEqual([{ overlay: "none" }]));
+      unmount();
+      expect(keyboard.unlock).toHaveBeenCalled();
+    });
+
+    it("leaves full screen on Esc with nothing up, as the browser's own Esc would", async () => {
+      const screenTools = inFullscreen();
+      const { layers } = showControls(derivedAt(1), screenTools);
+      await user().keyboard("{Escape}");
+      expect(screenTools.fullscreen.toggle).toHaveBeenCalledTimes(1);
+      expect(layers).toEqual([]);
+    });
+
+    it("holds nothing outside full screen, and promises Esc in full screen in the list", async () => {
+      showControls();
+      expect(keyboard.lock).not.toHaveBeenCalled();
+      await user().keyboard("?");
+      expect(await screen.findByRole("dialog", { name: "Keyboard shortcuts" })).toHaveTextContent("with nothing up, leave full screen");
+    });
   });
 
   it("puts the seats or the payouts over the clock and takes them down, from the keys and the bar (TDN3-OVERLAY-STUCK)", async () => {

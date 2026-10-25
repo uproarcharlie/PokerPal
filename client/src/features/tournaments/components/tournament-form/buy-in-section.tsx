@@ -8,7 +8,7 @@ import { AmountInput } from "@/components/shared/amount-input";
 import { plural } from "@/lib/format";
 import { FormSection } from "./form-section";
 import { RakeFields } from "./rake-fields";
-import { SwitchField } from "./toggle-fields";
+import { CheckboxField, SwitchField } from "./toggle-fields";
 
 interface MoneySectionProps {
   control: Control<TournamentFormValues>;
@@ -25,7 +25,10 @@ function keptOnBecause(count: number, one: string, many: string): string | undef
   return `${plural(count, one, many)} ${count === 1 ? "is" : "are"} recorded, so ${many} stay on. To stop taking more, lock the prize pool.`;
 }
 
-/** What a seat costs: the buy-in, and re-buys and add-ons when the tournament sells them, each with its AP. */
+/**
+ * What a seat costs: the buy-in, and re-buys and add-ons when the tournament sells them, each with its
+ * AP and its limit per player, and, when it sells both, whether a player may take only one kind.
+ */
 export function BuyInSection({ control, rakeLabel, recorded }: MoneySectionProps & { recorded?: RecordedEntries }) {
   const rebuys = useWatch({ control, name: "enableRebuys" });
   const addons = useWatch({ control, name: "enableAddons" });
@@ -111,21 +114,46 @@ export function BuyInSection({ control, rakeLabel, recorded }: MoneySectionProps
       />
       {addons ? (
         <div className="space-y-4">
-          <FormField
-            control={control}
-            name="addonAmount"
-            render={({ field }) => (
-              <FormItem className="sm:max-w-xs">
-                <FormLabel>Add-on Amount</FormLabel>
-                <FormControl>
-                  <AmountInput unit="$" placeholder="25" {...field} data-testid="addon-amount" />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <FormField
+              control={control}
+              name="addonAmount"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Add-on Amount</FormLabel>
+                  <FormControl>
+                    <AmountInput unit="$" placeholder="25" {...field} data-testid="addon-amount" />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={control}
+              name="maxAddons"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Max Add-ons</FormLabel>
+                  <FormControl>
+                    <Input inputMode="numeric" placeholder="No limit" {...field} data-testid="max-addons" />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
           <RakeFields control={control} component="addonRakeType" label={rakeLabel} part="Add-on" testId="addon-rake" />
         </div>
+      ) : null}
+
+      {rebuys && addons ? (
+        <CheckboxField
+          control={control}
+          name="rebuyOrAddon"
+          label="Re-buys OR add-ons, not both"
+          description="A player who re-buys cannot take an add-on, and one who takes an add-on cannot re-buy. With one of each allowed: one re-buy OR one add-on per player."
+          testId="rebuy-or-addon"
+        />
       ) : null}
     </FormSection>
   );

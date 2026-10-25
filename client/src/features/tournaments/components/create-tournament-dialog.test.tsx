@@ -103,10 +103,21 @@ describe("CreateTournamentDialog", () => {
     expect(screen.getByTestId("max-rebuys")).toHaveValue("1");
     expect(screen.getByTestId("rebuy-period")).toHaveValue("135");
     expect(screen.getByTestId("addon-amount")).toHaveValue("25.00");
+    // Its house rules come with it, so the server enforces them (TDN4-HOUSE-RULES-UNSET).
+    expect(screen.getByTestId("max-addons")).toHaveValue("1");
+    expect(screen.getByRole("checkbox", { name: /Re-buys OR add-ons, not both/ })).toBeChecked();
     await user.click(screen.getByTestId("create-tournament-final"));
 
     await waitFor(() => expect(created).toHaveLength(1));
-    expect(created[0]).toMatchObject({ buyInAmount: "100.00", rebuyAmount: "25.00", maxRebuys: 1, rebuyPeriodMinutes: 135, addonAmount: "25.00" });
+    expect(created[0]).toMatchObject({
+      buyInAmount: "100.00",
+      rebuyAmount: "25.00",
+      maxRebuys: 1,
+      rebuyPeriodMinutes: 135,
+      addonAmount: "25.00",
+      maxAddons: 1,
+      rebuyOrAddon: true,
+    });
   });
 
   it("saves a draft as scheduled", async () => {

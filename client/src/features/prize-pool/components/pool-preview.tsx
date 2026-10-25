@@ -22,8 +22,18 @@ interface PoolPreviewProps {
 }
 
 /**
+ * Why no place would be paid: nobody has entered yet, or the pool is $0 or less (an AP total equal to
+ * what came in, a manual pool of $0), which finalize also says (P4REV2R3-MONEY-01).
+ */
+function noPlacesText(after: TournamentMoney, entrants: number): string {
+  if (entrants === 0) return "No places are paid until players enter.";
+  return after.breakdown.net <= 0 ? "The prize pool is $0 or less, so no places are paid." : "No places are paid.";
+}
+
+/**
  * What a change would pay before it is saved: the pool, the AP taken and the places, as finalize will
- * pay them (shared/domain). The pool sentence is announced as it changes.
+ * pay them (shared/domain). The pool sentence is announced as it changes. A locked pool warns that its
+ * published payouts change only when the change moves the pool.
  */
 export function PoolPreview({ after, before, label, entrants, locked, waiting = "Enter an amount to see the prize pool." }: PoolPreviewProps) {
   const places = after?.display.rows ?? [];
@@ -54,12 +64,14 @@ export function PoolPreview({ after, before, label, entrants, locked, waiting = 
               {places.length > PLACES_SHOWN ? ` · +${places.length - PLACES_SHOWN} more` : ""}
             </p>
           ) : (
-            <p className="text-muted-foreground">No places are paid until players enter.</p>
+            <p className="text-muted-foreground" data-testid="preview-no-places">
+              {noPlacesText(after, entrants)}
+            </p>
           )}
           {undistributed ? <p className="text-muted-foreground">{undistributed}</p> : null}
         </>
       ) : null}
-      {locked ? (
+      {locked && changed ? (
         <Alert className="p-3">
           <AlertTriangle className="h-4 w-4" aria-hidden="true" />
           <AlertDescription data-testid="locked-warning">Prize pool is locked — published payouts will change.</AlertDescription>

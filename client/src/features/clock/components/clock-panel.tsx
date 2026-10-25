@@ -117,7 +117,14 @@ function ClockWorkspace({ tournament, display, clock, derived, canEdit, timeZone
       {canEdit ? (
         <>
           {/* What the TV shows (the seats at a table break, the payouts at the bubble) is changed mid-game, the structure rarely: it comes first (TDN2-TV-CARD-BURIED). */}
-          <DisplaySettingsCard tournamentId={tournament.id} settings={clock.displaySettings} rakeLabel={display.club.rakeLabel} qr={display.qr} season={display.season} />
+          <DisplaySettingsCard
+            tournamentId={tournament.id}
+            settings={clock.displaySettings}
+            rakeLabel={display.club.rakeLabel}
+            poolLocked={display.tournament.prizePoolLocked}
+            qr={display.qr}
+            season={display.season}
+          />
           <StructureEditor tournamentId={tournament.id} clubId={tournament.clubId} clock={clock} currentLevelId={derived.level.id} timeZone={timeZone} />
           <EarlyBirdsCard tournamentId={tournament.id} startDateTime={tournament.startDateTime} earlyBirdStack={clock.structure.earlyBirdStack} timeZone={timeZone} />
         </>

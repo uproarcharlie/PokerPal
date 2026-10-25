@@ -22,6 +22,7 @@ import {
   suggestFinalTable,
   suggestTables,
   tableStats,
+  waitingPlayers,
   type SeatingSnapshot,
   type SeatMove,
   type SeatPos,
@@ -139,10 +140,10 @@ const seatKey = (spot: SeatSpot) => `${spot.tableId}:${spot.seatNumber}`;
 const byName = (a: SeatingEntry, b: SeatingEntry) =>
   a.player.name.localeCompare(b.player.name, "en", { sensitivity: "base" }) || a.registrationId.localeCompare(b.registrationId);
 
-/** Players still in who have no seat, by name. */
+/** Players still in who have no seat (waitingPlayers, the one rule every path uses), by name. */
 function waitingEntries({ entries, snapshot }: SeatingState): SeatingEntry[] {
-  const seated = new Set(snapshot.seats.map((seat) => seat.registrationId));
-  return entries.filter((entry) => !entry.isEliminated && !seated.has(entry.registrationId)).sort(byName);
+  const waiting = new Set(waitingPlayers(snapshot).map((player) => player.registrationId));
+  return entries.filter((entry) => waiting.has(entry.registrationId)).sort(byName);
 }
 
 /** Moves as screens name them ("Alice → Table 1, Seat 3"). Every table a move names is in `state.tables`. */
@@ -270,6 +271,6 @@ export function toPublicSeatingDto(
     players: seated
       .sort((a, b) => byName(a.entry, b.entry))
       .map(({ entry, table, seatNumber }) => ({ player: entry.player, tableNumber: table.tableNumber, tableName: tableName(table), seatNumber })),
-    unseatedCount: waitingEntries(state).length,
+    unseatedCount: waitingPlayers(state.snapshot).length,
   };
 }

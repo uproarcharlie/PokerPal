@@ -37,8 +37,15 @@ export const createPendingActionSchema = z
   });
 export type CreatePendingActionInput = z.infer<typeof createPendingActionSchema>;
 
-/** GET /api/tournaments/:id/pending-actions (staff), oldest first. */
+/**
+ * GET /api/tournaments/:id/pending-actions (staff), oldest first; also what the POST answers.
+ * `clockElapsedMs` is the tournament clock's time when the player asked. `lateNote` is set on a re-buy
+ * or add-on asked for once the re-buy period was over on the clock: "after the re-buy period, which
+ * ended at 2:15 on the clock" (lateTopUpText). Confirming it is still allowed, so the desk shows the
+ * note and asks first; its activity entry says the same (TDN4-REBUY-CLOSE-SILENT).
+ */
 export type PendingActionDto = Json<PendingAction> & {
+  lateNote: string | null;
   player: PublicPlayer | null;
   targetPlayer: PublicPlayer | null;
 };

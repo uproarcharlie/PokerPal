@@ -10,16 +10,17 @@ import type {
   CreatePendingActionInput,
   RebuyBeforeEliminationDetails,
 } from "@shared/api/pending-actions";
-import { notOfferedRefusal, requestRefusal } from "@shared/domain/player-actions";
+import { lateTopUpText, notOfferedRefusal, requestRefusal } from "@shared/domain/player-actions";
 import type { PendingAction, Tournament, TournamentRegistration } from "@shared/schema";
 import { db, type Transaction } from "../db";
 import { badRequest, conflict, notFound } from "../http/errors";
 import { getPlayer } from "../repositories/players";
 import * as pendingActionsRepo from "../repositories/pending-actions";
 import { lockPlayerRegistration, lockTournamentForRegistrationWrite } from "../repositories/registrations";
+import { getTournament } from "../repositories/tournaments";
 import { toPublicPlayer } from "./players";
 import { recordAudit } from "./audit";
-import { applyCountChange, creditKnockout, eliminate, toManagedRegistration } from "./registrations";
+import { applyCountChange, clockElapsedMsNow, creditKnockout, eliminate, toManagedRegistration } from "./registrations";
 import { assertOpen } from "./tournament-views";
 
 const notRegistered = () => conflict("PLAYER_NOT_REGISTERED", "That player is not registered for this tournament");
@@ -50,11 +51,22 @@ async function lockClaimableTarget(
   return target;
 }
 
-/** GET /api/tournaments/:id/pending-actions (staff): oldest first, players as PublicPlayer. */
+/**
+ * Said of a re-buy or add-on asked for once the re-buy period was over on the clock (lateTopUpText,
+ * from the clock's time when the player asked); null otherwise, and always for a knockout.
+ */
+const lateNoteOf = (tournament: Pick<Tournament, "rebuyPeriodMinutes"> | undefined, action: PendingAction): string | null =>
+  action.actionType === "knockout" ? null : lateTopUpText(tournament?.rebuyPeriodMinutes, action.clockElapsedMs);
+
+/** GET /api/tournaments/:id/pending-actions (staff): oldest first, players as PublicPlayer, late requests noted. */
 export async function listPendingActions(tournamentId: string) {
-  const rows = await pendingActionsRepo.listPendingActionsWithPlayers(db, tournamentId);
+  const [tournament, rows] = await Promise.all([
+    getTournament(db, tournamentId),
+    pendingActionsRepo.listPendingActionsWithPlayers(db, tournamentId),
+  ]);
   return rows.map(({ action, player, targetPlayer }) => ({
     ...action,
+    lateNote: lateNoteOf(tournament, action),
     player: player ? toPublicPlayer(player) : null,
     targetPlayer: targetPlayer ? toPublicPlayer(targetPlayer) : null,
   }));
@@ -65,7 +77,9 @@ export async function listPendingActions(tournamentId: string) {
  * is registered, the request could be confirmed now (requestRefusal in shared/domain/player-actions:
  * the player still in, or out and buying back in; for a re-buy or add-on the pool not locked and the
  * re-buy limit not reached), a knockout's target can be claimed (lockClaimableTarget), and the same
- * request is not already waiting.
+ * request is not already waiting. The clock's time is recorded with it, so confirming it later knows
+ * whether it was asked for within the re-buy period (P4REV1-R2-01). One asked for after the period is
+ * still taken (the TD decides), with its lateNote.
  */
 export async function createPendingAction(tournamentId: string, input: CreatePendingActionInput) {
   return db.transaction(async (tx) => {
@@ -85,8 +99,8 @@ export async function createPendingAction(tournamentId: string, input: CreatePen
     if (await pendingActionsRepo.findSamePendingAction(tx, request)) {
       throw conflict("DUPLICATE_PENDING_ACTION", "That request is already waiting for the tournament director");
     }
-    const action = await pendingActionsRepo.createPendingAction(tx, request);
-    return { ...action, player: null, targetPlayer: null };
+    const action = await pendingActionsRepo.createPendingAction(tx, { ...request, clockElapsedMs: await clockElapsedMsNow(tx, tournament.id) });
+    return { ...action, lateNote: lateNoteOf(tournament, action), player: null, targetPlayer: null };
   });
 }
 
@@ -154,7 +168,7 @@ export async function confirmPendingAction(actionId: string, input: ConfirmPendi
         const rebuy = action.actionType === "rebuy";
         const reenter = rebuy && reentryFor(registration, action.timestamp, input.reenter, player?.name ?? "That player");
         const updated = await applyCountChange(tx, { tournament, registration }, rebuy ? { rebuys: 1 } : { addons: 1 }, {
-          requestedAt: action.timestamp,
+          request: action,
           reenter,
         });
         return {

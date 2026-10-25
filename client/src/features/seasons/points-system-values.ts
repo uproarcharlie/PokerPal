@@ -5,6 +5,7 @@
  */
 import { z } from "zod";
 import { createPointsSystemSchema } from "@shared/api/points";
+import { isRecord } from "@/lib/api/http";
 import { readNumber, readOptionalNumber } from "@/lib/forms";
 
 export interface AllocationFormValues {
@@ -22,8 +23,6 @@ export interface PointsSystemFormValues {
   knockoutPoints: string;
   allocations: AllocationFormValues[];
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 
 /** The boxes' text as numbers: a blank optional total is left out, a blank range end is none (null). */
 function numbersOf(values: unknown): unknown {

@@ -6,6 +6,7 @@ import {
   ApiError,
   apiGet,
   apiSend,
+  errorDetails,
   errorMessage,
   hasErrorCode,
   NETWORK_ERROR_MESSAGE,
@@ -189,6 +190,16 @@ describe("helpers", () => {
       "/api/tournaments?clubId=c1&upcoming=true&limit=6",
     );
     expect(withQuery("/api/clubs", {})).toBe("/api/clubs");
+  });
+
+  it("errorDetails reads a refusal's details as an object, only for the codes asked about (R4-CQ-05)", () => {
+    const taken = new ApiError({ status: 409, code: "SEATS_OCCUPIED", error: "Seats taken", details: { seatNumbers: [9] } });
+    expect(errorDetails(taken)).toEqual({ seatNumbers: [9] });
+    expect(errorDetails(taken, "SEATS_OCCUPIED", "STALE_PLAN")).toEqual({ seatNumbers: [9] });
+    expect(errorDetails(taken, "STALE_PLAN")).toBeNull();
+    expect(errorDetails(new ApiError({ status: 400, code: "VALIDATION", error: "Invalid", details: [{ path: ["name"], message: "Required" }] }))).toBeNull();
+    expect(errorDetails(new ApiError({ status: 409, code: "STALE_PLAN", error: "Changed", details: "fresh" }))).toBeNull();
+    expect(errorDetails(new Error("boom"))).toBeNull();
   });
 
   it("segment keeps an id from changing which endpoint is called", () => {

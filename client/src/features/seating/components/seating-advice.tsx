@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
 import { Scale, Split, Trophy } from "lucide-react";
-import type { SeatingDto, TableDto } from "@shared/api/seating";
+import type { SeatingDto, SeatMoveDto, TableDto } from "@shared/api/seating";
 import { Button } from "@/components/ui/button";
 import { plural } from "@/lib/format";
-import { seatText } from "../seating-text";
+import { leftWaitingText, seatText, tablesText } from "../seating-text";
 
 interface SeatingAdviceProps {
   seating: SeatingDto;
@@ -31,19 +31,28 @@ function Advice({ icon, title, children, action }: { icon: ReactNode; title: str
   );
 }
 
-/** "Table 1 has 9 players, Table 3 has 7": the fullest and emptiest active tables. */
-function unevenText(tables: readonly TableDto[]): string {
+/**
+ * "Tables 1 and 2 have 7 players, Table 3 has 5": every active table at the occupancies the balancing
+ * moves take players from and to, fullest first, so the sentence names the tables the moves come from
+ * (LEAD-SEAT-BANNER), never just the first of the fullest.
+ */
+function unevenText(tables: readonly TableDto[], moves: readonly SeatMoveDto[]): string {
   const active = tables.filter((table) => table.status === "active");
-  const fullest = active.reduce((best, table) => (table.occupied > best.occupied ? table : best), active[0]);
-  const emptiest = active.reduce((best, table) => (table.occupied < best.occupied ? table : best), active[0]);
-  return `${fullest.displayName} has ${plural(fullest.occupied, "player")}, ${emptiest.displayName} has ${emptiest.occupied}.`;
+  const moved = new Set(moves.flatMap((move) => [move.from?.tableId, move.to?.tableId]));
+  const counts = new Set(active.filter((table) => moved.has(table.id)).map((table) => table.occupied));
+  const groups = Array.from(counts)
+    .sort((a, b) => b - a)
+    .map((occupied) => ({ occupied, tables: active.filter((table) => table.occupied === occupied).sort((a, b) => a.tableNumber - b.tableNumber) }));
+  const parts = groups.map(({ occupied, tables: group }, i) => `${tablesText(group)} ${group.length === 1 ? "has" : "have"} ${i === 0 ? plural(occupied, "player") : occupied}`);
+  return parts.length > 0 ? `${parts.join(", ")}.` : "";
 }
 
 /**
  * What the seating suggests doing next, worked out by the server between polls: the final table once
- * everyone still in fits at one (it then stands in for breaking a table), a table to break once its
- * players fit at the others, and the moves that even the tables out. Balancing is applied exactly as
- * listed: if the seating changed since, the server refuses and the screen refreshes.
+ * everyone seated fits at one (it then stands in for breaking a table), a table to break once its
+ * players fit at the others, and the moves that even the tables out. Players waiting for a seat count
+ * for none of them, so the final table and the break say who they leave waiting. Balancing is applied
+ * exactly as listed: if the seating changed since, the server refuses and the screen refreshes.
  */
 export function SeatingAdvice({ seating, busy, onBalance, onBreak, onFinalTable }: SeatingAdviceProps) {
   const { balance, breakTable, finalTable } = seating.suggestions;
@@ -51,6 +60,7 @@ export function SeatingAdvice({ seating, busy, onBalance, onBreak, onFinalTable 
   const finalAt = finalTable ? tableById.get(finalTable.tableId) : undefined;
   const toBreak = !finalAt && breakTable ? tableById.get(breakTable.tableId) : undefined;
   if (!finalAt && !toBreak && balance.length === 0) return null;
+  const leftWaiting = leftWaitingText(seating.stats);
 
   return (
     <section aria-label="Suggestions" className="space-y-3" data-testid="seating-advice">
@@ -64,7 +74,10 @@ export function SeatingAdvice({ seating, busy, onBalance, onBreak, onFinalTable 
             </Button>
           }
         >
-          Everyone still in ({plural(seating.stats.activePlayers, "player")}) fits at {finalAt.displayName}.
+          <p>
+            Everyone seated ({plural(seating.stats.seated, "player")}) fits at {finalAt.displayName}.
+          </p>
+          {leftWaiting ? <p>{leftWaiting}</p> : null}
         </Advice>
       ) : null}
       {toBreak && breakTable ? (
@@ -77,7 +90,8 @@ export function SeatingAdvice({ seating, busy, onBalance, onBreak, onFinalTable 
             </Button>
           }
         >
-          Its {plural(breakTable.playersToMove, "player")} fit at the other tables.
+          <p>Its {plural(breakTable.playersToMove, "player")} fit at the other tables.</p>
+          {leftWaiting ? <p>{leftWaiting}</p> : null}
         </Advice>
       ) : null}
       {balance.length > 0 ? (
@@ -90,7 +104,7 @@ export function SeatingAdvice({ seating, busy, onBalance, onBreak, onFinalTable 
             </Button>
           }
         >
-          <p>{unevenText(seating.tables)}</p>
+          <p>{unevenText(seating.tables, balance)}</p>
           <ul role="list" className="mt-1 space-y-0.5">
             {balance.map((move) => (
               <li key={move.registrationId}>

@@ -7,12 +7,18 @@ import type { TournamentFormValues } from "../../tournament-form";
 /** The clock presets that come with a club's whole format (Central Stars' One Life Line). */
 const FORMATS = BLIND_PRESETS.flatMap((preset) => (preset.format ? [{ key: preset.key, name: preset.name, format: preset.format }] : []));
 
-/** A format as the form's boxes hold it: amounts as typed text; the re-buy and add-on parts only when it sells them. */
+/**
+ * A format as the form's boxes hold it: amounts as typed text; the re-buy and add-on parts only when it
+ * sells them, with its house rules (add-ons per player, one re-buy OR one add-on).
+ */
 interface FormatValues {
   buyInAmount: TournamentFormValues["buyInAmount"];
   rebuys: Pick<TournamentFormValues, "rebuyAmount" | "maxRebuys" | "rebuyPeriodMinutes"> | null;
-  addons: Pick<TournamentFormValues, "addonAmount"> | null;
+  addons: Pick<TournamentFormValues, "addonAmount" | "maxAddons"> | null;
+  rebuyOrAddon: TournamentFormValues["rebuyOrAddon"];
 }
+
+const countText = (count: number | null) => (count === null ? "" : String(count));
 
 function formatValues(format: PresetFormat): FormatValues {
   return {
@@ -20,18 +26,19 @@ function formatValues(format: PresetFormat): FormatValues {
     rebuys:
       format.rebuyAmount === null
         ? null
-        : {
-            rebuyAmount: format.rebuyAmount,
-            maxRebuys: format.maxRebuys === null ? "" : String(format.maxRebuys),
-            rebuyPeriodMinutes: format.rebuyPeriodMinutes === null ? "" : String(format.rebuyPeriodMinutes),
-          },
-    addons: format.addonAmount === null ? null : { addonAmount: format.addonAmount },
+        : { rebuyAmount: format.rebuyAmount, maxRebuys: countText(format.maxRebuys), rebuyPeriodMinutes: countText(format.rebuyPeriodMinutes) },
+    addons: format.addonAmount === null ? null : { addonAmount: format.addonAmount, maxAddons: countText(format.maxAddons) },
+    rebuyOrAddon: format.rebuyOrAddon,
   };
 }
 
-/** Fills the boxes with a format, each field by name (so a misspelt or mistyped one does not compile), switching on what it sells. */
+/**
+ * Fills the boxes with a format, each field by name (so a misspelt or mistyped one does not compile),
+ * switching on what it sells, and its house rules with it: the server then enforces them on every
+ * re-buy and add-on (TDN4-HOUSE-RULES-UNSET).
+ */
 function fillFormat(form: UseFormReturn<TournamentFormValues>, format: PresetFormat): void {
-  const { buyInAmount, rebuys, addons } = formatValues(format);
+  const { buyInAmount, rebuys, addons, rebuyOrAddon } = formatValues(format);
   const options = { shouldDirty: true, shouldValidate: form.formState.isSubmitted };
   form.setValue("buyInAmount", buyInAmount, options);
   if (rebuys) {
@@ -43,12 +50,14 @@ function fillFormat(form: UseFormReturn<TournamentFormValues>, format: PresetFor
   if (addons) {
     form.setValue("enableAddons", true, options);
     form.setValue("addonAmount", addons.addonAmount, options);
+    form.setValue("maxAddons", addons.maxAddons, options);
   }
+  form.setValue("rebuyOrAddon", rebuys !== null && addons !== null && rebuyOrAddon, options);
 }
 
 /**
- * One tap fills the buy-in, re-buy and add-on boxes with a club's format; the clock comes from the
- * same preset on the Clock tab. Its house rules are said, not enforced (one re-buy OR one add-on).
+ * One tap fills the buy-in, re-buy and add-on boxes with a club's format, house rules included; the
+ * clock comes from the same preset on the Clock tab.
  */
 export function FormatPresets({ form }: { form: UseFormReturn<TournamentFormValues> }) {
   const { toast } = useToast();

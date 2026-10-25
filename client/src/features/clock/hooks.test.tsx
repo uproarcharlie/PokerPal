@@ -139,6 +139,18 @@ describe("liveDisplayInterval (P4REV4-CQ-01)", () => {
     expect(liveDisplayInterval(liveDisplayDto({ tournament: { status: "cancelled" } }), 3000, now)).toBe(false);
   });
 
+  it("follows a finished game on the server's time, not a TV clock that is hours fast (P4REV1-R2-05)", async () => {
+    // This TV's own clock is 7 hours ahead of the server; the results were written a minute ago, server time.
+    const serverNow = () => Date.now() - 7 * 60 * 60_000;
+    const display = mockDisplay(() =>
+      liveDisplayDto({ serverNow: serverNow(), tournament: { status: "completed" }, clock: clockDto({ status: "finished", updatedAt: new Date(serverNow() - 60_000).toISOString() }) }),
+    );
+    renderWithApp(<Probe refetchMs={3000} />);
+    await vi.waitFor(() => expect(display.calls()).toBe(1));
+    await act(() => vi.advanceTimersByTimeAsync(CLOSED_REFRESH_MS + 1000));
+    expect(display.calls()).toBe(2);
+  });
+
   it("stops the poll of a screen left on a cancelled tournament", async () => {
     const display = serveDisplay({ tournament: { status: "cancelled" } });
     renderWithApp(<Probe refetchMs={3000} />);

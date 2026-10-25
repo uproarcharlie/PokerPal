@@ -293,6 +293,14 @@ describe("players waiting for a seat (TDN3-FINAL-TABLE-WAITING)", () => {
   const seated = drawn(tables, 8);
   const waiting: SeatingSnapshot = { ...seated, eligible: [...seated.eligible, { registrationId: "r9", paymentConfirmed: false }, { registrationId: "r10", paymentConfirmed: true }] };
 
+  it("are what tableStats counts, by the same rule (R4-CQ-06)", () => {
+    expect(tableStats(waiting).unseated).toBe(2);
+    // A seat whose player is no longer in (as a plan stages it) seats nobody else: r3 and r4 still wait.
+    const staged: SeatingSnapshot = { tables: [table(1, 4)], seats: [seat("r1", 1, 1), seat("r2", 1, 2), seat("gone", 1, 3)], eligible: players(4) };
+    expect(waitingPlayers(staged).map((player) => player.registrationId)).toEqual(["r3", "r4"]);
+    expect(tableStats(staged)).toMatchObject({ seated: 3, unseated: 2 });
+  });
+
   it("never keep the final table or a break from being suggested", () => {
     expect(waitingPlayers(waiting).map((player) => player.registrationId)).toEqual(["r9", "r10"]);
     expect(suggestFinalTable(waiting)).toEqual({ tableId: "t1", tableNumber: 1 });

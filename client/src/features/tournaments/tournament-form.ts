@@ -10,7 +10,7 @@ import { createTournamentSchema, type CreateTournamentInput, type UpdateTourname
 import { centsToDecimalString, isAmountSet, toBasisPoints, toCents, type MoneyInput } from "@shared/domain/money";
 import { offersAddons, offersHighHand, offersRebuys } from "@shared/domain/player-actions";
 import { PAYOUT_STRUCTURE_KEYS, type PayoutStructureKey } from "@shared/domain/payouts";
-import { mergeRakeRates, RAKE_COMPONENTS } from "@shared/domain/rake-rates";
+import { mergeRakeRates, RAKE_COMPONENTS, rateOverPrice, rateOverPriceMessage, type RakeRatesProblem } from "@shared/domain/rake-rates";
 import { fromZonedDateTimeLocal, plural, toZonedDateTimeLocal } from "@/lib/format";
 import { typedNumber } from "@/lib/forms";
 
@@ -38,6 +38,9 @@ export interface TournamentFormValues {
   rebuyRakeAmount: string;
   enableAddons: boolean;
   addonAmount: string;
+  /** House rules (TDN4-HOUSE-RULES-UNSET): add-ons per player (blank: no limit), and re-buys OR add-ons, never both. */
+  maxAddons: string;
+  rebuyOrAddon: boolean;
   addonRakeType: RakeType;
   addonRakeAmount: string;
   payoutStructure: PayoutStructureKey;
@@ -59,15 +62,17 @@ export type TournamentConfig = Omit<CreateTournamentInput, "status">;
 
 const shape = createTournamentSchema.shape;
 
-const RATE_MESSAGES = {
+/** What a rate's box says when mergeRakeRates refuses it: one wording for the tournament form and the AP rates sheet. */
+export const RATE_MESSAGES: Readonly<Record<RakeRatesProblem["code"], string>> = {
   AMOUNT_REQUIRED: "Enter an amount for that rate",
   PERCENT_OVER_100: "A percentage cannot be over 100",
-} as const;
+};
 
 /**
  * The form's values, checked by the shared request schema. A rate is checked as the server checks it
- * (mergeRakeRates), but only for the parts the tournament has: a re-buy rate typed before re-buys
- * were switched off is not sent, so it is not checked either.
+ * (mergeRakeRates, then rateOverPrice: a fixed rate above the price it is taken from), but only for
+ * the parts the tournament has: a re-buy rate typed before re-buys were switched off is not sent, so
+ * it is not checked either.
  */
 export const tournamentFormSchema = createTournamentSchema
   .omit({ status: true })
@@ -75,6 +80,7 @@ export const tournamentFormSchema = createTournamentSchema
     clubId: z.string().trim().min(1, "Choose a club").pipe(shape.clubId),
     startDateTime: z.string().trim().min(1, "Choose the start date and time").pipe(shape.startDateTime),
     maxRebuys: typedNumber(shape.maxRebuys),
+    maxAddons: typedNumber(shape.maxAddons),
     rebuyPeriodMinutes: typedNumber(shape.rebuyPeriodMinutes),
     highHandPayouts: typedNumber(shape.highHandPayouts),
     minPlayers: typedNumber(shape.minPlayers),
@@ -83,8 +89,11 @@ export const tournamentFormSchema = createTournamentSchema
     enableAddons: z.boolean(),
   })
   .superRefine((values, ctx) => {
-    const merged = mergeRakeRates({}, tournamentConfig(values));
+    const config = tournamentConfig(values);
+    const merged = mergeRakeRates({}, config);
     if (!merged.ok) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [merged.field], message: RATE_MESSAGES[merged.code] });
+    const overPrice = merged.ok ? rateOverPrice(config) : null;
+    if (overPrice) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [overPrice.field], message: rateOverPriceMessage(overPrice) });
     // A $0 price is no re-buy or add-on at all (offersRebuys): players would never be offered one.
     if (values.enableRebuys && values.rebuyAmount !== null && !offersRebuys(values)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["rebuyAmount"], message: "Enter a re-buy price above $0, or switch re-buys off" });
@@ -114,6 +123,7 @@ export function inClubZone(values: TournamentFormValues, timeZone: string): Tour
 /**
  * The settings to send. A part the tournament does not have is sent empty, so a price typed before a
  * switch was turned off is never stored (CA-15); a rate of "none" sends no amount (the server stores 0).
+ * "Re-buys OR add-ons" means something only while the tournament sells both.
  */
 export function tournamentConfig(values: TournamentFormOutput): TournamentConfig {
   const { enableRebuys, enableAddons, ...config } = values;
@@ -121,7 +131,8 @@ export function tournamentConfig(values: TournamentFormOutput): TournamentConfig
   if (!enableRebuys) {
     Object.assign(result, { rebuyAmount: null, maxRebuys: null, rebuyPeriodMinutes: null, rebuyRakeType: "none" });
   }
-  if (!enableAddons) Object.assign(result, { addonAmount: null, addonRakeType: "none" });
+  if (!enableAddons) Object.assign(result, { addonAmount: null, maxAddons: null, addonRakeType: "none" });
+  if (!enableRebuys || !enableAddons) result.rebuyOrAddon = null;
   if (!config.enableHighHand) Object.assign(result, { highHandAmount: null, highHandRakeType: "none" });
   for (const { type, amount } of RAKE_COMPONENTS) {
     if ((result[type] ?? "none") === "none") result[amount] = null;
@@ -215,6 +226,8 @@ export const NEW_TOURNAMENT_VALUES: TournamentFormValues = {
   rebuyRakeAmount: "",
   enableAddons: false,
   addonAmount: "",
+  maxAddons: "",
+  rebuyOrAddon: false,
   addonRakeType: "none",
   addonRakeAmount: "",
   payoutStructure: "standard",
@@ -292,6 +305,8 @@ export function formValuesFromTournament(tournament: PublicTournament, timeZone:
     rebuyRakeAmount: rebuy.amount,
     enableAddons: offersAddons(tournament),
     addonAmount: text(tournament.addonAmount),
+    maxAddons: text(tournament.maxAddons),
+    rebuyOrAddon: tournament.rebuyOrAddon === true,
     addonRakeType: addon.type,
     addonRakeAmount: addon.amount,
     payoutStructure: payoutStructure(tournament.payoutStructure),

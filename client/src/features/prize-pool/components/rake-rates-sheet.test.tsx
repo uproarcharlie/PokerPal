@@ -113,6 +113,24 @@ describe("RakeRatesSheet", () => {
     expect(box("Buy-ins AP Percentage")).toHaveAttribute("aria-invalid", "true");
   });
 
+  it("says a fixed rate above the price it is taken from on its box, before sending (R4-CQ-07)", async () => {
+    let called = false;
+    server.use(
+      http.put("/api/tournaments/t1/prize-pool/rates", () => {
+        called = true;
+        return HttpResponse.json({});
+      }),
+    );
+    const { user } = renderSheet();
+    await user.clear(await screen.findByRole("textbox", { name: "Re-buys AP Per Entry" }));
+    await user.type(box("Re-buys AP Per Entry"), "30");
+    await user.click(screen.getByRole("button", { name: "Save rates" }));
+
+    expect(await screen.findByText("$30 per re-buy is more than a re-buy costs ($25): the prize pool would go below zero")).toBeInTheDocument();
+    expect(box("Re-buys AP Per Entry")).toHaveAttribute("aria-invalid", "true");
+    expect(called).toBe(false);
+  });
+
   it("puts the server's refusal under the rate it names", async () => {
     server.use(
       http.put("/api/tournaments/t1/prize-pool/rates", () =>

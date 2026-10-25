@@ -10,13 +10,13 @@ import { cn } from "@/lib/utils";
 import { ClockActionButtons } from "./clock-action-buttons";
 import type { ScreenTools } from "./public/clock-screen";
 import { keepFocusOnMouseDown } from "./public/keep-focus";
+import { useEscapeLock } from "./public/use-screen";
 import { useClockActions, useClockConfig, useUndoOffer, type ClockIntent } from "../staff-hooks";
 
 /** A held or bounced arrow key moves one level, not several; a bounced U undoes once, never undoes then redoes. */
 export const LEVEL_KEY_DEBOUNCE_MS = 600;
 
-/** The TV's keyboard, as the help lists it. */
-export const SHORTCUTS: ReadonlyArray<{ keys: string; does: string }> = [
+const SHORTCUTS_BEFORE_ESC: ReadonlyArray<{ keys: string; does: string }> = [
   { keys: "Space", does: "Start, pause or resume" },
   { keys: "→ or N", does: "Next level" },
   { keys: "← or P", does: "Previous level" },
@@ -26,11 +26,31 @@ export const SHORTCUTS: ReadonlyArray<{ keys: string; does: string }> = [
   { keys: "U", does: `Undo the last change, for ${String(CLOCK_LIMITS.undoWindowMs / 60_000)} minutes (again: redo it)` },
   { keys: "S", does: "Show everyone's seat over the clock, or take it down" },
   { keys: "$", does: "Show the payouts over the clock, or take them down" },
-  { keys: "Esc", does: "Take the seats or the payouts down: back to the clock" },
+];
+
+const SHORTCUTS_AFTER_ESC: ReadonlyArray<{ keys: string; does: string }> = [
   { keys: "F", does: "Full screen" },
   { keys: "M", does: "Sound on or off" },
   { keys: "?", does: "These shortcuts" },
 ];
+
+/**
+ * The TV's keyboard, as the help lists it. Esc is promised in full screen only where the page can
+ * keep it there (`escapeInFullscreen`, Keyboard Lock); elsewhere the browser keeps Esc for leaving full
+ * screen, and S or $ take a layer down (TDN4-TV-ESC-FULLSCREEN).
+ */
+export function shortcutList(escapeInFullscreen: boolean): ReadonlyArray<{ keys: string; does: string }> {
+  return [
+    ...SHORTCUTS_BEFORE_ESC,
+    {
+      keys: "Esc",
+      does: escapeInFullscreen
+        ? "Take the seats or the payouts down: back to the clock (with nothing up, leave full screen)"
+        : "Take the seats or the payouts down: back to the clock (not in full screen, where Esc leaves it: press S or $ again)",
+    },
+    ...SHORTCUTS_AFTER_ESC,
+  ];
+}
 
 /** A layer over the clock, as the TV's settings name it. */
 type Layer = ClockDisplaySettings["overlay"];
@@ -125,6 +145,7 @@ export function DisplayControls({ tournamentId, derived, undo: stored, overlay, 
   const { send, busy } = useClockActions(tournamentId);
   const { patchDisplay } = useClockConfig(tournamentId);
   const [helpOpen, setHelpOpen] = useState(false);
+  const escapeInFullscreen = useEscapeLock(tools.fullscreen.active);
   const undo = useUndoOffer(stored, derived.levelIndex);
   // Starting from the TV starts a tournament that has not begun; a resume never reopens anything.
   const alsoStartTournament = derived.status === "idle";
@@ -147,8 +168,13 @@ export function DisplayControls({ tournamentId, derived, undo: stored, overlay, 
       const current = latest.current;
       const shortcut = shortcutFor(event, current.alsoStartTournament);
       if (shortcut === null) return;
-      // Esc with nothing up is left to the browser (it leaves full screen).
-      if (typeof shortcut === "object" && "layer" in shortcut && shortcut.layer === "none" && current.overlay === "none") return;
+      if (typeof shortcut === "object" && "layer" in shortcut && shortcut.layer === "none" && current.overlay === "none") {
+        // Esc with nothing up leaves full screen: the browser's own Esc, unless the page holds Esc there (useEscapeLock).
+        if (!current.tools.fullscreen.active) return;
+        event.preventDefault();
+        current.tools.fullscreen.toggle();
+        return;
+      }
       event.preventDefault();
       if (typeof shortcut === "object" && "layer" in shortcut) current.showLayer(shortcut.layer);
       else if (shortcut === "fullscreen") current.tools.fullscreen.toggle();
@@ -231,7 +257,7 @@ export function DisplayControls({ tournamentId, derived, undo: stored, overlay, 
             <DialogDescription>Only the club&apos;s staff can control the clock from this screen.</DialogDescription>
           </DialogHeader>
           <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
-            {SHORTCUTS.map((shortcut) => (
+            {shortcutList(escapeInFullscreen).map((shortcut) => (
               <div key={shortcut.keys} className="contents">
                 <dt className="font-mono font-semibold text-foreground">{shortcut.keys}</dt>
                 <dd className="text-muted-foreground">{shortcut.does}</dd>

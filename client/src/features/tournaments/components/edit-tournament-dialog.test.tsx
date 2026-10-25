@@ -115,8 +115,9 @@ describe("EditTournamentDialog (CA-14)", () => {
     mockSave(() => apiError(409, "AP_EXCEEDS_GROSS", "The manual AP total is more than the money taken in"));
     const { user, onOpenChange } = renderEdit();
 
+    // $6 still covers the $5 AP per buy-in (a lower price is refused on its box first: R4-CQ-07).
     await user.clear(screen.getByTestId("buyin-amount"));
-    await user.type(screen.getByTestId("buyin-amount"), "1");
+    await user.type(screen.getByTestId("buyin-amount"), "6");
     await user.click(screen.getByTestId("save-tournament"));
 
     expect(await screen.findByText("The manual AP total is more than the money taken in")).toBeInTheDocument();

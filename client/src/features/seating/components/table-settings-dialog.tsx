@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
-import { hasErrorCode } from "@/lib/api/http";
+import { errorDetails, hasErrorCode } from "@/lib/api/http";
 import { formResolver, showServerFieldErrors, typedNumber } from "@/lib/forms";
 import { FAILED, seatingRefusal } from "../seating-text";
 import type { SeatingChange } from "../staff-hooks";
@@ -28,8 +28,8 @@ export function occupiedSeatsMessage(seatNumbers: readonly number[]): string {
   return `Seats ${list} are taken: move those players first`;
 }
 
-function seatNumbersOf(details: unknown): number[] {
-  const numbers = typeof details === "object" && details !== null ? (details as { seatNumbers?: unknown }).seatNumbers : undefined;
+function seatNumbersOf(error: unknown): number[] {
+  const numbers = errorDetails(error, "SEATS_OCCUPIED")?.seatNumbers;
   return Array.isArray(numbers) ? numbers.filter((n): n is number => Number.isInteger(n)) : [];
 }
 
@@ -76,7 +76,7 @@ function TableForm({ table, perform, onDone }: { table: TableDto; perform: Table
       await perform({ kind: "updateTable", tableId: table.id, input: updateTableSchema.parse(changes) });
     } catch (error) {
       if (hasErrorCode(error, "SEATS_OCCUPIED")) {
-        const taken = seatNumbersOf(error.details);
+        const taken = seatNumbersOf(error);
         form.setError("seatCount", { message: taken.length > 0 ? occupiedSeatsMessage(taken) : error.message });
       } else if (!showServerFieldErrors(form.setError, error, { fields: ["name", "seatCount"] })) {
         toast({ title: FAILED.updateTable, description: seatingRefusal(error), variant: "destructive" });

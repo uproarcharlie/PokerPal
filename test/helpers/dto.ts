@@ -157,6 +157,8 @@ export function pendingActionDto(id: string, actionType: string, overrides: Part
     actionType,
     targetPlayerId: null,
     timestamp: "2026-10-23T08:00:00.000Z",
+    clockElapsedMs: null,
+    lateNote: null,
     player: { id: "p1", name: "Ann", imageUrl: null },
     targetPlayer: null,
     ...overrides,

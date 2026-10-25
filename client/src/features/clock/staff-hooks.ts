@@ -8,13 +8,13 @@
 import { useEffect, useReducer, useRef } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { ClockActionInput, ClockConfigInput, ClockDisplaySettingsPatch, ClockUndoDto, EarlyBirdsInput } from "@shared/api/clock";
-import type { ClockConflictDetails, LiveDisplayDto } from "@shared/api/live-display";
+import type { LiveDisplayDto } from "@shared/api/live-display";
 import type { PublicRegistration } from "@shared/api/public";
 import type { ConfirmedRegistrationDto, PendingRegistrationDto } from "@shared/api/registrations";
 import { CLOCK_LIMITS, undoAvailable, type ClockStatus } from "@shared/domain/clock";
 import { useBusyRows } from "@/hooks/use-busy-rows";
 import { useToast } from "@/hooks/use-toast";
-import { errorMessage, hasErrorCode, isApiError } from "@/lib/api/http";
+import { errorDetails, errorMessage, hasErrorCode, isApiError, isRecord } from "@/lib/api/http";
 import { invalidateTournament } from "@/lib/api/invalidate";
 import { qk } from "@/lib/api/query-keys";
 import { deriveDisplayClock } from "./hooks";
@@ -93,9 +93,9 @@ export function clockRequest(intent: ClockIntent, shown: ShownClock): ClockActio
 
 /** The display a clock refusal carries (every 409 over the clock has one), or null. */
 export function conflictDisplay(error: unknown): LiveDisplayDto | null {
-  if (!isApiError(error) || error.status !== 409 || typeof error.details !== "object" || error.details === null) return null;
-  const display = (error.details as Partial<ClockConflictDetails>).display;
-  return typeof display === "object" && display !== null && typeof display.serverNow === "number" ? display : null;
+  if (!isApiError(error) || error.status !== 409) return null;
+  const display = errorDetails(error)?.display;
+  return isRecord(display) && typeof display.serverNow === "number" ? (display as unknown as LiveDisplayDto) : null;
 }
 
 const displayKey = (tournamentId: string) => qk.tournaments.display(tournamentId);

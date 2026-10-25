@@ -178,7 +178,7 @@ export function tableStats(snapshot: SeatingSnapshot): SeatingStats {
     perTable,
     activePlayers: snapshot.eligible.length,
     seated,
-    unseated: Math.max(0, snapshot.eligible.length - seated),
+    unseated: waitingPlayers(snapshot).length,
     openSeats: capacity - seated,
     capacity,
     activeTables: perTable.length,

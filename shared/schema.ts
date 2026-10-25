@@ -201,6 +201,8 @@ export const pendingActions = pgTable("pending_actions", {
   actionType: text("action_type").notNull(), // rebuy, addon, knockout
   targetPlayerId: varchar("target_player_id").references(() => players.id, { onDelete: "cascade" }),
   timestamp: timestamp("timestamp").defaultNow(),
+  /** The tournament clock's time when the player asked (ms since level 1 began); null without a clock, or on rows from before 0009. */
+  clockElapsedMs: integer("clock_elapsed_ms"),
 }, (table) => ({
   tournamentIdx: index("idx_pending_actions_tournament_id").on(table.tournamentId),
   playerIdx: index("idx_pending_actions_player_id").on(table.playerId),

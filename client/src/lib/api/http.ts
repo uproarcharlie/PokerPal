@@ -63,6 +63,19 @@ export function hasErrorCode(error: unknown, ...codes: ErrorCode[]): error is Ap
   return isApiError(error) && error.code !== undefined && codes.includes(error.code);
 }
 
+/** Whether `value` is an object whose fields can be read (a refusal's `details`, a value from storage). */
+export const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+
+/**
+ * A refusal's `details` as fields to read: the object an ApiError carries there (one with one of
+ * `codes`, when any are given), else null. Every reader of a 409's extra goes through this and then
+ * checks each field it uses, so none casts the details to the shape it hopes for (R4-CQ-05).
+ */
+export function errorDetails(error: unknown, ...codes: ErrorCode[]): Record<string, unknown> | null {
+  if (!isApiError(error) || (codes.length > 0 && !hasErrorCode(error, ...codes))) return null;
+  return isRecord(error.details) && !Array.isArray(error.details) ? error.details : null;
+}
+
 /**
  * A refusal that asking again will not change: what was asked for is gone (404, 410) or no longer the
  * viewer's to see (403). A page following it stops polling and says so, rather than "reconnecting"

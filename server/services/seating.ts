@@ -266,10 +266,7 @@ function drawable(state: SeatingState, ids: readonly string[], includeUnconfirme
   return { ids: kept, excludedUnconfirmed: ids.length - kept.length };
 }
 
-const unseatedIds = ({ snapshot }: SeatingState): string[] => {
-  const seated = new Set(snapshot.seats.map((seat) => seat.registrationId));
-  return snapshot.eligible.map((player) => player.registrationId).filter((id) => !seated.has(id));
-};
+const unseatedIds = ({ snapshot }: SeatingState): string[] => waitingPlayers(snapshot).map((player) => player.registrationId);
 
 /** Adds `count` tables numbered after the highest the tournament has had (archived ones included). */
 async function addTablesTo({ tx, tournament, state }: Locked, count: number, seatCount: number): Promise<TournamentTable[]> {

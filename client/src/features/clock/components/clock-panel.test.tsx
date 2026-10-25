@@ -25,9 +25,10 @@ import { server } from "@test/msw/server";
 import { presetStructure } from "@shared/domain/blind-structures";
 import { structureHash } from "@shared/domain/clock";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
+import { qk } from "@/lib/api/query-keys";
 import { ClockPanel } from "./clock-panel";
 import type { ClockOpenRequest } from "./clock-status-chip";
-import { qrDestination } from "./display-settings-card";
+import { publicPoolNote, qrDestination } from "./display-settings-card";
 
 const user = () => userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 
@@ -333,6 +334,26 @@ describe("ClockPanel controls", () => {
     );
   });
 
+  it("goes to the level chosen, followed by its id, when another device moved the rows meanwhile (P4REV1-R2-03)", async () => {
+    serveDisplay({ clock: paused() });
+    const sent = recordClockActions(() => liveDisplayDto({ clock: paused() }));
+    const { queryClient } = showPanel();
+    const keys = user();
+    const box = await screen.findByRole("combobox", { name: "Jump to level" });
+    await keys.selectOptions(box, "Break · Colour up");
+
+    // Another phone inserts a break after Level 1: the break chosen is now the fifth row, the clock's level the third.
+    const structure = shortStructure();
+    structure.levels.splice(1, 0, { kind: "break", id: "bx", durationMinutes: 5, note: "Chip race" });
+    act(() => {
+      queryClient.setQueryData(qk.tournaments.display("t1"), liveDisplayDto({ clock: paused({ structure, structureHash: structureHash(structure), levelIndex: 2 }) }));
+    });
+    expect(box).toHaveDisplayValue("Break · Colour up");
+    await keys.click(screen.getByRole("button", { name: "Go to level" }));
+
+    await vi.waitFor(() => expect(sent).toEqual([{ action: "jump", levelIndex: 4, expectedLevelIndex: 2 }]));
+  });
+
   it("sets the time of the level it was opened on: when that level ends while the TD types, nothing is set and the dialog says so (P4REV1-03)", async () => {
     const start = Date.now();
     // Level 1 has 3 seconds left as the dialog opens; the clock moves on to Level 2 while the TD types.
@@ -448,6 +469,16 @@ describe("ClockPanel TV settings", () => {
     expect(qrDestination({ qr: null, season: null }, "none")).toBe("The TV shows no QR code.");
   });
 
+  it("says the public page still waits for the lock when the TV shows the pool always (P4REV2R3-MONEY-02)", async () => {
+    expect(publicPoolNote("always", false)).toBe("The TV shows the estimate now; the tournament's public page shows the prize pool and the prizes once the pool is locked.");
+    expect(publicPoolNote("always", true)).toBeNull();
+    expect(publicPoolNote("when_locked", false)).toBeNull();
+
+    serveDisplay({ clock: clockDto({ displaySettings: { ...clockDto().displaySettings, showPrizePool: "always" } }) });
+    showPanel();
+    expect(await screen.findByTestId("public-pool-note")).toHaveTextContent("the tournament's public page shows the prize pool and the prizes once the pool is locked");
+  });
+
   it("changes what the TV shows at once, and says where the QR code leads", async () => {
     serveDisplay({ clock: clockDto() });
     const sent = recordClockChanges(({ body }) => liveDisplayDto({ clock: clockDto({ displaySettings: { ...clockDto().displaySettings, ...(body as object) } }), qr: { target: "seats", path: "/tournament/t1/seats" } }));
@@ -468,11 +499,13 @@ describe("ClockPanel TV settings", () => {
 });
 
 describe("ClockPanel early birds", () => {
+  // As the club's staff get them (ManagedRegistration): with their payment status.
+  const paid = (registration: ReturnType<typeof registrationDto>) => ({ ...registration, paymentConfirmed: true });
   const players = [
-    registrationDto("r1", "Ann", { registrationTime: "2026-10-23T06:30:00.000Z" }),
-    registrationDto("r2", "Bob", { registrationTime: "2026-10-23T06:45:00.000Z", earlyBird: true }),
-    registrationDto("r3", "Cat", { registrationTime: "2026-10-23T06:50:00.000Z" }),
-    registrationDto("r4", "Dan", { registrationTime: "2026-10-23T07:20:00.000Z" }),
+    paid(registrationDto("r1", "Ann", { registrationTime: "2026-10-23T06:30:00.000Z" })),
+    paid(registrationDto("r2", "Bob", { registrationTime: "2026-10-23T06:45:00.000Z", earlyBird: true })),
+    paid(registrationDto("r3", "Cat", { registrationTime: "2026-10-23T06:50:00.000Z" })),
+    paid(registrationDto("r4", "Dan", { registrationTime: "2026-10-23T07:20:00.000Z" })),
   ];
 
   it("gives the bonus to everyone registered before the start, or to one player", async () => {

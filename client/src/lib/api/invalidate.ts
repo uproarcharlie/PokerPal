@@ -32,15 +32,21 @@ export function invalidateResults(queryClient: QueryClient, tournamentId: string
 
 /**
  * A followed tournament's results were written (it closed, or they were corrected), as its own poll
- * just said: what the results change, without the tournament itself — its registrations and activity,
- * the season leaderboards and the players' lists. A refetch already on its way (this device's own
- * finalize started one) is left to finish rather than cancelled and sent again
- * (P3REV-PERF-RESULTS-VERSION).
+ * just said: what the results change, without the tournament itself — its registrations, activity and
+ * prize pool, the season leaderboards and the players' lists. A refetch already on its way (this
+ * device's own finalize started one) is left to finish rather than cancelled and sent again
+ * (P3REV-PERF-RESULTS-VERSION; the prize pool too: R4-CQ-03).
  */
 export function invalidateWrittenResults(queryClient: QueryClient, tournamentId: string): Promise<void> {
   return invalidateAll(
     queryClient,
-    [qk.tournaments.registrations(tournamentId), qk.tournaments.activity(tournamentId), qk.seasons.all(), qk.players.all()],
+    [
+      qk.tournaments.registrations(tournamentId),
+      qk.tournaments.activity(tournamentId),
+      qk.tournaments.prizePool(tournamentId),
+      qk.seasons.all(),
+      qk.players.all(),
+    ],
     { cancelRefetch: false },
   );
 }

@@ -1,5 +1,5 @@
 import { memo, useId } from "react";
-import type { PublicRegistration } from "@shared/api/public";
+import type { ManagedRegistration } from "@shared/api/registrations";
 import { formatChips } from "@shared/domain/clock";
 import { LoadingRows } from "@/components/shared/query-state";
 import { ScrollRegion } from "@/components/shared/scroll-region";
@@ -11,22 +11,23 @@ import { useBusyRows } from "@/hooks/use-busy-rows";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/api/http";
 import { formatTime, plural } from "@/lib/format";
-import { useRegistrations } from "@/features/tournaments/hooks";
 import { playerName } from "@/features/tournaments/player-name";
+import { useManagedRegistrations } from "@/features/tournaments/staff-hooks";
 import { useEarlyBirds } from "../staff-hooks";
 
 /**
- * Whether the entry has not paid yet, as the club's staff get the list (ManagedRegistration): an online
- * sign-up who never came, until the desk takes their money.
+ * Whether the entry has not paid yet: an online sign-up who never came, until the desk takes their
+ * money. A row without its payment status counts as unpaid, so the bulk button never gives a bonus it
+ * cannot vouch for.
  */
-const unpaid = (registration: PublicRegistration) => "paymentConfirmed" in registration && registration.paymentConfirmed === false;
+const unpaid = (registration: ManagedRegistration) => registration.paymentConfirmed !== true;
 
 /**
  * The entries that registered by the start time and have no bonus yet: `paid`, the ones the bulk button
  * gives it to, and `unpaid`, left out (their 25,000 would count in the chips in play and the average
  * stack for players who may never come: TDN3-EARLYBIRD-UNPAID) until they pay or the TD ticks them.
  */
-export function earlyRegistrations(registrations: readonly PublicRegistration[], startDateTime: string): { paid: PublicRegistration[]; unpaid: PublicRegistration[] } {
+export function earlyRegistrations(registrations: readonly ManagedRegistration[], startDateTime: string): { paid: ManagedRegistration[]; unpaid: ManagedRegistration[] } {
   const start = Date.parse(startDateTime);
   const early = registrations.filter(
     (registration) => !registration.earlyBird && registration.registrationTime !== null && Date.parse(registration.registrationTime) <= start,
@@ -34,7 +35,7 @@ export function earlyRegistrations(registrations: readonly PublicRegistration[],
   return { paid: early.filter((registration) => !unpaid(registration)), unpaid: early.filter(unpaid) };
 }
 
-const byName = (a: PublicRegistration, b: PublicRegistration) => playerName(a).localeCompare(playerName(b));
+const byName = (a: ManagedRegistration, b: ManagedRegistration) => playerName(a).localeCompare(playerName(b));
 
 interface EarlyBirdsCardProps {
   tournamentId: string;
@@ -50,7 +51,7 @@ interface EarlyBirdsCardProps {
  */
 export const EarlyBirdsCard = memo(function EarlyBirdsCard({ tournamentId, startDateTime, earlyBirdStack, timeZone }: EarlyBirdsCardProps) {
   const { toast } = useToast();
-  const registrations = useRegistrations(tournamentId);
+  const registrations = useManagedRegistrations(tournamentId);
   const earlyBirds = useEarlyBirds(tournamentId);
   const { busy, run } = useBusyRows();
   const id = useId();

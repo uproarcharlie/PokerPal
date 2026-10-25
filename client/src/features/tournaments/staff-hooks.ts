@@ -58,6 +58,11 @@ export function usePaymentDesk(id: string) {
   return { pending, confirmed };
 }
 
+/** The registrations with their payment status, for a staff screen that needs it (staff only; read once, like useRegistrations without `follow`). */
+export function useManagedRegistrations(id: string) {
+  return useQuery({ ...tournamentDeskQueries.managedRegistrations(id), enabled: Boolean(id) });
+}
+
 /** The request desk's list (staff only). */
 export function usePendingActions(id: string) {
   return useQuery({ ...tournamentDeskQueries.pendingActions(id), refetchInterval: deskInterval });

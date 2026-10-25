@@ -13,14 +13,14 @@ import { formResolver, showServerFieldErrors } from "@/lib/forms";
 import { tournamentMoney } from "@/lib/prize-pool";
 import { useRegistrations } from "@/features/tournaments/hooks";
 import { RakeFields, type RakeRateValues } from "@/features/tournaments/components/tournament-form/rake-fields";
-import { rakeTypeOf, rateAmountText } from "@/features/tournaments/tournament-form";
+import { RATE_MESSAGES, rakeTypeOf, rateAmountText } from "@/features/tournaments/tournament-form";
 import { moneySchema, type RakeType } from "@shared/api/common";
 import { rakeRatesSchema } from "@shared/api/prize-pool";
 import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { isAmountSet, toCents } from "@shared/domain/money";
 import { offersAddons, offersHighHand, offersRebuys } from "@shared/domain/player-actions";
-import { mergeRakeRates, RAKE_COMPONENT_NAMES, RAKE_COMPONENTS, RAKE_RATE_KEYS } from "@shared/domain/rake-rates";
+import { mergeRakeRates, RAKE_COMPONENT_NAMES, RAKE_COMPONENTS, RAKE_RATE_KEYS, rateOverPrice, rateOverPriceMessage } from "@shared/domain/rake-rates";
 import { previewRates } from "../preview";
 import { useChangeRakeRates } from "../staff-hooks";
 import { PoolPreview } from "./pool-preview";
@@ -80,16 +80,19 @@ function ratesRequest(raw: unknown, tournament: TournamentDetailDto): unknown {
 
 /**
  * The shared request rule over the rates changed, then the rates merged over the stored ones exactly as
- * the server merges and checks them (mergeRakeRates), so a percentage over 100 is said on its box
- * before sending. "Nothing to update" is the form's own case (it says so and closes), not a refusal.
+ * the server merges and checks them (mergeRakeRates, then rateOverPrice for the rates that changed), so
+ * a percentage over 100 or $30 AP per $25 re-buy is said on its box before sending (R4-CQ-07).
+ * "Nothing to update" is the form's own case (it says so and closes), not a refusal.
  */
 function ratesFormSchema(tournament: TournamentDetailDto) {
   return z.preprocess((raw) => ratesRequest(raw, tournament), rakeRatesSchema.innerType()).superRefine((rates, ctx) => {
     const merged = mergeRakeRates(tournament, rates);
     if (!merged.ok) {
-      const message = merged.code === "PERCENT_OVER_100" ? "A percentage cannot be over 100" : "Enter an amount for that rate";
-      ctx.addIssue({ code: "custom", path: [merged.field], message });
+      ctx.addIssue({ code: "custom", path: [merged.field], message: RATE_MESSAGES[merged.code] });
+      return;
     }
+    const overPrice = rateOverPrice({ ...tournament, ...merged.rates }, tournament);
+    if (overPrice) ctx.addIssue({ code: "custom", path: [overPrice.field], message: rateOverPriceMessage(overPrice) });
   });
 }
 

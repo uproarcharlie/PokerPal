@@ -53,12 +53,19 @@ describe("invalidation helpers", () => {
   });
 
   it("invalidateWrittenResults refreshes what results change, never the tournament whose poll reported them", async () => {
-    const keys = [qk.tournaments.registrations("t1"), qk.tournaments.activity("t1"), qk.seasons.leaderboard("s1"), qk.players.list(), qk.tournaments.detail("t1")];
+    const keys = [
+      qk.tournaments.registrations("t1"),
+      qk.tournaments.activity("t1"),
+      qk.tournaments.prizePool("t1"),
+      qk.seasons.leaderboard("s1"),
+      qk.players.list(),
+      qk.tournaments.detail("t1"),
+    ];
     const client = clientWith(keys);
 
     await invalidateWrittenResults(client, "t1");
 
-    expect(keys.map((key) => invalidated(client, key))).toEqual([true, true, true, true, false]);
+    expect(keys.map((key) => invalidated(client, key))).toEqual([true, true, true, true, true, false]);
   });
 
   it("invalidateTournamentLists refreshes the leaderboards and players only for a deleted tournament, whose results go with it (P3REV-PARITY-DEL-01)", async () => {
@@ -75,12 +82,15 @@ describe("invalidation helpers", () => {
     expect(invalidated(client, qk.players.list())).toBe(true);
   });
 
-  it("invalidateWrittenResults lets a refetch already on its way finish, not cancel it and ask again (P3REV-PERF-RESULTS-VERSION)", async () => {
+  it.each([
+    ["registrations", qk.tournaments.registrations("t1")],
+    ["prize pool (R4-CQ-03)", qk.tournaments.prizePool("t1")],
+  ])("invalidateWrittenResults lets a refetch of the %s already on its way finish, not cancel it and ask again (P3REV-PERF-RESULTS-VERSION)", async (_name, queryKey) => {
     const client = new QueryClient();
     let asked = 0;
     let answer: () => void = () => {};
     const observer = new QueryObserver(client, {
-      queryKey: qk.tournaments.registrations("t1"),
+      queryKey,
       queryFn: () => {
         asked += 1;
         return new Promise<never[]>((resolve) => (answer = () => resolve([])));

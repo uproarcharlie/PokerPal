@@ -65,3 +65,31 @@ export function useFullscreen(): Fullscreen {
   }, []);
   return { supported, active, toggle };
 }
+
+/** The Keyboard Lock API (Chromium browsers only, and only while the page fills the screen). */
+interface KeyboardLock {
+  lock: (keyCodes: string[]) => Promise<void>;
+  unlock: () => void;
+}
+
+function keyboardLock(): KeyboardLock | null {
+  const keyboard = (navigator as Navigator & { keyboard?: Partial<KeyboardLock> }).keyboard;
+  return keyboard && typeof keyboard.lock === "function" && typeof keyboard.unlock === "function" ? (keyboard as KeyboardLock) : null;
+}
+
+/**
+ * While the page fills the screen, keeps Esc for the page where the browser allows it (Keyboard Lock):
+ * otherwise the browser takes Esc to leave full screen and the page never hears it, so Esc could not
+ * take the seats or the payouts down there (TDN4-TV-ESC-FULLSCREEN). Holding Esc still leaves full
+ * screen. Returns whether Esc reaches the page in full screen.
+ */
+export function useEscapeLock(fullscreen: boolean): boolean {
+  const keyboard = keyboardLock();
+  useEffect(() => {
+    if (!fullscreen || !keyboard) return;
+    // Refused (not in full screen after all, a frame that does not allow it): Esc stays the browser's.
+    void keyboard.lock(["Escape"]).catch(() => undefined);
+    return () => keyboard.unlock();
+  }, [fullscreen, keyboard]);
+  return keyboard !== null;
+}

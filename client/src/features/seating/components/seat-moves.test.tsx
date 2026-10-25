@@ -49,7 +49,7 @@ describe("SeatingPanel: moving players by hand", () => {
 
     await waitFor(() => expect(bodies).toEqual([{ registrationId: "r1", tableId: "tB", seatNumber: 3, swap: false }]));
     expect(await screen.findByText("Player moved")).toBeInTheDocument();
-    expect(screen.getByText("Alice Smith → Table 2, Seat 3")).toBeInTheDocument();
+    expect(screen.getByText("Alice Smith → Table 2, Seat 3 (from Table 1, Seat 1)")).toBeInTheDocument();
     expect(within(table(2)).getByRole("button", { name: "Seat 3: Alice Smith" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.queryByRole("region", { name: "Selected player" })).not.toBeInTheDocument();
   });
@@ -117,7 +117,42 @@ describe("SeatingPanel: moving players by hand", () => {
     await user.click(screen.getByRole("button", { name: "Unseat" }));
 
     await waitFor(() => expect(bodies).toEqual([{ registrationId: "r2" }]));
-    expect(await screen.findByText("Bob Jones is waiting for a seat.")).toBeInTheDocument();
+    expect(await screen.findByText("Bob Jones left Table 1, Seat 2 and is waiting for a seat.")).toBeInTheDocument();
+  });
+
+  it("puts a mistaken unseat back from its toast, in the seat the player left (TDN4-UNSEAT-NO-UNDO)", async () => {
+    const unseated = seatingDto({ ...night, version: "0000beef", tables: [{ ...night.tables![0], seated: { 1: { id: "r1", name: "Alice Smith" } } }, night.tables![1]], unseated: [...night.unseated!, { id: "r2", name: "Bob Jones" }] });
+    recordWrite("post", "/api/tournaments/t1/seating/unseat", () => HttpResponse.json(seatingMutation(unseated, [seatMove("r2", "Bob Jones", seatRef("tA", 1, 2), null, "unseat")])));
+    const back = recordWrite("post", "/api/tournaments/t1/seating/assign", () => HttpResponse.json(seatingMutation(seatingDto(night), [seatMove("r2", "Bob Jones", null, seatRef("tA", 1, 2), "move")])));
+    const user = userEvent.setup();
+    renderWithApp(<SeatingPanel tournament={tournament} registrations={[]} />);
+
+    await user.click(await screen.findByRole("button", { name: "Seat 2: Bob Jones" }));
+    await user.click(screen.getByRole("button", { name: "Unseat" }));
+    await user.click(await screen.findByRole("button", { name: "Undo" }));
+
+    await waitFor(() => expect(back).toEqual([{ registrationId: "r2", tableId: "tA", seatNumber: 2, swap: false, expectedVersion: "0000beef" }]));
+    expect(await screen.findByText("Move undone")).toBeInTheDocument();
+    expect(screen.getByText("Bob Jones is back at Table 1, Seat 2.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+  });
+
+  it("says when a move cannot be undone because the seating changed since", async () => {
+    const moved = seatingMutation(seatingDto({ ...night, version: "0000cafe" }), [seatMove("r1", "Alice Smith", seatRef("tA", 1, 1), seatRef("tB", 2, 3), "move")]);
+    let answered = 0;
+    const bodies = recordWrite("post", "/api/tournaments/t1/seating/assign", () =>
+      answered++ === 0 ? HttpResponse.json(moved) : apiError(409, "STALE_PLAN", "The seating changed", { seating: seatingDto(night) }),
+    );
+    const user = userEvent.setup();
+    renderWithApp(<SeatingPanel tournament={tournament} registrations={[]} />);
+
+    await user.click(await screen.findByRole("button", { name: "Seat 1: Alice Smith" }));
+    await user.click(within(table(2)).getByRole("button", { name: "Seat 3, empty: move Alice Smith here" }));
+    await user.click(await screen.findByRole("button", { name: "Undo" }));
+
+    expect(await screen.findByText("Could not undo")).toBeInTheDocument();
+    expect(screen.getByText("Seating changed — refreshed")).toBeInTheDocument();
+    expect(bodies[1]).toEqual({ registrationId: "r1", tableId: "tA", seatNumber: 1, swap: false, expectedVersion: "0000cafe" });
   });
 
   it("records a bust from the seat, offering the player's table-mates first as the eliminator (P4REV0-BUST-FROM-SEAT)", async () => {

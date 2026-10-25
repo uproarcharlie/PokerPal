@@ -41,6 +41,17 @@ export function qrDestination(display: Pick<LiveDisplayDto, "qr" | "season">, ch
   return chosen === "season" ? "The QR code opens this tournament's live results (it has no season)." : "The QR code opens this tournament's live results.";
 }
 
+/**
+ * What "Always" does not change: the TV shows the estimated pool and places before the lock, but the
+ * tournament's public page (where the QR code can lead) still waits for the lock (P4REV2R3-MONEY-02).
+ * Null once the pool is locked, or for any other choice.
+ */
+export function publicPoolNote(showPrizePool: ClockDisplaySettings["showPrizePool"], poolLocked: boolean): string | null {
+  return showPrizePool === "always" && !poolLocked
+    ? "The TV shows the estimate now; the tournament's public page shows the prize pool and the prizes once the pool is locked."
+    : null;
+}
+
 type Choice<T> = ReadonlyArray<[T, string]>;
 
 interface SettingsCardProps extends Pick<LiveDisplayDto, "qr" | "season"> {
@@ -48,6 +59,8 @@ interface SettingsCardProps extends Pick<LiveDisplayDto, "qr" | "season"> {
   settings: ClockDisplaySettings;
   /** The club's name for its take ("AP"). */
   rakeLabel: string;
+  /** The prize pool is locked: every screen shows it. */
+  poolLocked: boolean;
 }
 
 /**
@@ -55,7 +68,7 @@ interface SettingsCardProps extends Pick<LiveDisplayDto, "qr" | "season"> {
  * the average stack, where the QR code leads, and a layer over the clock (the seats after a draw, the
  * payouts at the bubble).
  */
-export const DisplaySettingsCard = memo(function DisplaySettingsCard({ tournamentId, settings, rakeLabel, qr, season }: SettingsCardProps) {
+export const DisplaySettingsCard = memo(function DisplaySettingsCard({ tournamentId, settings, rakeLabel, poolLocked, qr, season }: SettingsCardProps) {
   const { toast } = useToast();
   const { patchDisplay } = useClockConfig(tournamentId);
   const { busy, run } = useBusyRows();
@@ -105,7 +118,14 @@ export const DisplaySettingsCard = memo(function DisplaySettingsCard({ tournamen
       </CardHeader>
       <CardContent className="space-y-5">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {select("showPrizePool", "Show the prize pool", PRIZE_POOL_CHOICES)}
+          <div className="space-y-2">
+            {select("showPrizePool", "Show the prize pool", PRIZE_POOL_CHOICES)}
+            {publicPoolNote(settings.showPrizePool, poolLocked) ? (
+              <p className="text-sm text-muted-foreground" data-testid="public-pool-note">
+                {publicPoolNote(settings.showPrizePool, poolLocked)}
+              </p>
+            ) : null}
+          </div>
           {select("overlay", "Over the clock", OVERLAY_CHOICES)}
         </div>
         <div className="space-y-3">

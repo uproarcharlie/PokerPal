@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "wouter";
 import { Maximize, Minimize, Volume2, VolumeX, WifiOff } from "lucide-react";
 import type { LiveDisplayDto } from "@shared/api/live-display";
-import { anteText, formatBlinds, type ClockStructure, type DerivedClock } from "@shared/domain/clock";
+import { anteText, formatBlinds, type BlindLevel, type ClockStructure, type DerivedClock } from "@shared/domain/clock";
 import { isClosedStatus } from "@shared/domain/tournaments";
 import { routes } from "@/app/routes";
 import { ClubLogo } from "@/components/image/club-logo";
@@ -10,6 +10,7 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { breakNote, ClockFace, ClockStrip, periodTitle } from "./clock-face";
+import { useClockCues } from "./clock-cues";
 import { DisplayMoney } from "./display-money";
 import { PayoutsOverlay, SeatingOverlay } from "./display-overlays";
 import { DisplayQr } from "./display-qr";
@@ -21,8 +22,7 @@ import { useFullscreen, useWakeLock, type Fullscreen } from "./use-screen";
 /** The corner buttons fade out after this long without the pointer moving (keyboard focus brings them back). */
 export const CONTROLS_HIDE_MS = 3000;
 
-/** The cue the minute warning plays at. */
-const MINUTE_WARNING_MS = 60_000;
+const NO_LEVELS: readonly BlindLevel[] = [];
 
 /** What the screen reader hears when the level changes (never the seconds). */
 function levelAnnouncement(derived: DerivedClock, structure: Pick<ClockStructure, "anteMode">): string {
@@ -33,18 +33,6 @@ function levelAnnouncement(derived: DerivedClock, structure: Pick<ClockStructure
   }
   const ante = anteText(play, structure.anteMode);
   return `${periodTitle(derived)}: blinds ${formatBlinds(play)}${ante ? `, ${ante}` : ""}`;
-}
-
-/** Plays the chimes: a level change while running (never on the first draw), one minute left, a break starting. */
-function useClockCues(derived: DerivedClock | null, play: ClockSound["play"]): void {
-  const previous = useRef<DerivedClock | null>(null);
-  useEffect(() => {
-    const before = previous.current;
-    previous.current = derived;
-    if (!before || !derived || derived.status !== "running") return;
-    if (derived.levelIndex > before.levelIndex) play(derived.isBreak ? "break" : "level");
-    else if (derived.levelIndex === before.levelIndex && before.remainingMs > MINUTE_WARNING_MS && derived.remainingMs <= MINUTE_WARNING_MS) play("minute");
-  }, [derived, play]);
 }
 
 /** Whether the pointer moved in the last CONTROLS_HIDE_MS. */
@@ -112,8 +100,8 @@ export function ClockScreen({ display, derived, offline, controls }: ClockScreen
   // Awake for the whole game, not only while the clock runs: Level 1 and the QR code while players
   // arrive, a paused dispute, a meal break, a clock still to be set up (P4REV0-WAKELOCK-PAUSED).
   useWakeLock(!isClosedStatus(display.tournament.status));
-  useClockCues(derived, sound.play);
   const clock = display.clock;
+  useClockCues(derived, clock?.structure.levels ?? NO_LEVELS, sound.play);
   // A layer over the clock is for a game in play: a finished or cancelled one shows its own message.
   const overlay = clock && derived && !isClosedStatus(display.tournament.status) ? clock.displaySettings.overlay : "none";
   // A layer covers the header: the strip over it then says the screen is offline (TDN3-OVERLAY-STUCK).

@@ -8,10 +8,14 @@ interface SeatMovesDialogProps {
   onClose: () => void;
 }
 
-/** Who goes where, in large type and by name, so the TD can call the moves out (or show the phone). */
+/**
+ * Who goes where, in large type and by name, so the TD can call the moves out (or show the phone), and
+ * who is still waiting for a seat after a break, a balance or the final table.
+ */
 export function SeatMovesDialog({ announced, onClose }: SeatMovesDialogProps) {
   const moves = announced ? movesByName(announced.moves) : [];
   const excluded = announced?.excludedUnconfirmed ?? 0;
+  const waiting = announced?.waiting;
   return (
     <Dialog open={announced !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
@@ -35,6 +39,11 @@ export function SeatMovesDialog({ announced, onClose }: SeatMovesDialogProps) {
         {excluded > 0 ? (
           <p className="text-sm text-muted-foreground">
             {plural(excluded, "unpaid player was", "unpaid players were")} left out: seat them once they have paid.
+          </p>
+        ) : null}
+        {waiting ? (
+          <p className="text-sm text-foreground" data-testid="still-waiting">
+            {waiting.text}: <span className="font-medium">{waiting.names.join(", ")}</span>. {plural(waiting.openSeats, "open seat")} left.
           </p>
         ) : null}
         <DialogFooter>

@@ -85,11 +85,42 @@ describe("tournamentFormSchema", () => {
     });
   });
 
+  it("refuses a fixed rate above the price it is taken from, on its box, as the server would (R4-CQ-07)", () => {
+    expect(errorsOf({ ...filled, enableRebuys: true, rebuyAmount: "25", rebuyRakeType: "fixed", rebuyRakeAmount: "30" })).toEqual({
+      rebuyRakeAmount: "$30 per re-buy is more than a re-buy costs ($25): the prize pool would go below zero",
+    });
+    expect(errorsOf({ ...filled, enableRebuys: true, rebuyAmount: "25", rebuyRakeType: "fixed", rebuyRakeAmount: "25" })).toEqual({});
+  });
+
   it("does not check or send the rate of a part the tournament does not have", () => {
     const values = { ...filled, enableRebuys: false, rebuyAmount: "25", rebuyRakeType: "percentage" as const, rebuyRakeAmount: "" };
 
     expect(errorsOf(values)).toEqual({});
     expect(configOf(values)).toMatchObject({ rebuyAmount: null, maxRebuys: null, rebuyPeriodMinutes: null, rebuyRakeType: "none", rebuyRakeAmount: null });
+  });
+});
+
+describe("house rules (TDN4-HOUSE-RULES-UNSET)", () => {
+  const both = { ...filled, enableRebuys: true, rebuyAmount: "25", maxRebuys: "1", enableAddons: true, addonAmount: "25" };
+
+  it("sends the add-ons per player and re-buys OR add-ons while the tournament sells both", () => {
+    expect(configOf({ ...both, maxAddons: "1", rebuyOrAddon: true })).toMatchObject({ maxRebuys: 1, maxAddons: 1, rebuyOrAddon: true });
+    expect(configOf({ ...both, maxAddons: "" })).toMatchObject({ maxAddons: null, rebuyOrAddon: false });
+    expect(errorsOf({ ...both, maxAddons: "one" })).toEqual({ maxAddons: "Must be a whole number" });
+  });
+
+  it("clears them with the part they belong to", () => {
+    expect(configOf({ ...both, enableAddons: false, maxAddons: "1", rebuyOrAddon: true })).toMatchObject({ maxAddons: null, rebuyOrAddon: null });
+    expect(configOf({ ...both, enableRebuys: false, maxAddons: "1", rebuyOrAddon: true })).toMatchObject({ maxAddons: 1, rebuyOrAddon: null });
+  });
+
+  it("opens an edit on the rules stored, and an untouched form changes none of them", () => {
+    const stored = tournamentDto({ rebuyAmount: "25.00", maxRebuys: 1, addonAmount: "25.00", maxAddons: 1, rebuyOrAddon: true });
+    const values = formValuesFromTournament(stored, ZONE);
+    expect(values).toMatchObject({ maxAddons: "1", rebuyOrAddon: true });
+    expect(changedConfig(configOf(values), configOf(values))).toEqual({});
+    expect(changedConfig(configOf(values), configOf({ ...values, rebuyOrAddon: false }))).toEqual({ rebuyOrAddon: false });
+    expect(formValuesFromTournament(tournamentDto({ maxAddons: null, rebuyOrAddon: null }), ZONE)).toMatchObject({ maxAddons: "", rebuyOrAddon: false });
   });
 });
 

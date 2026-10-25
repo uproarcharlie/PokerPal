@@ -31,10 +31,14 @@ interface LiveDisplayOptions {
   enabled?: boolean;
 }
 
-/** The display's poll as the screen wants it, within liveDisplayInterval's limits. */
+/**
+ * The display's poll as the screen wants it, within liveDisplayInterval's limits, measured on the
+ * server's time like every other clock figure: a venue TV whose own clock is hours out still follows a
+ * finished game for as long as the server says (P4REV1-R2-05).
+ */
 function displayInterval({ refetchMs }: LiveDisplayOptions, display: LiveDisplayDto | undefined): number | false {
   const everyMs = typeof refetchMs === "function" ? refetchMs(display) : refetchMs;
-  return everyMs === false ? false : liveDisplayInterval(display, everyMs);
+  return everyMs === false ? false : liveDisplayInterval(display, everyMs, serverTime.now());
 }
 
 /**

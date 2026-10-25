@@ -676,6 +676,19 @@ describe("rebaseOnStructureChange", () => {
     expect(rebaseOnStructureChange(LEVELS, shorter, held("paused", 1, 8 * MIN), T0)).toEqual({ ok: true, state: held("paused", 1, 0) });
   });
 
+  it("counts the time a final level has held at 0:00 as played when it gets longer (P4REV1-R2-02)", () => {
+    // The 15-minute final level (l5) started 25 minutes ago: 10 minutes past its end, holding at 0:00.
+    const finalEndedAt = T0 - 10 * MIN;
+    const longer = LEVELS.map((row) => (row.id === "l5" ? { ...row, durationMinutes: 30 } : row));
+    expect(rebaseOnStructureChange(LEVELS, longer, running(5, finalEndedAt), T0)).toEqual({ ok: true, state: running(5, T0 + 5 * MIN) });
+    // Still past even the new length, or a row added after it: the clock moves on from now, never into time already gone.
+    const slightlyLonger = LEVELS.map((row) => (row.id === "l5" ? { ...row, durationMinutes: 20 } : row));
+    expect(rebaseOnStructureChange(LEVELS, slightlyLonger, running(5, finalEndedAt), T0)).toEqual({ ok: true, state: running(5, T0) });
+    const appended = [...LEVELS, level("l6", 800, 1600, 15)];
+    expect(rebaseOnStructureChange(LEVELS, appended, running(5, finalEndedAt), T0)).toEqual({ ok: true, state: running(5, T0) });
+    expect(deriveClock(running(5, T0), appended, T0 + MIN)).toMatchObject({ levelIndex: 6, remainingMs: 14 * MIN });
+  });
+
   it("keeps an untouched idle clock on its whole level", () => {
     const changedFirst = [{ ...LEVELS[0], durationMinutes: 25 }, ...LEVELS.slice(1)];
     expect(rebaseOnStructureChange(LEVELS, changedFirst, INITIAL_CLOCK_STATE, T0)).toEqual({ ok: true, state: INITIAL_CLOCK_STATE });

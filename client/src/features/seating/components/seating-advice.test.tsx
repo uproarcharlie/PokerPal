@@ -44,6 +44,26 @@ describe("SeatingPanel: what the seating suggests", () => {
     expect(await screen.findByRole("dialog", { name: "Tables balanced" })).toBeInTheDocument();
   });
 
+  it("names every table at the occupancies the moves come from and go to, not just the first of the fullest (LEAD-SEAT-BANNER)", async () => {
+    const seated = (prefix: string, seats: number[]) => Object.fromEntries(seats.map((seat) => [seat, { id: `${prefix}${seat}`, name: `${prefix} ${seat}` }]));
+    mockSeating(
+      seatingDto({
+        tables: [
+          { id: "tA", number: 1, seats: 9, seated: seated("Ann", [1, 2, 3, 4, 5, 6, 7]) },
+          { id: "tB", number: 2, seats: 9, seated: { ...seated("Ben", [1, 2, 3, 4, 5, 6]), 8: { id: "nikau", name: "Nikau" } } },
+          { id: "tC", number: 3, seats: 9, seated: seated("Cy", [2, 3, 4, 5, 6]) },
+          { id: "tD", number: 4, seats: 9, seated: seated("Di", [1, 2, 3, 4, 5, 6]) },
+        ],
+        suggestions: { balance: [seatMove("nikau", "Nikau", seatRef("tB", 2, 8), seatRef("tC", 3, 1), "balance")] },
+      }),
+    );
+    renderWithApp(<SeatingPanel tournament={tournament} registrations={[]} />);
+
+    const advice = await screen.findByTestId("seating-advice");
+    expect(advice).toHaveTextContent("Tables 1 and 2 have 7 players, Table 3 has 5.");
+    expect(advice).toHaveTextContent("Nikau: Table 2, Seat 8 → Table 3, Seat 1");
+  });
+
   it("shows the seating as it now is when it changed before Apply, and says so", async () => {
     mockSeating(seatingDto(uneven));
     const fresh = seatingDto({ version: "bbbb2222", tables: [{ id: "tA", number: 1, seats: 9, seated: fullest }, { id: "tC", number: 3, seats: 9, seated: { ...emptiest, 8: { id: "x", name: "Xena" } } }] });
@@ -95,7 +115,7 @@ describe("SeatingPanel: what the seating suggests", () => {
     renderWithApp(<SeatingPanel tournament={tournament} registrations={[]} />);
 
     const advice = await screen.findByTestId("seating-advice");
-    expect(advice).toHaveTextContent("Final table!Everyone still in (2 players) fits at Feature table.");
+    expect(advice).toHaveTextContent("Final table!Everyone seated (2 players) fits at Feature table.");
     expect(within(advice).queryByRole("button", { name: /^Break/ })).not.toBeInTheDocument();
     await user.click(within(advice).getByRole("button", { name: "Draw the final table" }));
     expect(await screen.findByRole("alertdialog", { name: "Draw the final table at Feature table?" })).toBeInTheDocument();
