@@ -92,11 +92,18 @@ export function PendingActionsTable({ actions, tournament, timeZone, refusals, b
       cell: (action) => (
         <div className="space-y-1">
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <Button onClick={() => onConfirm(action.id)} busy={busyIds.has(action.id)}>
+            {/* 44 px on a phone, where the request desk is a sheet the TD works through with a thumb (round5-contracts §8.1). */}
+            <Button className="h-11 md:h-10" onClick={() => onConfirm(action.id)} busy={busyIds.has(action.id)}>
               <Check className="h-4 w-4" aria-hidden="true" />
               Confirm
             </Button>
-            <Button variant="outline" onClick={() => onDismiss(action.id)} busy={busyIds.has(action.id)} data-testid={`dismiss-action-${action.id}`}>
+            <Button
+              variant="outline"
+              className="h-11 md:h-10"
+              onClick={() => onDismiss(action.id)}
+              busy={busyIds.has(action.id)}
+              data-testid={`dismiss-action-${action.id}`}
+            >
               <X className="h-4 w-4" aria-hidden="true" />
               Dismiss
             </Button>

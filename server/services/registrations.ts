@@ -2,9 +2,15 @@
  * Tournament registrations: sign-up, the TD's updates, count changes and payment. Every change runs in
  * one transaction that first locks the tournament row (then the registration rows it touches), so the
  * checks below and the writes they guard never interleave with another change to the same tournament:
- * no duplicate sign-ups, no seat past maxPlayers, no re-buy slipping past the prize-pool lock
- * (data-integrity-10, MONEY-21). Counters change by SQL increments, and each change's activity row is
- * written in the same transaction.
+ * no duplicate sign-ups, no player accepted past Max players, no re-buy slipping past the prize-pool
+ * lock (data-integrity-10, MONEY-21). Counters change by SQL increments, and each change's activity row
+ * is written in the same transaction.
+ *
+ * Max players (round 5, item 15, the owner's rule): sign-ups may go past it, onto a numbered waiting
+ * list (shared/domain/waiting-list), but nobody, staff or owner, can accept more than it: confirming a
+ * payment, or anything else that puts a waiting-list entry in the field (a re-buy, add-on, knockout or
+ * bust), is 409 TOURNAMENT_FULL once Max players are in, with no override. Registrations answer with
+ * their `waitingListPosition`.
  */
 import type { Request } from "express";
 import type {
@@ -14,10 +20,10 @@ import type {
 } from "@shared/api/registrations";
 import { pickFields, PUBLIC_REGISTRATION_FIELDS } from "@shared/api/public";
 import type { ActivityEventType } from "@shared/api/tournaments";
-import { deriveClock } from "@shared/domain/clock";
 import { centsToDecimalString, centsToDollars, formatMoney, toCents } from "@shared/domain/money";
 import { lateTopUpText, offersHighHand, PRIZE_POOL_LOCKED_MESSAGE, topUpRefusal, type TopUpCounts } from "@shared/domain/player-actions";
 import { registrationRemovalProblem } from "@shared/domain/standings";
+import { acceptRefusal, inFieldByRight, waitingListPositions, type WaitingListEntry } from "@shared/domain/waiting-list";
 import {
   amountDueCents,
   computePrizePool,
@@ -27,29 +33,60 @@ import {
   splitHighHandAward,
 } from "@shared/domain/prize-pool";
 import type { InsertTournamentRegistration, PendingAction, Player, Tournament, TournamentRegistration } from "@shared/schema";
-import { db, type Executor, type Transaction } from "../db";
+import { db, type Transaction } from "../db";
 import { viewerFor, type ClubScope } from "../http/authz";
 import { badRequest, conflict, HttpError, notFound } from "../http/errors";
 import { insertActivity } from "../repositories/activity";
-import { clockStateOf, getClock } from "../repositories/clock";
+import { clockElapsedMsNow } from "../repositories/clock";
 import { deletePendingActionsForPlayer } from "../repositories/pending-actions";
 import { claimHomeClubFromFirstRegistration, getPlayer, isKnownAtClub } from "../repositories/players";
 import * as registrationsRepo from "../repositories/registrations";
 import { getTournament, setTournamentColumns } from "../repositories/tournaments";
 import { recordAudit } from "./audit";
-import { contactAccess, toClubPlayer, toPublicPlayer } from "./players";
+import { clubRequiresSignUpPhoto, contactAccess, photoRequired, toClubPlayer, toPublicPlayer } from "./players";
 import { assertApStillWithinGross } from "./prize-pool";
-import { releaseSeatOnElimination, restoreSeatAfterReturn } from "./seating";
+import { autoSeatNewRegistration, autoSeatOnPayment, releaseSeatOnElimination, restoreSeatAfterReturn } from "./seating";
 import { assertHighHandAwardsFit, assertOpen, closedMessage, highHandAwardsConflict, isClosed } from "./tournament-views";
 import { requireTournament } from "./tournaments";
 
-export function toPublicRegistration(registration: TournamentRegistration, player: Player | null | undefined) {
-  return { ...pickFields(registration, PUBLIC_REGISTRATION_FIELDS), player: player ? toPublicPlayer(player) : null };
+/**
+ * The registration as anyone sees it (PublicRegistration). With `waitingList` (each waiting-list
+ * entry's place, waitingListOf) it says its place on the list, or null when it is in the field.
+ */
+export function toPublicRegistration(registration: TournamentRegistration, player: Player | null | undefined, waitingList?: ReadonlyMap<string, number>) {
+  return {
+    ...pickFields(registration, PUBLIC_REGISTRATION_FIELDS),
+    player: player ? toPublicPlayer(player) : null,
+    ...(waitingList ? { waitingListPosition: waitingList.get(registration.id) ?? null } : {}),
+  };
 }
 
 /** The registration as the club's staff see it (ManagedRegistration): the public row, plus whether it has paid. */
-export function toManagedRegistration(registration: TournamentRegistration, player: Player | null | undefined) {
-  return { ...toPublicRegistration(registration, player), paymentConfirmed: registration.paymentConfirmed };
+export function toManagedRegistration(registration: TournamentRegistration, player: Player | null | undefined, waitingList?: ReadonlyMap<string, number>) {
+  return { ...toPublicRegistration(registration, player, waitingList), paymentConfirmed: registration.paymentConfirmed };
+}
+
+/** Each waiting-list entry's place on the list (1 = next in), by registration id (round 5, item 15). */
+function waitingListOf(tournament: Pick<Tournament, "maxPlayers">, registrations: readonly TournamentRegistration[]): Map<string, number> {
+  return waitingListPositions(registrations, tournament.maxPlayers);
+}
+
+/** The waiting list as it stands now, read in the write's transaction. */
+async function currentWaitingList(tx: Transaction, tournament: Tournament): Promise<Map<string, number>> {
+  return waitingListOf(tournament, await registrationsRepo.registrationsOf(tx, tournament.id));
+}
+
+/**
+ * 409 TOURNAMENT_FULL when `before` (a registration, or {} for a new one), not in the field by right,
+ * would be (`after`: its payment confirmed, or a re-buy, add-on, knockout or bust recorded) while Max
+ * players are in it already: "18 of 18 players accepted: raise Max players to accept more". No
+ * override, for staff or owners: raise Max players, or remove an entry, first.
+ */
+async function assertRoomToAccept(tx: Transaction, tournament: Tournament, before: WaitingListEntry, after: WaitingListEntry): Promise<void> {
+  if (inFieldByRight(before) || !inFieldByRight(after)) return;
+  const others = (await registrationsRepo.registrationsOf(tx, tournament.id)).filter((registration) => registration.id !== before.id);
+  const refusal = acceptRefusal(others, tournament.maxPlayers, before);
+  if (refusal) throw conflict("TOURNAMENT_FULL", refusal);
 }
 
 const playerName = (player: Player | null | undefined) => player?.name || "Unknown player";
@@ -64,11 +101,12 @@ const plural = (count: number, word: string) => `${count} ${word}${count === 1 ?
  * unknown tournament has none.
  */
 export async function listRegistrations(req: Request, tournamentId: string) {
-  const tournament = req.user ? await getTournament(db, tournamentId) : undefined;
-  const canManage = tournament !== undefined && (await viewerFor(req, tournament.clubId)).canManage;
+  const tournament = await getTournament(db, tournamentId);
+  const canManage = tournament !== undefined && req.user !== undefined && (await viewerFor(req, tournament.clubId)).canManage;
   const rows = await registrationsRepo.listRegistrationsWithPlayers(db, tournamentId);
+  const waitingList = tournament ? waitingListOf(tournament, rows.map(({ registration }) => registration)) : new Map<string, number>();
   return rows.map(({ registration, player }) =>
-    canManage ? toManagedRegistration(registration, player) : toPublicRegistration(registration, player),
+    canManage ? toManagedRegistration(registration, player, waitingList) : toPublicRegistration(registration, player, waitingList),
   );
 }
 
@@ -78,13 +116,18 @@ export async function listRegistrations(req: Request, tournamentId: string) {
  */
 export async function listPaymentRegistrations(scope: ClubScope, tournamentId: string, paid: boolean) {
   const tournament = await requireTournament(tournamentId);
-  const rows = await registrationsRepo.listRegistrationsWithPlayers(db, tournamentId, { paymentConfirmed: paid });
+  const [rows, everyone] = await Promise.all([
+    registrationsRepo.listRegistrationsWithPlayers(db, tournamentId, { paymentConfirmed: paid }),
+    registrationsRepo.registrationsOf(db, tournamentId),
+  ]);
+  const waitingList = waitingListOf(tournament, everyone);
   const canEdit = await contactAccess(db, scope, rows.flatMap(({ player }) => (player ? [player.id] : [])));
   return rows.map(({ registration, player }) => {
     const amount = centsToDollars(amountDueCents(tournament, registration));
     const row = {
       ...pickFields(registration, PUBLIC_REGISTRATION_FIELDS),
       paymentConfirmed: registration.paymentConfirmed,
+      waitingListPosition: waitingList.get(registration.id) ?? null,
       player: player ? toClubPlayer(player, canEdit(player.id)) : null,
     };
     return paid ? { ...row, amountPaid: amount } : { ...row, amountOwed: amount };
@@ -112,13 +155,6 @@ export async function lockRegistrationById(tx: Transaction, registrationId: stri
 function assertTopUpsAllowed(tournament: Tournament, before: TopUpCounts, after: TopUpCounts): void {
   const refusal = topUpRefusal(tournament, before, after);
   if (refusal) throw conflict(refusal.code, refusal.message);
-}
-
-/** The tournament clock's time now (ms since level 1 began, breaks included); null without a clock. */
-export async function clockElapsedMsNow(ex: Executor, tournamentId: string): Promise<number | null> {
-  const clock = await getClock(ex, tournamentId);
-  const derived = clock ? deriveClock(clockStateOf(clock), clock.levels, Date.now()) : null;
-  return derived ? Math.round(derived.elapsedClockMs) : null;
 }
 
 /** A player's confirmed request: when they asked, and the clock's time then (null when unknown). */
@@ -217,6 +253,7 @@ export async function applyCountChange(
   if (next.rebuys < 0 || next.addons < 0 || next.knockouts < 0) {
     throw conflict("COUNT_BELOW_ZERO", "A count cannot go below zero");
   }
+  await assertRoomToAccept(tx, tournament, registration, { ...registration, ...next });
 
   let updated = await registrationsRepo.addToCounts(tx, registration.id, delta);
   if (!updated) throw notFound("Registration not found");
@@ -235,7 +272,7 @@ export async function applyCountChange(
   const player = await getPlayer(tx, registration.playerId);
   await logIncreases(tx, tournament, updated, player, { rebuys: Math.max(delta.rebuys, 0), addons: Math.max(delta.addons, 0) }, request);
   if (reentry) await logActivity(tx, updated, "reentry", `${playerName(player)} is back in with a re-buy`);
-  if (reentry) await restoreSeatAfterReturn(tx, tournament.id, registration.id);
+  if (reentry) await restoreSeatAfterReturn(tx, tournament, registration.id);
   return updated;
 }
 
@@ -304,6 +341,7 @@ export async function eliminate(
   assertOpen(tournament);
   if (registration.isEliminated) throw conflict("ALREADY_ELIMINATED", "This player has already been eliminated");
   const eliminatorRegistration = eliminatedBy !== null ? await lockEliminator(tx, locked, eliminatedBy, claimed) : undefined;
+  await assertRoomToAccept(tx, tournament, registration, { ...registration, ...otherChanges, isEliminated: true });
 
   const eliminated = await registrationsRepo.updateTournamentRegistration(tx, registration.id, {
     ...otherChanges,
@@ -313,6 +351,9 @@ export async function eliminate(
   });
   if (!eliminated) throw notFound("Registration not found");
   await releaseSeatOnElimination(tx, registration.id);
+  if (eliminatorRegistration) {
+    await assertRoomToAccept(tx, tournament, eliminatorRegistration, { ...eliminatorRegistration, knockouts: (eliminatorRegistration.knockouts ?? 0) + 1 });
+  }
   const eliminator = eliminatorRegistration
     ? ((await registrationsRepo.addToCounts(tx, eliminatorRegistration.id, { knockouts: 1 })) ?? null)
     : null;
@@ -333,6 +374,7 @@ export async function creditKnockout(tx: Transaction, locked: LockedRegistration
     throw new Error("creditKnockout needs an elimination with no eliminator");
   }
   const eliminatorRegistration = await lockEliminator(tx, locked, eliminatedBy, true);
+  await assertRoomToAccept(tx, tournament, eliminatorRegistration, { ...eliminatorRegistration, knockouts: (eliminatorRegistration.knockouts ?? 0) + 1 });
   const eliminated = await registrationsRepo.updateTournamentRegistration(tx, registration.id, { eliminatedBy });
   if (!eliminated) throw notFound("Registration not found");
   const eliminator = (await registrationsRepo.addToCounts(tx, eliminatorRegistration.id, { knockouts: 1 })) ?? null;
@@ -381,7 +423,7 @@ async function restore(
   if (!restored) throw notFound("Registration not found");
   const player = await getPlayer(tx, registration.playerId);
   await logActivity(tx, restored, "player_restored", `${playerName(player)} was restored to active`);
-  await restoreSeatAfterReturn(tx, tournament.id, registration.id);
+  await restoreSeatAfterReturn(tx, tournament, registration.id);
   return restored;
 }
 
@@ -393,11 +435,16 @@ export interface SignUpCaller {
   staff: boolean;
   /** The request carries a valid sign-up token for this player (POST /api/players gave it to whoever typed their details). */
   vouched: boolean;
+  /** The club that token was issued at (the player met its sign-up rules there), or null. */
+  vouchedAt?: string | null;
 }
 
 /**
  * POST /api/tournaments/:id/registrations. `staff` (someone who manages the club) may also set the
- * opening counts and payment, may register any player, and is not held to maxPlayers. Everyone else
+ * opening counts and payment, and may register any player. Nobody is held to Max players at sign-up
+ * (round 5, item 15): a sign-up beyond it joins the waiting list (`waitingListPosition`), but staff
+ * registering a player as paid, or with re-buys or add-ons, accept them, which past Max players is
+ * 409 TOURNAMENT_FULL. Everyone else
  * gets the defaults for every other column (SEC-06), and may sign up only a player the QR page could
  * have found for them: one known at this club, registered there or added by it (what its search returns), or one
  * whose details they typed in just now (`vouched`: the sign-up token POST /api/players returned).
@@ -421,32 +468,43 @@ export async function registerPlayer(tournamentId: string, input: StaffRegistrat
     assertTopUpsAllowed(tournament, { rebuys: 0, addons: 0 }, { rebuys: input.rebuys ?? 0, addons: input.addons ?? 0 });
 
     const player = await getPlayer(tx, input.playerId);
-    const reachable =
-      player !== undefined && (caller.staff || caller.vouched || (await isKnownAtClub(tx, player.id, tournament.clubId)));
+    const knownHere = async () => player !== undefined && (await isKnownAtClub(tx, player.id, tournament.clubId));
+    const reachable = player !== undefined && (caller.staff || caller.vouched || (await knownHere()));
     if (!player || !reachable) throw new HttpError(404, "PLAYER_NOT_FOUND", "Player not found");
+    // A player added elsewhere (or with no club) never met this club's photo rule: a returning player
+    // of the club is not held to it, nor is one added on its own QR page (R5REV-SEC-01).
+    if (!caller.staff && caller.vouched && caller.vouchedAt !== tournament.clubId && !player.imageUrl) {
+      if ((await clubRequiresSignUpPhoto(tx, tournament.clubId)) && !(await knownHere())) throw photoRequired();
+    }
     if (await registrationsRepo.lockPlayerRegistration(tx, tournament.id, player.id)) {
       throw conflict("ALREADY_REGISTERED", "Player is already registered for this tournament");
     }
-    if (!caller.staff && (await registrationsRepo.countRegistrations(tx, tournament.id)) >= tournament.maxPlayers) {
-      throw conflict("TOURNAMENT_FULL", "Sorry, this tournament is full");
-    }
+    const opening = { rebuys: input.rebuys ?? 0, addons: input.addons ?? 0, paymentConfirmed: input.paymentConfirmed ?? false };
+    await assertRoomToAccept(tx, tournament, {}, opening);
     const before = input.enteringHighHands ? await registrationsRepo.registrationsOf(tx, tournament.id) : undefined;
 
     const registration = await registrationsRepo.createTournamentRegistration(tx, {
       tournamentId: tournament.id,
       playerId: player.id,
       buyIns: input.buyIns ?? 1,
-      rebuys: input.rebuys ?? 0,
-      addons: input.addons ?? 0,
       enteringHighHands: input.enteringHighHands ?? false,
-      paymentConfirmed: input.paymentConfirmed ?? false,
+      ...opening,
     });
     if (before) {
       assertHighHandAwardsFit({ tournament, registrations: before }, { tournament, registrations: [...before, registration] });
     }
     await claimHomeClubFromFirstRegistration(tx, player.id);
-    await logActivity(tx, registration, "registration", `${playerName(player)} registered for the tournament`);
-    return caller.staff ? toManagedRegistration(registration, player) : toPublicRegistration(registration, player);
+    const waitingList = await currentWaitingList(tx, tournament);
+    const place = waitingList.get(registration.id);
+    await logActivity(
+      tx,
+      registration,
+      "registration",
+      place === undefined ? `${playerName(player)} registered for the tournament` : `${playerName(player)} registered for the tournament: #${place} on the waiting list`,
+    );
+    const seating = await autoSeatNewRegistration(tx, tournament, registration.id);
+    const dto = caller.staff ? toManagedRegistration(registration, player, waitingList) : toPublicRegistration(registration, player, waitingList);
+    return { ...dto, seating };
   });
 }
 
@@ -618,6 +676,14 @@ export async function updateRegistration(req: Request, registrationId: string, i
     if (joinsHighHand && !offersHighHand(tournament)) {
       throw badRequest("High hands entry is not available for this tournament", "HIGH_HAND_NOT_AVAILABLE");
     }
+    // Accepting a waiting-list entry (its payment, or its first re-buy, add-on or knockout) needs room in the field; a bust checks in eliminate.
+    await assertRoomToAccept(tx, tournament, current, {
+      ...current,
+      paymentConfirmed: input.paymentConfirmed ?? current.paymentConfirmed,
+      rebuys: input.rebuys ?? current.rebuys,
+      addons: input.addons ?? current.addons,
+      knockouts: input.knockouts ?? current.knockouts,
+    });
     // Ticking or unticking an entry moves the high-hand pot, which the awards already made must still fit.
     const potBefore = changed.includes("enteringHighHands") ? await registrationsRepo.registrationsOf(tx, tournament.id) : undefined;
 
@@ -677,7 +743,7 @@ export async function updateRegistration(req: Request, registrationId: string, i
         tx,
       );
     }
-    return toManagedRegistration(updated, player);
+    return toManagedRegistration(updated, player, await currentWaitingList(tx, tournament));
   });
 }
 
@@ -756,15 +822,21 @@ export async function adjustCounts(registrationId: string, deltas: AdjustCountsI
 }
 
 /**
- * PATCH /api/registrations/:id/confirm-payment. Idempotent: confirming a confirmed payment changes
- * nothing and logs nothing. Allowed after the game, for late reconciliation.
+ * PATCH /api/registrations/:id/confirm-payment: accepts the player. Idempotent: confirming a
+ * confirmed payment changes nothing and logs nothing. Allowed after the game, for late
+ * reconciliation. Accepting one more than Max players is 409 TOURNAMENT_FULL, for everyone (round 5,
+ * item 15); a player who has already played is in the field, so their payment is always taken.
  */
 export async function confirmPayment(registrationId: string) {
   return db.transaction(async (tx) => {
-    const { registration } = await lockRegistrationById(tx, registrationId);
+    const { tournament, registration } = await lockRegistrationById(tx, registrationId);
+    await assertRoomToAccept(tx, tournament, registration, { ...registration, paymentConfirmed: true });
     const confirmed = await registrationsRepo.confirmPayment(tx, registration.id);
     const player = await getPlayer(tx, registration.playerId);
     if (confirmed) await logActivity(tx, confirmed, "payment_confirmed", `Payment confirmed for ${playerName(player)}`);
-    return toManagedRegistration(confirmed ?? registration, player);
+    // Round 5: a player waiting for their payment (or behind a full field) sits down as it is confirmed.
+    const seating = confirmed && !isClosed(tournament) ? await autoSeatOnPayment(tx, tournament, registration.id) : null;
+    // Accepted: in the field, never on the waiting list.
+    return { ...toManagedRegistration(confirmed ?? registration, player, new Map()), seating };
   });
 }

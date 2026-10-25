@@ -8,18 +8,21 @@
 import { z } from "zod";
 import { idSchema, integerSchema, moneySchema } from "./common";
 import type { ClubPlayer } from "./players";
-import type { PublicRegistration, PublicRegistrationRow } from "./public";
+import type { PublicRegistration, PublicRegistrationRow, WaitingListPlace } from "./public";
+import type { AutoSeatResultDto } from "./seating";
 
 /**
  * POST /api/tournaments/:id/registrations, anyone (QR sign-up; public-write limit). Every other field
  * is ignored, so a sign-up can never set payment, results or counts (SEC-06). Anyone but the club's
  * staff may sign up only a player who has registered at this club before (whom the QR page's search
  * finds), or the player POST /api/players just created or matched, by sending the `signUpToken` it
- * returned; any other player is 404 PLAYER_NOT_FOUND, as if they did not exist (P2REV0-02). Refused
- * with 409 ALREADY_REGISTERED, TOURNAMENT_FULL (maxPlayers), PRIZE_POOL_LOCKED, TOURNAMENT_CLOSED
- * (completed or cancelled), HIGH_HAND_AWARDED (entering a high hand whose every prize is awarded),
- * 404 PLAYER_NOT_FOUND, 400 HIGH_HAND_NOT_AVAILABLE. Open while the game is in progress
- * (enableLateRegistration is not enforced until the Phase 4 clock).
+ * returned; any other player is 404 PLAYER_NOT_FOUND, as if they did not exist (P2REV0-02). A sign-up
+ * beyond Max players is taken onto the waiting list (round 5, item 15: `waitingListPosition`).
+ * Refused with 400 PHOTO_REQUIRED (a club that requires a photo, and a player without one who is not
+ * one of its regulars and was not added on its QR page: R5REV-SEC-01), 409 ALREADY_REGISTERED,
+ * PRIZE_POOL_LOCKED, TOURNAMENT_CLOSED (completed or cancelled), HIGH_HAND_AWARDED (entering a high
+ * hand whose every prize is awarded), 404 PLAYER_NOT_FOUND, 400 HIGH_HAND_NOT_AVAILABLE. Open while
+ * the game is in progress (enableLateRegistration is not enforced until the Phase 4 clock).
  */
 export const publicRegistrationSchema = z.object({
   playerId: idSchema,
@@ -30,8 +33,9 @@ export type PublicRegistrationInput = z.infer<typeof publicRegistrationSchema>;
 
 /**
  * The same endpoint for someone who manages the tournament's club: may also set the opening counts
- * and payment, and is not held to maxPlayers (staff can seat an extra player). The lock and
- * closed-tournament rules still apply.
+ * and payment. Registering a player as paid, or with re-buys or add-ons, accepts them: past Max
+ * players that is 409 TOURNAMENT_FULL ("18 of 18 players accepted: raise Max players to accept more"),
+ * with no override (round 5, item 15). The lock and closed-tournament rules still apply.
  */
 export const staffRegistrationSchema = publicRegistrationSchema.extend({
   buyIns: integerSchema(1, 20).optional(),
@@ -71,6 +75,8 @@ export type StaffRegistrationInput = z.infer<typeof staffRegistrationSchema>;
  *   HIGH_HAND_OVER_POOL when they would add up to more, HIGH_HAND_AWARDED when every prize is awarded
  *   and the pot would no longer be what they add up to).
  * - knockouts is an absolute count, kept for today's client; new code uses /counts.
+ * - paymentConfirmed false → true accepts the player, as does a first re-buy, add-on, knockout or bust
+ *   of a waiting-list entry: past Max players, 409 TOURNAMENT_FULL (round 5, item 15; no override).
  */
 export const updateRegistrationSchema = z
   .object({
@@ -96,7 +102,8 @@ const delta = integerSchema(-20, 20);
  * /api/registrations/:id and its read-then-write +1: data-integrity-11, money-12). Same lock and
  * maxRebuys rules as PUT for increases; a count can never go below zero (409 COUNT_BELOW_ZERO).
  * Each increase is logged ("made 1 re-buy"). A re-buy by a player who is out puts them back in, and
- * whoever knocked them out keeps the knockout (a restore, which undoes a mistake, takes it back).
+ * whoever knocked them out keeps the knockout (a restore, which undoes a mistake, takes it back). A
+ * waiting-list entry's first re-buy, add-on or knockout past Max players: 409 TOURNAMENT_FULL.
  */
 export const adjustCountsSchema = z
   .object({ rebuys: delta.optional(), addons: delta.optional(), knockouts: delta.optional() })
@@ -114,8 +121,28 @@ export interface PaymentStatus {
  */
 export type ManagedRegistration = PublicRegistration & PaymentStatus;
 
+/**
+ * POST /api/tournaments/:id/registrations (201), round 5: the registration (ManagedRegistration for
+ * the club's staff, PublicRegistration for anyone else) and what auto-seat did with it, inside the
+ * same transaction (shared/domain/table-advisor planAutoSeat; tournament row locked first, so two
+ * sign-ups never take one seat): "seated" at Table 2, Seat 7, or "waiting" and why (tables_full also
+ * logs "seat_waiting" for the TD; no_tables before setup; awaiting_payment under "once they've paid";
+ * off).
+ */
+export type RegistrationCreatedDto = (PublicRegistration | ManagedRegistration) & { seating: AutoSeatResultDto };
+
+/**
+ * PATCH /api/registrations/:id/confirm-payment (staff), round 5: accepts the player, which past Max
+ * players is 409 TOURNAMENT_FULL "18 of 18 players accepted: raise Max players to accept more" for
+ * everyone, owners included (item 15; a player who has already played is in the field, so their
+ * payment is always taken). Under "once they've paid" a player who has no seat is seated by auto-seat
+ * as their payment is confirmed (`seating`); null when auto-seat did nothing (another mode, already
+ * seated, out, or nothing changed).
+ */
+export type PaymentConfirmedDto = ManagedRegistration & { seating: AutoSeatResultDto | null };
+
 /** A registration for staff screens: the player's contact details only when `player.canEdit` (ClubPlayer). */
-export type StaffRegistrationDto = PublicRegistrationRow & PaymentStatus & { player: ClubPlayer | null };
+export type StaffRegistrationDto = PublicRegistrationRow & PaymentStatus & WaitingListPlace & { player: ClubPlayer | null };
 
 /**
  * GET /api/tournaments/:id/pending-registrations (staff). amountOwed is dollars, as today, but now

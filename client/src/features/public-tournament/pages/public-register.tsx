@@ -6,6 +6,7 @@ import { ClubHeader } from "@/components/shared/club-header";
 import { CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { QueryState } from "@/components/shared/query-state";
 import { useFocusOnChange } from "@/hooks/use-focus-on-change";
+import { ClubThemeScope } from "@/features/branding/components/public/club-theme-scope";
 import { useClub } from "@/features/clubs/hooks";
 import { useRegistrations, useTournament } from "@/features/tournaments/hooks";
 import { isClosedStatus } from "@shared/domain/tournaments";
@@ -14,34 +15,53 @@ import { NewPlayerStep } from "../components/new-player-step";
 import { RegistrationClosed, RegistrationComplete } from "../components/registration-outcome";
 import { ConfirmStep, ExistingPlayerStep, PlayerTypeStep } from "../components/registration-steps";
 import { StepProgress } from "../components/step-progress";
-import { POOL_LOCKED_REGISTRATION_MESSAGE, REGISTRATION_CLOSED_MESSAGE, TOURNAMENT_FULL_MESSAGE } from "../messages";
+import { POOL_LOCKED_REGISTRATION_MESSAGE, REGISTRATION_CLOSED_MESSAGE } from "../messages";
 import { useRegistrationFlow } from "../use-registration-flow";
+import { lineupOf, nextSignUpPlace } from "../waiting-list";
 
-/**
- * Why a player cannot sign up from the QR code now, or null when they can. A full tournament says so
- * before anyone types their details or uploads a photo (TN-03); its staff can still seat a player.
- */
-function closedMessage(tournament: TournamentDetailDto, signedUp: readonly PublicRegistration[] | undefined): string | null {
+/** Why a player cannot sign up from the QR code now, or null when they can. */
+function closedMessage(tournament: TournamentDetailDto): string | null {
   if (isClosedStatus(tournament.status)) return REGISTRATION_CLOSED_MESSAGE;
   if (tournament.prizePoolLocked) return POOL_LOCKED_REGISTRATION_MESSAGE;
-  const full = !tournament.viewer.canManage && (signedUp?.length ?? 0) >= tournament.maxPlayers;
-  return full ? TOURNAMENT_FULL_MESSAGE : null;
+  return null;
+}
+
+/**
+ * A full field, said before anyone types their details or uploads a photo (TN-03): signing up still
+ * works, onto the waiting list (round 5, item 15), and the player sees the number they would get.
+ */
+function WaitingListNotice({ tournament, signedUp }: { tournament: TournamentDetailDto; signedUp: readonly PublicRegistration[] | undefined }) {
+  const place = signedUp ? nextSignUpPlace(lineupOf(signedUp, tournament.maxPlayers), tournament.maxPlayers) : null;
+  if (place === null) return null;
+  return (
+    <p className="rounded-md border border-border bg-muted px-3 py-2 text-center text-sm text-foreground" data-testid="waiting-list-notice">
+      This tournament is full. You can still sign up: you&apos;ll be <span className="font-semibold">#{place}</span> on the waiting list, and the
+      tournament director calls the next player when a place opens.
+    </p>
+  );
 }
 
 function Registration({ tournament }: { tournament: TournamentDetailDto }) {
   const flow = useRegistrationFlow(tournament.id);
   const { data: club } = useClub(tournament.clubId);
-  // Who is already in: a failed count leaves the server to refuse a full tournament.
+  // Who is already in, for the waiting-list notice: a failed count leaves the server to number the sign-up.
   const { data: signedUp } = useRegistrations(tournament.id);
 
-  const closed = closedMessage(tournament, signedUp);
-  // Each step replaces the last, Continue included: focus goes to the new step.
-  const shown = useFocusOnChange<HTMLDivElement>(flow.complete ? "complete" : flow.step);
+  const closed = closedMessage(tournament);
+  // Each step (and each part of a new player's step 2) replaces the last, Continue included: focus goes to it.
+  const shown = useFocusOnChange<HTMLDivElement>(flow.complete ? "complete" : flow.view);
   if (flow.complete) {
     return (
       <CenteredCard>
         <div ref={shown} tabIndex={-1} className="focus:outline-none">
-          <RegistrationComplete tournament={tournament} club={club} enteringHighHands={flow.enteringHighHands} onRegisterAnother={flow.startOver} />
+          <RegistrationComplete
+            tournament={tournament}
+            club={club}
+            player={flow.player}
+            registration={flow.registration}
+            enteringHighHands={flow.enteringHighHands}
+            onRegisterAnother={flow.startOver}
+          />
         </div>
       </CenteredCard>
     );
@@ -63,10 +83,11 @@ function Registration({ tournament }: { tournament: TournamentDetailDto }) {
           <CardDescription className="mt-1">Tournament Registration</CardDescription>
         </div>
         <StepProgress step={flow.step} />
+        <WaitingListNotice tournament={tournament} signedUp={signedUp} />
       </CardHeader>
       <CardContent ref={shown} tabIndex={-1} className="focus:outline-none" data-testid="registration-step">
         {flow.step === 1 ? <PlayerTypeStep flow={flow} /> : null}
-        {flow.step === 2 && flow.playerType === "new" ? <NewPlayerStep flow={flow} /> : null}
+        {flow.step === 2 && flow.playerType === "new" ? <NewPlayerStep flow={flow} club={club} /> : null}
         {flow.step === 2 && flow.playerType === "existing" ? <ExistingPlayerStep flow={flow} tournamentId={tournament.id} /> : null}
         {flow.step === 3 ? <ConfirmStep flow={flow} tournament={tournament} /> : null}
       </CardContent>
@@ -80,9 +101,12 @@ export default function PublicRegisterPage() {
   const tournament = useTournament(tournamentId);
   usePageMeta({ title: tournament.data ? `Register: ${tournament.data.name}` : "Register", noindex: true });
 
+  // In the club's own colours (round 5, item 13), around every state so a half-filled form is never remounted.
   return (
-    <QueryState query={tournament} {...TOURNAMENT_PAGE_STATES}>
-      {(loaded) => <Registration tournament={loaded} />}
-    </QueryState>
+    <ClubThemeScope clubId={tournament.data?.clubId} scheme="light">
+      <QueryState query={tournament} {...TOURNAMENT_PAGE_STATES}>
+        {(loaded) => <Registration tournament={loaded} />}
+      </QueryState>
+    </ClubThemeScope>
   );
 }

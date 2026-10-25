@@ -1,9 +1,9 @@
 /**
- * What the TV clock asks of the screen it runs on: to stay awake while the tournament is on, and to fill
- * the screen. Both are optional browser features; where one is missing or refused, the clock simply runs
- * without it.
+ * What the TV clock asks of the screen it runs on: to stay awake while the tournament is on, to fill
+ * the screen, and the size of what is really visible (round 5, item 22). The first two are optional
+ * browser features; where one is missing or refused, the clock simply runs without it.
  */
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState, useSyncExternalStore, type RefObject } from "react";
 
 /**
  * Keeps the screen from sleeping while `active` (a tournament not yet over, whatever its clock is
@@ -92,4 +92,71 @@ export function useEscapeLock(fullscreen: boolean): boolean {
     return () => keyboard.unlock();
   }, [fullscreen, keyboard]);
   return keyboard !== null;
+}
+
+export interface StageSize {
+  width: number;
+  height: number;
+}
+
+/**
+ * The size of `stage` as the screen shows it, in whole CSS pixels: measured (never 100vh, which a phone's
+ * toolbar or a TV's browser gets wrong), and again whenever it may have changed: a resize, a phone
+ * turned, full screen entered or left, a browser's toolbar shown or hidden. Before the first measure,
+ * the window's size.
+ */
+export function useStageSize(stage: RefObject<HTMLElement | null>): StageSize {
+  const [size, setSize] = useState<StageSize>(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  useLayoutEffect(() => {
+    const element = stage.current;
+    if (!element) return;
+    const measure = () => {
+      const box = element.getBoundingClientRect();
+      const width = Math.floor(box.width);
+      const height = Math.floor(box.height);
+      if (width <= 0 || height <= 0) return;
+      setSize((last) => (last.width === width && last.height === height ? last : { width, height }));
+    };
+    measure();
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    observer?.observe(element);
+    window.addEventListener("resize", measure);
+    window.addEventListener("orientationchange", measure);
+    document.addEventListener("fullscreenchange", measure);
+    window.visualViewport?.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("orientationchange", measure);
+      document.removeEventListener("fullscreenchange", measure);
+      window.visualViewport?.removeEventListener("resize", measure);
+    };
+  }, [stage]);
+  return size;
+}
+
+/** How many times the guard may shrink the plan for one size of screen. */
+const MAX_SQUEEZE = 8;
+
+/**
+ * The last word on fitting: once the screen has drawn `content` at this size, if `stage` or any part of
+ * it marked `data-fit` holds more than it shows (a font that came out wider than planned), one more
+ * step of shrinking for this size of screen. A new size starts again from none.
+ */
+export function useOverflowGuard(stage: RefObject<HTMLElement | null>, size: StageSize, content: string): number {
+  const key = `${String(size.width)}x${String(size.height)}`;
+  const [squeeze, setSqueeze] = useState({ key, steps: 0 });
+  const steps = squeeze.key === key ? squeeze.steps : 0;
+  useEffect(() => {
+    const element = stage.current;
+    if (!element || steps >= MAX_SQUEEZE) return;
+    // After the browser has laid the screen out.
+    const frame = requestAnimationFrame(() => {
+      const parts = [element, ...Array.from(element.querySelectorAll<HTMLElement>("[data-fit]"))];
+      const over = parts.some((part) => part.scrollHeight > part.clientHeight + 1 || part.scrollWidth > part.clientWidth + 1);
+      if (over) setSqueeze({ key, steps: steps + 1 });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [stage, key, steps, content]);
+  return steps;
 }

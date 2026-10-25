@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">
+<title>Dealer button</title>
+<defs><radialGradient id="glow" cx=".32" cy=".26" r=".85"><stop offset="0" stop-color="#fff" stop-opacity=".26"/><stop offset=".65" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>
+<rect width="96" height="96" fill="#475569"/>
+<rect width="96" height="96" fill="url(#glow)"/>
+<circle cx="48" cy="52" r="30" fill="#000" fill-opacity=".3"/>
+<circle cx="48" cy="51" r="30" fill="#94A3B8"/>
+<circle cx="48" cy="48" r="30" fill="#F8FAFC"/>
+<circle cx="48" cy="48" r="25" fill="none" stroke="#CBD5E1" stroke-width="2"/>
+<path d="M39 33H47C57 33 62 40 62 48C62 56 57 63 47 63H39Z" fill="none" stroke="#111827" stroke-width="6" stroke-linejoin="round"/>
+</svg>

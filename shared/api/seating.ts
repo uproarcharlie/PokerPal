@@ -11,6 +11,9 @@
  */
 import { z } from "zod";
 import { SEATING_LIMITS, type SeatReason } from "../domain/seating";
+import type { AutoSeatSkip, SeatingPhase, SeatingSettings, TableAdviceKind } from "../domain/table-advisor";
+import { TABLE_SHAPES, type TableShape } from "../domain/table-layout";
+import type { ClubTheme } from "../domain/theme";
 import type { ActivityEventType, TournamentStatus } from "../domain/tournaments";
 import { idSchema } from "./common";
 import type { PublicPlayer } from "./public";
@@ -18,11 +21,17 @@ import type { PublicPlayer } from "./public";
 const seatCount = z.number().int().min(SEATING_LIMITS.minSeats).max(SEATING_LIMITS.maxSeats);
 const tableNumber = z.number().int().min(1).max(SEATING_LIMITS.maxTableNumber);
 const version = z.string().regex(/^[0-9a-f]{8}$/, "Invalid seating version");
+const shape = z.enum(TABLE_SHAPES);
 
-/** POST /api/tournaments/:id/tables: add `count` tables numbered after the highest (archived ones included). 409 TABLE_LIMIT past 50 active. */
+/**
+ * POST /api/tournaments/:id/tables: add `count` tables numbered after the highest (archived ones
+ * included), of `seatCount` seats and `shape` (round 5: each defaults to the tournament's seating
+ * settings, SeatingDto.settings). 409 TABLE_LIMIT past 50 active.
+ */
 export const createTablesSchema = z.object({
   count: z.number().int().min(1).max(20).default(1),
-  seatCount: seatCount.default(SEATING_LIMITS.defaultSeats),
+  seatCount: seatCount.optional(),
+  shape: shape.optional(),
 });
 export type CreateTablesInput = z.infer<typeof createTablesSchema>;
 
@@ -39,19 +48,26 @@ export const updateTableSchema = z
     seatCount: seatCount.optional(),
     tableNumber: tableNumber.optional(),
     status: z.literal("active").optional(),
+    /** Round 5: how the table is drawn (the seats keep their numbers). */
+    shape: shape.optional(),
   })
   .refine((input) => Object.values(input).some((value) => value !== undefined), "Nothing to update");
 export type UpdateTableInput = z.infer<typeof updateTableSchema>;
 
 /**
  * POST /api/tournaments/:id/seating/setup: one tap from no tables to everyone seated. Creates
- * `tableCount` tables (default suggestTables(eligible, seatCount)) of `seatCount` seats, then draws
- * every eligible player (409 TABLES_EXIST when any table is active). `includeUnconfirmed: false`
- * leaves out entries whose payment is not confirmed (the response counts them: excludedUnconfirmed).
+ * `tableCount` tables of `seatCount` seats and `shape`, then draws every eligible player (409
+ * TABLES_EXIST when any table is active). Round 5 defaults, from the tournament's seating settings:
+ * seatCount = settings.seatsPerTable, shape = settings.tableShape, tableCount =
+ * setupTableCount(settings, players), i.e. the starting tables (2) or more when those cannot take
+ * everyone; players beyond the tables wait (the advisor then says to open one). Sending seatCount
+ * also stores it as the tournament's seats per table. `includeUnconfirmed: false` leaves out entries
+ * whose payment is not confirmed (the response counts them: excludedUnconfirmed).
  */
 export const seatingSetupSchema = z.object({
-  seatCount: seatCount.default(SEATING_LIMITS.defaultSeats),
+  seatCount: seatCount.optional(),
   tableCount: z.number().int().min(1).max(SEATING_LIMITS.maxActiveTables).optional(),
+  shape: shape.optional(),
   includeUnconfirmed: z.boolean().default(true),
 });
 export type SeatingSetupInput = z.infer<typeof seatingSetupSchema>;
@@ -129,6 +145,24 @@ export type FinalTableInput = z.infer<typeof finalTableSchema>;
 export const undoSeatingSchema = z.object({ activityId: idSchema, expectedVersion: version.optional() });
 export type UndoSeatingInput = z.infer<typeof undoSeatingSchema>;
 
+/**
+ * POST /api/tournaments/:id/seating/open-table (round 5, the advisor's "Open Table N"): adds a table
+ * (number nextTableNumber, `seatCount` and `shape` defaulting to the seating settings) and applies
+ * planOpenTable in one transaction: the waiting players sit down and the tables even out to within
+ * one, moving players from the fullest tables (moves reason "open_table"). The plan is the one the
+ * advice showed: it draws seats with openTableRng(snapshot), so with `expectedVersion` (the
+ * SeatingDto.version the advice was shown with; required) Apply does exactly what was shown, and a
+ * seating changed since is 409 STALE_PLAN (details: { seating }). 409 TABLE_LIMIT past 50 active.
+ * Logged as "table_opened" with its moves, so Undo can put them back (the new table then stays,
+ * empty, for the TD to remove).
+ */
+export const openTableSchema = z.object({
+  expectedVersion: version,
+  seatCount: seatCount.optional(),
+  shape: shape.optional(),
+});
+export type OpenTableInput = z.infer<typeof openTableSchema>;
+
 /** A seat's place, as screens name it: "Table 2, Seat 4". */
 export interface SeatRefDto {
   tableId: string;
@@ -161,6 +195,8 @@ export interface TableDto {
   /** name, or "Table <number>". */
   displayName: string;
   seatCount: number;
+  /** How it is drawn: its own shape, else the tournament's (resolveTableShape). */
+  shape: TableShape;
   status: "active" | "broken";
   occupied: number;
   /** One per seat (seatCount) while active; [] once archived. */
@@ -171,7 +207,7 @@ export interface TableDto {
  * The seating operations whose moves are kept in their activity entries: the four that can be undone,
  * and the undo of one (which cannot itself be undone).
  */
-export const SEATING_CHANGE_EVENTS = ["table_broken", "seating_drawn", "seating_balanced", "final_table", "seating_undone"] as const satisfies readonly ActivityEventType[];
+export const SEATING_CHANGE_EVENTS = ["table_broken", "seating_drawn", "seating_balanced", "final_table", "table_opened", "seating_undone"] as const satisfies readonly ActivityEventType[];
 export type SeatingChangeEvent = (typeof SEATING_CHANGE_EVENTS)[number];
 
 /**
@@ -188,13 +224,46 @@ export interface SeatingChangeDto {
   canUndo: boolean;
 }
 
+/**
+ * One piece of the table advisor's advice (shared/domain/table-advisor adviseTables), moves named.
+ * For open_table, the moves to the new table name it with tableId NEW_TABLE_ID and "Table <n>".
+ */
+export interface TableAdviceDto {
+  kind: TableAdviceKind;
+  /** One plain sentence: "17 players fit on 2 tables of 9: break Table 3". */
+  message: string;
+  tableId: string | null;
+  tableNumber: number | null;
+  moves: SeatMoveDto[];
+  players: number;
+}
+
+/** What the advisor read from the seating, and its advice, most urgent first (the first is the banner). */
+export interface TableAdvisorDto {
+  /**
+   * "growing" while players may still arrive (late registration open: lateRegistrationOpen) and no
+   * table has been broken; "shrinking" after either.
+   */
+  phase: SeatingPhase;
+  players: number;
+  waiting: number;
+  /** "Once they've paid": registered, not paid, not seated: "registered, not arrived yet". */
+  notArrived: number;
+  /** Sign-ups on the waiting list behind a full field (round 5, item 15): not seated, not counted; flagged. */
+  overCapacity: number;
+  advice: TableAdviceDto[];
+}
+
 /** GET /api/tournaments/:id/seating (staff). */
 export interface SeatingDto {
   tournamentId: string;
   tournamentStatus: TournamentStatus;
   /** Completed or cancelled: shown, not changed. */
   readOnly: boolean;
-  /** seatingVersion: send it back as expectedVersion with Balance or Break. */
+  /**
+   * seatingVersion (the tables, the seats, and who is waiting for one): send it back as
+   * expectedVersion with Balance, Break, Open Table and the rest.
+   */
   version: string;
   /** Active tables by number, then archived ones. */
   tables: TableDto[];
@@ -211,17 +280,19 @@ export interface SeatingDto {
     maxDiff: number;
   };
   suggestions: {
+    /** @deprecated Round 5: always empty. The advisor's "balance" advice has the moves (R5REV3-CQ-10). */
     balance: SeatMoveDto[];
-    /**
-     * Break and the final table count the players at the tables only: players waiting for a seat
-     * (stats.unseated, unconfirmedUnseated of them unpaid) never block them; say so with
-     * waitingText (shared/domain/seating), e.g. "2 players are waiting for a seat (2 unpaid)".
-     */
+    /** @deprecated Round 5: always null. The advisor's "break_table" advice names the table. */
     breakTable: { tableId: string; tableNumber: number; playersToMove: number } | null;
+    /** @deprecated Round 5: always null. The advisor's "final_table" advice names the table. */
     finalTable: { tableId: string; tableNumber: number } | null;
-    /** While no table is active: suggestTables(players still in, 9). */
+    /** While no table is active: what "Set up tables & draw seats" would do (setupTableCount from `settings`). */
     setup: { seatCount: number; tableCount: number; perTable: number[] } | null;
   };
+  /** Round 5: the tournament's seating settings with every default filled in (resolveSeatingSettings). */
+  settings: SeatingSettings;
+  /** Round 5: the table advisor (open, seat the waiting, final table, break, balance). */
+  advisor: TableAdvisorDto;
   /** Every seated registration's seat, for the standings table's Seat column. */
   seatByRegistrationId: Record<string, { tableNumber: number; seatNumber: number }>;
   /** Null until a table is broken, seats are drawn, tables are balanced or a final table is drawn. */
@@ -244,10 +315,19 @@ export interface SeatingMutationDto {
  */
 export interface PublicSeatingDto {
   tournament: { id: string; name: string; status: TournamentStatus };
-  club: { id: string; name: string; slug: string; imageUrl: string | null };
+  /** `theme`: the club's colours (round 5), null for the LovePoker look. */
+  club: { id: string; name: string; slug: string; imageUrl: string | null; theme: ClubTheme | null };
   /** Active tables by number. */
-  tables: Array<{ tableNumber: number; displayName: string; seatCount: number; seats: Array<{ seatNumber: number; player: PublicPlayer | null }> }>;
+  tables: Array<{ tableNumber: number; displayName: string; seatCount: number; shape: TableShape; seats: Array<{ seatNumber: number; player: PublicPlayer | null }> }>;
   /** Every seated player, by name, for the search. */
   players: Array<{ player: PublicPlayer; tableNumber: number; tableName: string; seatNumber: number }>;
   unseatedCount: number;
 }
+
+/**
+ * What auto-seat did with a new registration (round 5, item 9): POST /api/tournaments/:id/registrations
+ * and, under "once they've paid", PATCH /api/registrations/:id/confirm-payment answer it as `seating`
+ * (shared/api/registrations RegistrationCreatedDto). "seated": where (the sign-up screen says "You're at
+ * Table 2, Seat 7"); "waiting": why not (tables_full: the TD is prompted to open a table).
+ */
+export type AutoSeatResultDto = { status: "seated"; seat: SeatRefDto } | { status: "waiting"; reason: AutoSeatSkip };

@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useState, type RefObject } from "react";
 import { useForm } from "react-hook-form";
 import { Link } from "wouter";
 import { z } from "zod";
@@ -9,14 +9,16 @@ import { FormSlideout } from "@/components/ui/form-slideout";
 import { Input } from "@/components/ui/input";
 import { RequiredNote } from "@/components/shared/required-note";
 import { MIN_SEARCH_LENGTH, PlayerSearch, type PlayerSearchWording } from "@/features/public-tournament/components/player-search";
-import { useWaitingSeat } from "@/features/seating/waiting-seat";
+import { waitingListPlaceOf } from "@/features/public-tournament/waiting-list";
+import { returnSeatAction, returnSeatText, useReturnSeat } from "@/features/seating/waiting-seat";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/api/http";
 import { routes } from "@/app/routes";
 import type { PublicPlayer } from "@shared/api/public";
-import { staffRegistrationSchema } from "@shared/api/registrations";
+import { staffRegistrationSchema, type RegistrationCreatedDto } from "@shared/api/registrations";
 import { formResolver, showServerFieldErrors, typedNumber } from "@/lib/forms";
 import { useRegisterPlayer } from "../../staff-hooks";
+import { autoSeatText, needsTable } from "./auto-seat-text";
 
 const FORM_ID = "register-player-form";
 
@@ -47,20 +49,30 @@ interface RegisterPlayerDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   tournamentId: string;
+  /** Opens the seating, for the toast of a player left waiting because every table is full ("open a table"). */
+  onOpenSeating?: () => void;
+  returnFocusTo?: RefObject<HTMLElement | null>;
 }
 
 /**
  * The TD's desk: find a player who has played before (at this club or any other) by name and register
- * them with their opening entries. New players sign up on the registration page.
+ * them with their opening entries. New players sign up on the registration page. The toast says where
+ * automatic seating put them (round 5), or that they wait: for a seat, or past a full field on the waiting list.
  */
-export function RegisterPlayerDialog({ open, onOpenChange, tournamentId }: RegisterPlayerDialogProps) {
-  return open ? <RegisterPlayerSheet tournamentId={tournamentId} onClose={() => onOpenChange(false)} /> : null;
+export function RegisterPlayerDialog({ open, onOpenChange, tournamentId, onOpenSeating, returnFocusTo }: RegisterPlayerDialogProps) {
+  return open ? (
+    <RegisterPlayerSheet tournamentId={tournamentId} onOpenSeating={onOpenSeating} returnFocusTo={returnFocusTo} onClose={() => onOpenChange(false)} />
+  ) : null;
 }
 
-function RegisterPlayerSheet({ tournamentId, onClose }: { tournamentId: string; onClose: () => void }) {
+interface RegisterPlayerSheetProps extends Pick<RegisterPlayerDialogProps, "tournamentId" | "onOpenSeating" | "returnFocusTo"> {
+  onClose: () => void;
+}
+
+function RegisterPlayerSheet({ tournamentId, onOpenSeating, returnFocusTo, onClose }: RegisterPlayerSheetProps) {
   const { toast } = useToast();
   const register = useRegisterPlayer(tournamentId);
-  const waitingSeat = useWaitingSeat(tournamentId);
+  const returnSeat = useReturnSeat(tournamentId);
   const [player, setPlayer] = useState<PublicPlayer | null>(null);
   const playerLabelId = useId();
   const form = useForm<RegisterValues>({
@@ -69,18 +81,32 @@ function RegisterPlayerSheet({ tournamentId, onClose }: { tournamentId: string; 
   });
 
   const submit = form.handleSubmit(async (values) => {
+    let registration: RegistrationCreatedDto;
     try {
-      const registration = await register.mutateAsync(registerSchema.parse(values));
-      onClose();
-      // A late walk-in while the tables are in play gets no seat by itself: the toast offers one.
-      const name = registration.player?.name ?? "The player";
-      const seatNow = await waitingSeat(registration.id, name);
-      toast({ title: "Player registered", description: seatNow ? `${name} is in, waiting for a seat.` : `${name} is in.`, action: seatNow ?? undefined });
+      registration = await register.mutateAsync(registerSchema.parse(values));
     } catch (error) {
       if (!showServerFieldErrors(form.setError, error, { fields: ["buyIns", "rebuys", "addons", "playerId"] })) {
         toast({ title: "Could not register the player", description: errorMessage(error), variant: "destructive" });
       }
+      return;
     }
+    onClose();
+    const name = registration.player?.name ?? "The player";
+    // Past a full field the player waits for a place, not a seat (round 5, item 15): never "seated once they've paid".
+    const waitingListPlace = waitingListPlaceOf(registration);
+    if (waitingListPlace !== null) {
+      toast({ title: "Player registered", description: `${name} is #${waitingListPlace} on the waiting list: the field is full.` });
+      return;
+    }
+    const seated = autoSeatText(registration.seating);
+    if (seated) {
+      const action = needsTable(registration.seating) && onOpenSeating ? { label: "Open seating", onClick: onOpenSeating } : undefined;
+      toast({ title: "Player registered", description: `${name} is in. ${seated}`, action });
+      return;
+    }
+    // Not seated by itself (seating is off) while the tables are in play: the toast offers a seat.
+    const outcome = await returnSeat(registration.id, name, { returning: false });
+    toast({ title: "Player registered", description: returnSeatText(`${name} is in`, outcome), action: returnSeatAction(outcome) });
   });
 
   const counts = [
@@ -93,14 +119,15 @@ function RegisterPlayerSheet({ tournamentId, onClose }: { tournamentId: string; 
     <FormSlideout
       open
       onOpenChange={(next) => !next && onClose()}
+      returnFocusTo={returnFocusTo}
       title="Register Player"
       description="Find a player who has played before and add them to this tournament."
       footer={
         <div className="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <Button type="button" variant="ghost" onClick={onClose} data-testid="cancel-registration">
+          <Button type="button" variant="ghost" className="h-11 sm:h-10" onClick={onClose} data-testid="cancel-registration">
             Cancel
           </Button>
-          <Button type="submit" form={FORM_ID} disabled={!player} busy={register.isPending} data-testid="register-player-final">
+          <Button type="submit" form={FORM_ID} className="h-11 sm:h-10" disabled={!player} busy={register.isPending} data-testid="register-player-final">
             <Check className="mr-2 h-4 w-4" aria-hidden="true" />
             {register.isPending ? "Registering…" : "Register Player"}
           </Button>
@@ -131,7 +158,7 @@ function RegisterPlayerSheet({ tournamentId, onClose }: { tournamentId: string; 
                 />
                 <p className="text-xs text-muted-foreground">
                   Someone new?{" "}
-                  <Link href={routes.publicRegister(tournamentId)} className="underline">
+                  <Link href={routes.publicRegister(tournamentId)} className="inline-flex min-h-11 items-center underline">
                     Sign them up on the registration page
                   </Link>
                   .
@@ -151,7 +178,7 @@ function RegisterPlayerSheet({ tournamentId, onClose }: { tournamentId: string; 
                   <FormItem required={required}>
                     <FormLabel>{label}</FormLabel>
                     <FormControl>
-                      <Input inputMode="numeric" {...field} data-testid={testId} />
+                      <Input inputMode="numeric" className="h-11 sm:h-10" {...field} data-testid={testId} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

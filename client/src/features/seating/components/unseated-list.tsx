@@ -33,7 +33,7 @@ export function UnseatedList({ unseated, selectedId, readOnly, busy, onSelect, o
           return (
             <li key={entry.registrationId} className={cn("flex items-center gap-1 rounded-full border bg-card p-1", selected ? "border-primary ring-2 ring-primary" : "border-border")}>
               {readOnly ? (
-                <span className="flex min-h-10 items-center gap-2 px-2">
+                <span className="flex min-h-11 items-center gap-2 px-2">
                   <PlayerAvatar name={name} imageUrl={entry.player.imageUrl} size="xs" />
                   <span className="text-sm text-foreground">{name}</span>
                   {entry.paymentConfirmed ? null : <UnpaidDot />}
@@ -45,13 +45,13 @@ export function UnseatedList({ unseated, selectedId, readOnly, busy, onSelect, o
                     aria-pressed={selected}
                     aria-disabled={busy || undefined}
                     onClick={() => (busy ? undefined : onSelect(entry.registrationId))}
-                    className="flex min-h-10 items-center gap-2 rounded-full px-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="flex min-h-11 items-center gap-2 rounded-full px-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     <PlayerAvatar name={name} imageUrl={entry.player.imageUrl} size="xs" />
                     <span className="text-sm text-foreground">{name}</span>
                     {entry.paymentConfirmed ? null : <UnpaidDot />}
                   </button>
-                  <Button type="button" size="sm" variant="secondary" className="rounded-full" busy={busy} aria-label={`Seat ${name} at random`} onClick={() => onSeat(entry.registrationId)}>
+                  <Button type="button" size="sm" variant="secondary" className="h-11 rounded-full" busy={busy} aria-label={`Seat ${name} at random`} onClick={() => onSeat(entry.registrationId)}>
                     Seat
                   </Button>
                 </>

@@ -62,6 +62,15 @@ describe("SeatingPanel: what it shows", () => {
     expect(screen.getByRole("link", { name: "Open seat finder" })).toHaveAttribute("href", "/tournament/t1/seats");
   });
 
+  it("puts who is waiting above the tables, in sight of the seats they are picked up for (R5REV-HOST-10)", async () => {
+    mockSeating(seatingDto(night));
+    renderWithApp(<SeatingPanel tournament={tournament} registrations={[]} />);
+
+    const waiting = await screen.findByTestId("unseated-list");
+    const firstTable = screen.getByRole("group", { name: "Table 1: 2 of 9 seats taken" });
+    expect(waiting.compareDocumentPosition(firstTable) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("says when the seating could not be loaded, and tries again", async () => {
     let asked = 0;
     server.use(
@@ -133,7 +142,7 @@ describe("SeatingPanel: setting up", () => {
     renderWithApp(<SeatingPanel tournament={tournament} registrations={[]} />);
 
     expect(await screen.findByRole("heading", { name: "No tables yet" })).toBeInTheDocument();
-    expect(screen.getByText("22 players still in. Suggested: 3 tables: 8 / 7 / 7.")).toBeInTheDocument();
+    expect(screen.getByText("22 players still in. Start with 3 tables: 8 / 7 / 7.")).toBeInTheDocument();
   });
 
   it("previews the tables for the seats chosen, leaves unpaid players out when asked, and shows who sits where", async () => {
@@ -159,7 +168,7 @@ describe("SeatingPanel: setting up", () => {
     expect(within(dialog).getByTestId("setup-preview")).toHaveTextContent("2 tables: 9 / 9");
     await user.click(within(dialog).getByRole("button", { name: "Set up & draw seats" }));
 
-    await waitFor(() => expect(bodies).toEqual([{ seatCount: 10, includeUnconfirmed: false }]));
+    await waitFor(() => expect(bodies).toEqual([{ seatCount: 10, tableCount: 2, includeUnconfirmed: false }]));
     const moves = await screen.findByRole("dialog", { name: "Seats drawn" });
     expect(within(moves).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["Player 04 →  to Table 1, Seat 3", "Zed →  to Table 1, Seat 1"]);
     expect(within(moves).getByText("4 unpaid players were left out: seat them once they have paid.")).toBeInTheDocument();
@@ -193,7 +202,7 @@ describe("SeatingPanel: setting up", () => {
     expect(within(dialog).getByText("Adds Tables 4 to 5 (9 seats each)")).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Add tables" }));
 
-    await waitFor(() => expect(bodies).toEqual([{ count: 2, seatCount: 9 }]));
+    await waitFor(() => expect(bodies).toEqual([{ count: 2, seatCount: 9, shape: "oval" }]));
     expect(await screen.findByText("2 tables added")).toBeInTheDocument();
   });
 });

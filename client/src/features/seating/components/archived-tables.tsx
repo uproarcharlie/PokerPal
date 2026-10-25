@@ -26,7 +26,7 @@ export function ArchivedTables({ tables, readOnly, busy, onReopen }: ArchivedTab
               {table.displayName} <span className="text-muted-foreground">({table.seatCount} seats)</span>
             </span>
             {readOnly ? null : (
-              <Button type="button" variant="ghost" size="sm" busy={busy} aria-label={`Reopen ${table.displayName}`} onClick={() => onReopen(table)}>
+              <Button type="button" variant="ghost" size="sm" className="h-11" busy={busy} aria-label={`Reopen ${table.displayName}`} onClick={() => onReopen(table)}>
                 <RotateCcw aria-hidden="true" />
                 Reopen
               </Button>

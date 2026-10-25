@@ -33,7 +33,9 @@ export function HomeTournamentCard({ tournament, club }: HomeTournamentCardProps
           </p>
           <p className="flex items-center gap-2">
             <Users className="h-4 w-4" aria-hidden="true" />
-            {tournament.registeredCount} / {tournament.maxPlayers} players
+            {/* The field, never the waiting list behind it ("18 / 18 players · 2 waiting", not "20 / 18": round 5, item 15). */}
+            {tournament.registeredCount - tournament.waitingListCount} / {tournament.maxPlayers} players
+            {tournament.waitingListCount > 0 ? ` · ${tournament.waitingListCount} waiting` : null}
           </p>
         </div>
         <div className="mt-auto pt-4">

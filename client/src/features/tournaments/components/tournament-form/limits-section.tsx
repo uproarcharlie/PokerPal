@@ -1,8 +1,10 @@
 import { useWatch, type Control } from "react-hook-form";
 import { AddressAutocomplete } from "@/features/clubs/components/address-autocomplete";
-import { FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { tablesNeeded } from "@/features/seating/seating-text";
 import type { ClubDto } from "@shared/api/public";
+import { SEATING_LIMITS } from "@shared/domain/seating";
 import type { TournamentFormValues } from "../../tournament-form";
 import { FormSection } from "./form-section";
 import { SwitchField } from "./toggle-fields";
@@ -13,13 +15,15 @@ interface LimitsSectionProps {
   club: ClubDto | undefined;
 }
 
-/** How many players, and where the game is played. */
+/** How many players, how many sit at each table, and where the game is played. */
 export function LimitsSection({ control, club }: LimitsSectionProps) {
-  const useClubAddress = useWatch({ control, name: "useClubAddress" });
+  const [useClubAddress, maxPlayers, seatsPerTable] = useWatch({ control, name: ["useClubAddress", "maxPlayers", "seatsPerTable"] });
+  const clubSeats = club?.defaultSeatsPerTable ?? null;
+  const tables = tablesNeeded(maxPlayers, seatsPerTable, clubSeats);
 
   return (
     <FormSection title="Player Limits">
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <FormField
           control={control}
           name="minPlayers"
@@ -42,6 +46,25 @@ export function LimitsSection({ control, club }: LimitsSectionProps) {
               <FormControl>
                 <Input inputMode="numeric" placeholder="50" {...field} data-testid="max-players" />
               </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={control}
+          name="seatsPerTable"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Seats per table</FormLabel>
+              <FormControl>
+                <Input
+                  inputMode="numeric"
+                  placeholder={`${clubSeats ?? SEATING_LIMITS.defaultSeats} (club default)`}
+                  {...field}
+                  data-testid="seats-per-table"
+                />
+              </FormControl>
+              <FormDescription aria-live="polite">{tables ?? `${SEATING_LIMITS.minSeats} to ${SEATING_LIMITS.maxSeats}: 6-handed is 6`}</FormDescription>
               <FormMessage />
             </FormItem>
           )}

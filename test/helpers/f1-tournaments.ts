@@ -4,10 +4,11 @@
  */
 import { http, HttpResponse } from "msw";
 import { onTestFinished, vi } from "vitest";
-import type { FinalizePreviewDto, FinalizeResultDto, FinalizeRowDto } from "@shared/api/finalize";
+import type { FinalizePreviewDto, FinalizePreviewInput, FinalizeResultDto, FinalizeRowDto } from "@shared/api/finalize";
 import type { PrizePoolDto } from "@shared/api/prize-pool";
 import type { ClubDto, PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto, TournamentListItemDto, TournamentStatus } from "@shared/api/tournaments";
+import type { Dealable } from "@shared/domain/deal";
 import { centsToDecimalString } from "@shared/domain/money";
 import { computePrizePool } from "@shared/domain/prize-pool";
 import { server } from "../msw/server";
@@ -94,6 +95,7 @@ export const previewPrizePool: PrizePoolDto = {
   breakdown: previewBreakdown,
   display: { source: "live", rows: [], totalCents: previewBreakdown.net, undistributedCents: 0 },
   adjustment: null,
+  carryTarget: "the next tournament",
 };
 
 export interface PlanPlayer {
@@ -123,6 +125,8 @@ export function previewOf(overrides: Partial<FinalizePreviewDto>): FinalizePrevi
     prizePool: previewPrizePool,
     rows: [],
     activePlayers: [],
+    dealable: null,
+    dealProblems: [],
     warnings: [],
     pendingRequests: [],
     previous: null,
@@ -141,17 +145,25 @@ export function finalizeResultDto(message = "Tournament finalized successfully")
   return { success: true, message, snapshot: base.prizePoolSnapshotDto({ paid }) };
 }
 
-/** Answers the preview by the finishing order sent, and records each request body. */
-export function mockPreview(byOrder: (finishOrder: string[] | undefined) => FinalizePreviewDto): unknown[] {
+/** Answers the preview by the finishing order sent (and the whole body, e.g. a deal), and records each request body. */
+export function mockPreview(byOrder: (finishOrder: string[] | undefined, body: FinalizePreviewInput) => FinalizePreviewDto): unknown[] {
   const bodies: unknown[] = [];
   server.use(
     http.post("/api/tournaments/t1/finalize/preview", async ({ request }) => {
-      const body = (await request.json()) as { finishOrder?: string[] };
+      const body = (await request.json()) as FinalizePreviewInput;
       bodies.push(body);
-      return HttpResponse.json(byOrder(body.finishOrder));
+      return HttpResponse.json(byOrder(body.finishOrder, body));
     }),
   );
   return bodies;
+}
+
+/** What a deal shares: the `players` still in, in the finishing order, each with what their place pays, and those payouts together. */
+export function dealableOf(players: readonly PlanPlayer[], plannedCents: readonly number[]): Dealable {
+  return {
+    totalCents: plannedCents.reduce((sum, cents) => sum + cents, 0),
+    players: players.map((player, index) => ({ ...player, position: index + 1, plannedCents: plannedCents[index] })),
+  };
 }
 
 /** Answers finalize with `answer`, and records each request body. */

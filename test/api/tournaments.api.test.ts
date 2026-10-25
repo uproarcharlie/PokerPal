@@ -379,8 +379,8 @@ describe("GET /api/tournaments", () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual([
-      { ...publicView(busy), confirmedPlayerCount: null, registeredCount: 5 },
-      { ...publicView(empty), confirmedPlayerCount: null, registeredCount: 0 },
+      { ...publicView(busy), confirmedPlayerCount: null, registeredCount: 5, waitingListCount: 0 },
+      { ...publicView(empty), confirmedPlayerCount: null, registeredCount: 0, waitingListCount: 0 },
     ]);
     expect(findForbiddenKeys(response.body)).toEqual([]);
   });
@@ -913,7 +913,8 @@ describe("PUT /api/tournaments/:id", () => {
     });
     expect(response.body).toMatchObject({ manualPrizePool: "300.00", rakeOverride: null });
     expect(await activityFor(tournament.id)).toEqual([
-      { eventType: "prize_pool_adjusted", description: "Prize pool set manually to $300 (calculated $0)", playerId: null },
+      // Nothing came in yet: the club adds the whole pool (round 5, item 16: the difference is always said).
+      { eventType: "prize_pool_adjusted", description: "Prize pool set manually to $300 (calculated $0); $300 added by the club", playerId: null },
     ]);
     expect(await auditFor(tournament.id)).toMatchObject([{ action: "prize_pool.adjust", actorUserId: staff.manager.user.id }]);
   });

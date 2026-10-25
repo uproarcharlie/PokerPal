@@ -28,6 +28,9 @@ export async function tournamentsForStats(ex: Executor, scope: DashboardScope) {
       customPayouts: tournaments.customPayouts,
       manualPrizePool: tournaments.manualPrizePool,
       rakeOverride: tournaments.rakeOverride,
+      // Round 5 (item 16): a difference added to the prizes, and money carried in, are part of a live pool.
+      prizeDifference: tournaments.prizeDifference,
+      carriedIn: tournaments.carriedIn,
       prizePoolSnapshot: tournaments.prizePoolSnapshot,
     })
     .from(tournaments)

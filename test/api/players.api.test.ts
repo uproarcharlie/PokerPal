@@ -481,17 +481,17 @@ const homeClubOf = async (playerId: string) =>
 describe("the club that adds a player is their home club, so nobody can claim them later (P2REV0-SEC-03)", () => {
   it("keeps a QR sign-up whose registration did not go through with that tournament's club, whoever registers them next", async () => {
     const home = await createClub();
-    const full = await createTournament({ clubId: home.id, status: "registration", maxPlayers: 2 });
-    for (let n = 0; n < 2; n++) await createRegistration({ tournamentId: full.id, playerId: (await createPlayer()).id });
+    const locked = await createTournament({ clubId: home.id, status: "registration", prizePoolLocked: true });
+    for (let n = 0; n < 2; n++) await createRegistration({ tournamentId: locked.id, playerId: (await createPlayer()).id });
     const homeOwner = await signInClubRole("owner", home.id);
 
-    // The QR page adds the player, then the sign-up is refused: the tournament is full.
-    const created = await (await anon()).post("/api/players").send({ name: "Late Comer", phone: "021 555 7777", tournamentId: full.id });
+    // The QR page adds the player, then the sign-up is refused: the prize pool is locked.
+    const created = await (await anon()).post("/api/players").send({ name: "Late Comer", phone: "021 555 7777", tournamentId: locked.id });
     expect(created.status).toBe(201);
     const refused = await (await anon())
-      .post(`/api/tournaments/${full.id}/registrations`)
+      .post(`/api/tournaments/${locked.id}/registrations`)
       .send({ playerId: created.body.id, signUpToken: created.body.signUpToken });
-    expect(refused.body.code).toBe("TOURNAMENT_FULL");
+    expect(refused.body.code).toBe("PRIZE_POOL_LOCKED");
     expect(await homeClubOf(created.body.id)).toBe(home.id);
 
     // Someone who knows the name and number opens a club and registers the player there.

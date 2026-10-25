@@ -2,21 +2,25 @@ import { useEffect, useState } from "react";
 import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HttpResponse } from "msw";
+import { http, HttpResponse } from "msw";
 import { clockDto, liveDisplayDto, recordClockActions, resetServerTime, runningClock, undoDto } from "@test/helpers/clock-dto";
 import { recordRequests } from "@test/helpers/requests";
-import type { ClockDisplaySettings, ClockUndoDto } from "@shared/api/clock";
-import { mockSignedOut, renderWithApp } from "@test/helpers/web";
+import { DEFAULT_DISPLAY_SETTINGS, type ClockDisplaySettings, type ClockUndoDto } from "@shared/api/clock";
+import { apiError, mockSignedOut, renderWithApp } from "@test/helpers/web";
+import { server } from "@test/msw/server";
 import { deriveClock, type DerivedClock } from "@shared/domain/clock";
 import { clockStateOf } from "../hooks";
 import { DisplayControls, LEVEL_KEY_DEBOUNCE_MS, shortcutList } from "./display-controls";
 import type { ScreenTools } from "./public/clock-screen";
+import { screenPrefsOf } from "./public/screen-prefs";
+import type { SaveDisplaySettings } from "./public/screen-settings";
 
 function tools(): ScreenTools {
   return {
-    sound: { supported: true, on: true, needsTap: false, unlock: vi.fn(), toggle: vi.fn(), play: vi.fn() },
+    sound: { supported: true, on: true, needsTap: false, unlock: vi.fn(), toggle: vi.fn(), play: vi.fn(), test: vi.fn() },
     fullscreen: { supported: true, active: false, toggle: vi.fn() },
     awake: true,
+    screen: { prefs: screenPrefsOf(DEFAULT_DISPLAY_SETTINGS, false), openSettings: vi.fn(), offerChanges: vi.fn() },
   };
 }
 
@@ -29,7 +33,7 @@ function derivedAt(levelIndex: number, status: "running" | "idle" = "running"): 
 
 type Layer = ClockDisplaySettings["overlay"];
 
-function showControls(derived = derivedAt(1), screenTools = tools(), undo: ClockUndoDto | null = null, overlay: Layer = "none") {
+function showControls(derived = derivedAt(1), screenTools = tools(), undo: ClockUndoDto | null = null, overlay: Layer = "none", canChangeDisplay = true) {
   const sent = recordClockActions(() => liveDisplayDto({ clock: runningClock(Date.now(), { levelIndex: derived.levelIndex }), viewer: { canControl: true } }));
   const layers = recordRequests(
     [["patch", "/api/tournaments/t1/clock/display"]],
@@ -43,7 +47,7 @@ function showControls(derived = derivedAt(1), screenTools = tools(), undo: Clock
     useEffect(() => {
       setLayer.current = setShown;
     }, []);
-    return <DisplayControls tournamentId="t1" derived={derived} undo={undo} overlay={shown} tools={screenTools} />;
+    return <DisplayControls tournamentId="t1" derived={derived} undo={undo} overlay={shown} canChangeDisplay={canChangeDisplay} tools={screenTools} />;
   }
   const view = renderWithApp(
     <>
@@ -182,19 +186,44 @@ describe("the TV's staff controls", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("toggles full screen and the sound, and lists the shortcuts", async () => {
-    const { tools: screenTools } = showControls();
+  it("toggles full screen and the sound, steps the tournament's edge margin, opens the screen's settings, and lists the shortcuts", async () => {
+    const { tools: screenTools, layers } = showControls();
     const keys = user();
     await keys.keyboard("f");
     await keys.keyboard("m");
+    await keys.keyboard("e");
     expect(screenTools.fullscreen.toggle).toHaveBeenCalledTimes(1);
     expect(screenTools.sound.toggle).toHaveBeenCalledTimes(1);
+    // 2.5% (a TV's default) to 5%, saved for the tournament (round 5, item 22).
+    await vi.waitFor(() => expect(layers).toEqual([{ edgeMargin: 5 }]));
+    await keys.click(screen.getByRole("button", { name: "Screen" }));
+    expect(screenTools.screen.openSettings).toHaveBeenCalledTimes(1);
 
     await keys.keyboard("?");
     const help = await screen.findByRole("dialog", { name: "Keyboard shortcuts" });
     expect(help).toHaveTextContent(shortcutList(false).map((shortcut) => `${shortcut.keys}${shortcut.does}`).join(""));
     // Without Keyboard Lock the browser keeps Esc in full screen: the list says so, and what to press instead.
     expect(help).toHaveTextContent("not in full screen, where Esc leaves it: press S or $ again");
+  });
+
+  it("lets the screen's settings dialog save the tournament's sound and margin while the controls are up, and takes that back when they go (round 5, items 20 and 22)", async () => {
+    const screenTools = tools();
+    const { layers, unmount } = showControls(derivedAt(1), screenTools);
+    expect(screenTools.screen.offerChanges).toHaveBeenCalledTimes(1);
+    const [[save]] = vi.mocked(screenTools.screen.offerChanges).mock.calls as Array<[SaveDisplaySettings]>;
+    expect(await save({ soundVolume: 0.4, soundMinute: false })).toBe(true);
+    expect(layers).toEqual([{ soundVolume: 0.4, soundMinute: false }]);
+    unmount();
+    expect(screenTools.screen.offerChanges).toHaveBeenLastCalledWith(null);
+  });
+
+  it("says when the tournament's settings could not be saved, and tells the dialog so", async () => {
+    const screenTools = tools();
+    showControls(derivedAt(1), screenTools);
+    server.use(http.patch("/api/tournaments/t1/clock/display", () => apiError(403, "FORBIDDEN", "Only the club's staff can change the TV display")));
+    const [[save]] = vi.mocked(screenTools.screen.offerChanges).mock.calls as Array<[SaveDisplaySettings]>;
+    expect(await save({ edgeMargin: 0 })).toBe(false);
+    expect(await screen.findByText("Only the club's staff can change the TV display")).toBeInTheDocument();
   });
 
   describe("Esc in full screen (TDN4-TV-ESC-FULLSCREEN)", () => {
@@ -261,5 +290,33 @@ describe("the TV's staff controls", () => {
   it("names the toggle by what it will do", () => {
     showControls(derivedAt(0, "idle"));
     expect(screen.getByRole("button", { name: "Start" })).toBeInTheDocument();
+  });
+
+  describe("on a screen running the clock on its clock key alone (it may not change the TV display)", () => {
+    it("runs the clock, but changes no layer or margin: the keys say where that is done, and the bar offers neither layer", async () => {
+      const { sent, layers } = showControls(derivedAt(1), tools(), null, "seating", false);
+      const keys = user();
+      await keys.keyboard(" ");
+      await vi.waitFor(() => expect(sent).toEqual([{ action: "toggle", alsoStartTournament: false, expectedStatus: "running" }]));
+      for (const key of ["s", "$", "{Escape}", "e"]) await keys.keyboard(key);
+
+      expect((await screen.findAllByText("Changed from the Clock tab")).length).toBeGreaterThan(0);
+      expect(layers).toEqual([]);
+      expect(screen.queryByRole("button", { name: "Seats" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Payouts" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Screen" })).toBeInTheDocument();
+    });
+
+    it("lets the screen's settings dialog only show the tournament's settings, and lists no key that would change them", async () => {
+      const screenTools = tools();
+      showControls(derivedAt(1), screenTools, null, "none", false);
+      expect(screenTools.screen.offerChanges).not.toHaveBeenCalled();
+
+      await user().keyboard("?");
+      const help = await screen.findByRole("dialog", { name: "Keyboard shortcuts" });
+      expect(help).toHaveTextContent(shortcutList(false, false).map((shortcut) => `${shortcut.keys}${shortcut.does}`).join(""));
+      for (const key of ["S", "$", "E", "Esc"]) expect(shortcutList(false, false).some((shortcut) => shortcut.keys === key)).toBe(false);
+      expect(shortcutList(true, false).find((shortcut) => shortcut.keys === "Esc")?.does).toBe("Leave full screen");
+    });
   });
 });

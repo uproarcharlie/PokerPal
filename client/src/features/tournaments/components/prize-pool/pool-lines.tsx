@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
 import { Calculator } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatMoney, type Cents } from "@/lib/format";
+import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import type { DifferenceLine } from "@shared/domain/prize-difference";
 
 /** The calculator's card: a title, what the figures are, and the lines. */
 export function PoolCard({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
@@ -62,19 +63,48 @@ export function PoolLine({ label, value, note, testId, tone = "plain", className
   );
 }
 
+/** How each difference line counts towards the net pool: money in (+) or out (−) of it. */
+const DIFFERENCE_SIGNS: Readonly<Partial<Record<DifferenceLine["kind"], "+" | "-">>> = {
+  carried_in: "+",
+  kept_by_club: "-",
+  carried_over: "-",
+  added_by_club: "+",
+};
+
 /**
- * How far a manual prize pool is from what the rates give: taken off (negative) or added by the club
- * (positive), so the lines above the net pool always add up to it (P2REV1-MONEY-03).
+ * The lines between the AP and the net pool that say where money came from or went (round 5, item 16):
+ * carried in from an earlier tournament, kept by the club, carried over, added by the club. So the lines
+ * above the net pool always add up to it (P2REV1-MONEY-03). A leftover added to the places is part of the
+ * net pool already: the card says so under it instead (`LeftoverNote`).
  */
-export function ManualAdjustment({ cents }: { cents: Cents }) {
-  if (cents === 0) return null;
+export function DifferenceRows({ lines }: { lines: readonly DifferenceLine[] }) {
   return (
-    <div className="flex items-center justify-between py-2" data-testid="manual-adjustment">
-      <span className="text-sm text-muted-foreground">{cents > 0 ? "Added by the club" : "Manual adjustment"}</span>
-      <span className={cn("text-sm tabular-nums", cents > 0 ? "text-foreground" : "text-destructive")}>
-        {cents > 0 ? "+" : "-"}
-        {formatMoney(Math.abs(cents))}
-      </span>
-    </div>
+    <>
+      {lines.map((line, index) => {
+        const sign = DIFFERENCE_SIGNS[line.kind];
+        if (!sign) return null;
+        return (
+          <div key={`${index}-${line.kind}`} className="flex items-center justify-between gap-4 py-2" data-testid={`difference-${line.kind.replaceAll("_", "-")}`}>
+            <span className="min-w-0 text-sm text-muted-foreground">{line.label}</span>
+            <span className={cn("shrink-0 text-sm tabular-nums", sign === "+" ? "text-foreground" : "text-destructive")}>
+              {sign === "+" ? "+" : "−"}
+              {formatMoney(line.cents)}
+            </span>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+/** Under the net pool: the leftover the places were paid on top of what they were set to ("Includes $50 left over, added to 1st"). */
+export function LeftoverNote({ lines }: { lines: readonly DifferenceLine[] }) {
+  const added = lines.find((line) => line.kind === "added_to_prizes");
+  if (!added) return null;
+  const where = added.label.replace(/^Left over, /, "");
+  return (
+    <p className="text-right text-xs text-muted-foreground" data-testid="leftover-note">
+      Includes {formatMoney(added.cents)} left over, {where}
+    </p>
   );
 }

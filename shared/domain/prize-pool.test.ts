@@ -12,6 +12,7 @@ import {
   nextHighHandAward,
   paidPercentage,
   payoutsForDisplay,
+  poolEntries,
   prizeMoneyCents,
   rakeLabel,
   splitHighHandAward,
@@ -599,6 +600,21 @@ describe("computePrizePool: entries and payouts", () => {
     expect(pool.gross.total).toBe(5_000);
   });
 
+  it("leaves the waiting list out of the pool (round 5, item 15: the lead's default until the owner answers)", () => {
+    // 20 sign-ups for 18 places, 2 of them unpaid at the back: 18 buy-ins count.
+    const entries = Array.from({ length: 20 }, (_, i) => ({ id: `r${i + 10}`, registrationTime: new Date(i * 60_000), buyIns: 1, paymentConfirmed: i < 18 }));
+    const pool = computePrizePool(tournament({ maxPlayers: 18 }), entries);
+    expect(pool.counts).toMatchObject({ registrations: 18, buyIns: 18 });
+    expect(pool.gross.total).toBe(90_000);
+    expect(poolEntries({ maxPlayers: 18 }, entries)).toHaveLength(18);
+    // Unpaid sign-ups inside Max players still count, as they always have; so does everyone without a Max players.
+    expect(computePrizePool(tournament({ maxPlayers: 20 }), entries).counts.buyIns).toBe(20);
+    expect(computePrizePool(tournament(), entries).counts.buyIns).toBe(20);
+    // A registration list from the API carries its place on the list.
+    const listed = entries.map((entry, i) => ({ buyIns: 1, id: entry.id, waitingListPosition: i === 0 ? 1 : null }));
+    expect(computePrizePool(tournament({ maxPlayers: 18 }), listed).counts.buyIns).toBe(19);
+  });
+
   it("pays nothing before anyone has entered", () => {
     const pool = poolAndLegacy(tournament(), []);
     expect(pool.gross.total).toBe(0);
@@ -622,6 +638,36 @@ describe("computePrizePool: entries and payouts", () => {
     expect(pool.structure).toEqual({ requested: "custom", used: "custom", basisPoints: [6_000, 4_000] });
     expect(pool.payouts.map((p) => p.amountCents)).toEqual([44_100, 29_400]);
     expect(pool.legacy.payouts.map((p) => p.amount)).toEqual([368, 221, 147]);
+  });
+
+  it("pays a custom structure with fixed places (round 5) exactly as set: shares of the whole pool, fixed amounts", () => {
+    const customPayouts = '{"v":2,"places":[{"percent":50},{"amountCents":20000},{"amountCents":10000}]}';
+    const pool = computePrizePool(tournament({ payoutStructure: "custom", customPayouts }), FIELD);
+    // 50% of $735 is $367.50, paid as $367; the $68 the places leave the club keeps unless the TD chose otherwise.
+    expect(pool.net).toBe(66_700);
+    expect(pool.payouts.map((p) => p.amountCents)).toEqual([36_700, 20_000, 10_000]);
+    expect(pool.impliedRake).toBe(6_800);
+    expect(pool.structure).toEqual({
+      requested: "custom",
+      used: "custom",
+      basisPoints: [5_502, 2_999, 1_499],
+      places: [
+        { kind: "percent", basisPoints: 5_000 },
+        { kind: "amount", amountCents: 20_000 },
+        { kind: "amount", amountCents: 10_000 },
+      ],
+    });
+  });
+
+  it("pays fixed places that need more than the pool as set: the club adds the rest (round 5, item 16)", () => {
+    const customPayouts = '{"v":2,"places":[{"amountCents":50000},{"amountCents":40000}]}';
+    const pool = computePrizePool(tournament({ payoutStructure: "custom", customPayouts }), FIELD);
+    expect(pool.structure.used).toBe("custom");
+    expect(pool.structure.error).toBeUndefined();
+    expect(pool.net).toBe(90_000);
+    expect(pool.payouts.map((p) => p.amountCents)).toEqual([50_000, 40_000]);
+    expect(pool.difference).toMatchObject({ availableCents: 73_500, setCents: 90_000, cents: -16_500, addedByClubCents: 16_500 });
+    expect(pool.impliedRake).toBe(-16_500);
   });
 
   it("pays Standard with a reason when the custom structure is invalid", () => {
@@ -654,6 +700,18 @@ describe("computePrizePool: entries and payouts", () => {
         { position: 4, basisPoints: 1_000, percentage: 10, amountCents: 6_800 },
         { position: 5, basisPoints: 500, percentage: 5, amountCents: 3_400 },
       ],
+      difference: {
+        choice: "club",
+        availableCents: 68_500,
+        setCents: 68_500,
+        cents: 0,
+        keptByClubCents: 0,
+        addedToPrizesCents: 0,
+        carriedOverCents: 0,
+        addedByClubCents: 0,
+      },
+      carriedIn: [],
+      carriedInCents: 0,
       highHand: { entrants: 6, gross: 6_000, rake: 0, net: 6_000, winners: 2 },
     });
   });
@@ -686,6 +744,145 @@ describe("computePrizePool: entries and payouts", () => {
         expect(paid).toBe(pool.net > 0 ? pool.net : 0);
       }),
       PARITY_RUNS,
+    );
+  });
+});
+
+describe("computePrizePool: where a difference goes (round 5, item 16)", () => {
+  const custom = '{"v":2,"places":[{"percent":50},{"amountCents":20000},{"amountCents":10000}]}';
+  const paid = (pool: PrizePoolBreakdown) => pool.payouts.map((p) => p.amountCents);
+  // A 10% AP on the buy-ins ($50) leaves $685 of FIELD's $735 for prizes.
+  const reduced = (prizeDifference: string | null) =>
+    computePrizePool(tournament({ rakeType: "percentage", rakeAmount: "10.00", manualPrizePool: "600.00", prizeDifference }), FIELD);
+
+  it("a manual pool below what is available: the club keeps the difference by default, as it always has", () => {
+    for (const choice of [null, "club", "not a choice"]) {
+      const pool = reduced(choice);
+      expect(pool.net).toBe(60_000);
+      expect(paid(pool)).toEqual([30_000, 18_000, 12_000]);
+      expect(pool.impliedRake).toBe(13_500);
+      expect(pool.difference).toEqual({
+        choice: "club",
+        availableCents: 68_500,
+        setCents: 60_000,
+        cents: 8_500,
+        keptByClubCents: 8_500,
+        addedToPrizesCents: 0,
+        carriedOverCents: 0,
+        addedByClubCents: 0,
+      });
+    }
+  });
+
+  it("adds it to 1st, or shares it across the places in whole dollars (the cents to 1st)", () => {
+    const first = reduced("first");
+    expect(first.net).toBe(68_500);
+    expect(paid(first)).toEqual([38_500, 18_000, 12_000]);
+    expect(first.impliedRake).toBe(5_000);
+    expect(first.structure.basisPoints).toEqual([5_620, 2_628, 1_752]);
+    const shared = reduced("pro_rata");
+    expect(paid(shared)).toEqual([34_300, 20_500, 13_700]);
+    expect(shared.difference).toMatchObject({ addedToPrizesCents: 8_500, keptByClubCents: 0 });
+  });
+
+  it("carries it over: the prizes stay as set and the club's take is only its AP", () => {
+    const pool = reduced("carry");
+    expect(pool.net).toBe(60_000);
+    expect(paid(pool)).toEqual([30_000, 18_000, 12_000]);
+    expect(pool.structure.basisPoints).toEqual(PAYOUT_STRUCTURES.standard);
+    expect(pool.difference).toMatchObject({ carriedOverCents: 8_500, keptByClubCents: 0 });
+    expect(pool.impliedRake).toBe(5_000);
+  });
+
+  it("settles custom places' leftover by the same choice", () => {
+    const choose = (prizeDifference: string) => computePrizePool(tournament({ payoutStructure: "custom", customPayouts: custom, prizeDifference }), FIELD);
+    expect(paid(choose("first"))).toEqual([43_500, 20_000, 10_000]);
+    expect(paid(choose("pro_rata"))).toEqual([40_500, 22_000, 11_000]);
+    expect(paid(choose("carry"))).toEqual([36_700, 20_000, 10_000]);
+    expect(choose("carry").difference.carriedOverCents).toBe(6_800);
+  });
+
+  it("a manual pool above what is available is a guarantee: the club adds the difference", () => {
+    const pool = computePrizePool(tournament({ rakeType: "percentage", rakeAmount: "10.00", manualPrizePool: "1000.00", prizeDifference: "carry" }), FIELD);
+    expect(pool.net).toBe(100_000);
+    expect(pool.difference).toMatchObject({ cents: -31_500, addedByClubCents: 31_500, carriedOverCents: 0, keptByClubCents: 0 });
+    expect(pool.impliedRake).toBe(-26_500);
+  });
+
+  it("adds money carried over from earlier tournaments to what is available, each named", () => {
+    const carriedIn = [
+      { carryOverId: "c1", fromTournamentId: "t0", fromName: "Test Wednesday", amountCents: 5_000 },
+      { carryOverId: "c2", fromTournamentId: null, fromName: "Old Friday", amountCents: 2_500 },
+      { carryOverId: "c3", fromName: "Junk", amountCents: -100 },
+      "not an entry",
+    ];
+    const pool = computePrizePool(tournament({ carriedIn }), FIELD);
+    expect(pool.carriedIn.map((entry) => entry.carryOverId)).toEqual(["c1", "c2"]);
+    expect(pool.carriedInCents).toBe(7_500);
+    expect(pool.netAfterAp).toBe(81_000);
+    expect(pool.net).toBe(81_000);
+    expect(pool.impliedRake).toBe(0);
+    expect(paid(pool).reduce((sum, amount) => sum + amount, 0)).toBe(81_000);
+    expect(computePrizePool(tournament({ carriedIn: "nonsense" }), FIELD).carriedInCents).toBe(0);
+  });
+
+  it("leaves every tournament without a choice or a carry-in paying exactly as before", () => {
+    fc.assert(
+      fc.property(legacyTournaments, registrationLists(), (settings, registrations) => {
+        const before = computePrizePool(settings, registrations);
+        const club = computePrizePool({ ...settings, prizeDifference: "club", carriedIn: [] }, registrations);
+        expect(club).toEqual(before);
+        if (before.manualPrizePool === null && !before.structure.places) {
+          // A share table splits all of what is available: no choice can change it.
+          for (const prizeDifference of ["first", "pro_rata", "carry"]) {
+            expect(computePrizePool({ ...settings, prizeDifference }, registrations).payouts).toEqual(before.payouts);
+          }
+        }
+      }),
+      PARITY_RUNS,
+    );
+  });
+
+  it("always pays exactly what is available, less what the club keeps or carries over, plus what it adds, to the cent", () => {
+    const place = fc.oneof(
+      fc.integer({ min: 1, max: 4_000 }).map((percent) => ({ percent: percent / 100 })),
+      fc.integer({ min: 1, max: 2_000 }).map((dollars) => ({ amountCents: dollars * 100 })),
+    );
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 0, max: 60 }),
+        fc.option(fc.integer({ min: 0, max: 500_000 }), { nil: null }),
+        fc.array(place, { minLength: 1, maxLength: 6 }),
+        fc.constantFrom("club", "first", "pro_rata", "carry"),
+        fc.integer({ min: 0, max: 50_000 }),
+        (players, manual, raw, prizeDifference, carried) => {
+          const percents = raw.filter((p) => "percent" in p).sort((a, b) => (b as { percent: number }).percent - (a as { percent: number }).percent);
+          const fixed = raw.filter((p) => "amountCents" in p).sort((a, b) => (b as { amountCents: number }).amountCents - (a as { amountCents: number }).amountCents);
+          let pi = 0;
+          let ai = 0;
+          const places = raw.map((p) => ("percent" in p ? percents[pi++] : fixed[ai++]));
+          const total = places.reduce((sum, p) => sum + ("percent" in p ? (p as { percent: number }).percent : 0), 0);
+          fc.pre(total <= 100);
+          const settings = tournament({
+            rakeType: "percentage",
+            rakeAmount: "10.00",
+            payoutStructure: "custom",
+            customPayouts: JSON.stringify({ v: 2, places }),
+            manualPrizePool: manual === null ? null : decimalString(manual),
+            prizeDifference,
+            carriedIn: carried > 0 ? [{ carryOverId: "c1", fromTournamentId: null, fromName: "Earlier", amountCents: carried }] : [],
+          });
+          const pool = computePrizePool(settings, Array.from({ length: players }, () => ({ buyIns: 1 })));
+          const { difference } = pool;
+          const sum = pool.payouts.reduce((all, p) => all + p.amountCents, 0);
+          expect(sum).toBe(pool.net > 0 ? pool.net : 0);
+          expect(pool.netAfterAp).toBe(pool.gross.total + carried - pool.rake.applied);
+          expect(pool.net).toBe(pool.netAfterAp - difference.keptByClubCents - difference.carriedOverCents + difference.addedByClubCents);
+          expect(pool.impliedRake).toBe(pool.gross.total + carried - pool.net - difference.carriedOverCents);
+          if (pool.net > 0) expect(pool.payouts.reduce((all, p) => all + p.basisPoints, 0)).toBe(10_000);
+        },
+      ),
+      { numRuns: 1000 },
     );
   });
 });

@@ -71,11 +71,11 @@ export function Sidebar() {
     <>
       <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
         <header className="fixed inset-x-0 top-0 z-40 flex h-[57px] items-center justify-between border-b border-border bg-card px-4 lg:hidden">
-          <Link href={routes.staffHome()} className="min-w-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <Link href={routes.staffHome()} className="flex min-h-11 min-w-0 items-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             <BrandMark size="md" nameClassName="text-sm" />
           </Link>
           <SheetTrigger asChild>
-            <Button variant="ghost" size="icon" aria-label="Open menu">
+            <Button variant="ghost" size="icon" className="h-11 w-11" aria-label="Open menu">
               <Menu className="h-5 w-5" aria-hidden="true" />
             </Button>
           </SheetTrigger>

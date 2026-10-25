@@ -2,6 +2,7 @@ import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import type { Cents } from "@shared/domain/money";
 import { isClosedStatus } from "@shared/domain/tournaments";
+import { lineupOf } from "@/features/public-tournament/waiting-list";
 import { TabHost } from "@/components/shared/tab-host";
 import { ClockPanel } from "@/features/clock/components/clock-panel";
 import type { ClockOpenRequest } from "@/features/clock/components/clock-status-chip";
@@ -20,8 +21,15 @@ export type DeskTab = (typeof DESK_TABS)[number];
 
 const isDeskTab = (value: string | null): value is DeskTab => (DESK_TABS as readonly (string | null)[]).includes(value);
 
-/** The tab an address names (`?tab=`), or the Overview for none or one the page does not have. */
-export const deskTabOf = (value: string | null): DeskTab => (isDeskTab(value) ? value : "overview");
+/** A phone's tab (mobile/phone-tabs) opened here: the tab that holds the same things, so one address works on both. */
+const FROM_PHONE: ReadonlyMap<string, DeskTab> = new Map([
+  ["players", "standings"],
+  ["money", "overview"],
+  ["more", "actions"],
+]);
+
+/** The tab an address names (`?tab=`), a phone tab's counterpart, or the Overview for none or one the page does not have. */
+export const deskTabOf = (value: string | null): DeskTab => (isDeskTab(value) ? value : ((value === null ? undefined : FROM_PHONE.get(value)) ?? "overview"));
 
 interface DeskTabsProps {
   tournament: TournamentDetailDto;
@@ -74,7 +82,7 @@ export function DeskTabs({
             <OverviewTab
               tournament={tournament}
               money={money}
-              entrants={registrations.length}
+              entrants={lineupOf(registrations, tournament.maxPlayers).field.length}
               rakeLabel={rakeLabel}
               highHandAwardsCents={highHandAwardsCents}
               timeZone={timeZone}
@@ -94,6 +102,7 @@ export function DeskTabs({
             <StandingsTable
               tournamentId={tournament.id}
               registrations={registrations}
+              maxPlayers={tournament.maxPlayers}
               canManage={canManage}
               closed={closed}
               completed={tournament.status === "completed"}

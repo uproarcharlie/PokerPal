@@ -53,9 +53,10 @@ export const ERROR_CODES = [
   "ALLOCATION_OVERLAP",
   // players, registrations, pending actions
   "PHONE_TAKEN",
+  "PHOTO_REQUIRED", // 400, a QR sign-up at a club that requires a photo (clubs.require_signup_photo) without one, or registering there a player without one added elsewhere
   "PLAYER_NOT_FOUND",
   "ALREADY_REGISTERED",
-  "TOURNAMENT_FULL",
+  "TOURNAMENT_FULL", // 409, accepting a player (payment confirmed, or a waiting-list entry's first re-buy, add-on, knockout or bust) once Max players are in the field (round 5, item 15); sign-ups themselves join the waiting list
   "HIGH_HAND_NOT_AVAILABLE",
   "PRIZE_POOL_LOCKED",
   "MAX_REBUYS_REACHED",
@@ -91,6 +92,7 @@ export const ERROR_CODES = [
   "INVALID_FINISH_ORDER",
   "PLAN_CHANGED",
   "PLAN_HASH_REQUIRED",
+  "DEAL_INVALID", // 409 (finalize), a deal that does not share exactly what the players still in would be paid (details { dealProblems, dealable })
   // tables and seating (phase4-contracts §2)
   "TABLE_NOT_FOUND", // 404, a table that is not this tournament's
   "TABLE_LIMIT", // 409, more than 50 active tables

@@ -71,7 +71,7 @@ function InlineFieldEditor({ tournamentId, name, schema, label, initial, input, 
             </FormItem>
           )}
         />
-        <Button type="submit" busy={save.isPending} data-testid={saveTestId}>
+        <Button type="submit" className="h-11 md:h-10" busy={save.isPending} data-testid={saveTestId}>
           Save
         </Button>
       </form>
@@ -96,7 +96,7 @@ export function MaxPlayersEditor({ tournamentId, current, onDone }: EditorProps 
       schema={maxPlayersSchema}
       label="Max players"
       initial={String(current)}
-      input={(field) => <Input inputMode="numeric" {...field} data-testid="max-players-input" />}
+      input={(field) => <Input inputMode="numeric" className="h-11 md:h-10" {...field} data-testid="max-players-input" />}
       saved="Max players updated"
       failed="Could not change the max players"
       saveTestId="save-max-players"
@@ -117,7 +117,9 @@ export function ManualPoolEditor({ tournamentId, current, calculatedCents, onDon
       schema={manualPoolSchema}
       label="Prize pool (blank for the calculated pool)"
       initial={current ?? ""}
-      input={(field) => <AmountInput unit="$" placeholder={centsToDecimalString(calculatedCents)} {...field} data-testid="manual-pool-input" />}
+      input={(field) => (
+        <AmountInput unit="$" className="h-11 md:h-10" placeholder={centsToDecimalString(calculatedCents)} {...field} data-testid="manual-pool-input" />
+      )}
       saved="Prize pool updated successfully"
       failed="Could not change the prize pool"
       saveTestId="save-manual-pool"

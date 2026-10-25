@@ -153,6 +153,35 @@ describe("Players page: editing a player", () => {
     expect(screen.getByText("Player updated")).toBeInTheDocument();
   });
 
+  it("lets staff give a player one of the avatars instead of a photo, with the same three choices (round 5, item 8)", async () => {
+    mockSignedIn(ADMIN);
+    let saved: typeof aroha = { ...aroha, imageUrl: null };
+    servePlayers(() => [saved]);
+    let body: unknown;
+    server.use(
+      http.put("/api/players/:id", async ({ request }) => {
+        body = await request.json();
+        saved = { ...saved, imageUrl: "/avatars/cowboy.svg" };
+        return HttpResponse.json(saved);
+      }),
+    );
+    renderWithApp(<PlayersPage />, { path: "/players" });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Aroha Smith" }));
+    const sheet = await screen.findByRole("dialog", { name: "Edit Player" });
+    const photo = within(sheet).getByRole("group", { name: "Player Photo" });
+    expect(within(photo).getAllByRole("button").map((button) => button.textContent)).toEqual(["Take a photo", "Upload a photo", "Pick an avatar"]);
+    await userEvent.click(within(photo).getByRole("button", { name: "Pick an avatar" }));
+    await userEvent.click(within(await screen.findByRole("dialog", { name: "Pick an avatar" })).getByRole("button", { name: "Cowboy hat" }));
+    expect(within(sheet).getByRole("img", { name: "Upload preview" })).toHaveAttribute("src", "/avatars/cowboy.svg");
+    await userEvent.click(within(sheet).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit Player" })).not.toBeInTheDocument());
+    expect(body).toMatchObject({ imageUrl: "/avatars/cowboy.svg" });
+    expect(uploads).toHaveLength(0);
+    await waitFor(() => expect(rowOf("Aroha Smith").querySelector("img")).toHaveAttribute("src", "/avatars/cowboy.svg"));
+  });
+
   it("starts each edit from the player opened, photo included (img-03)", async () => {
     mockSignedIn(ADMIN);
     servePlayers(() => [aroha, ben]);

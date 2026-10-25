@@ -7,6 +7,7 @@ import {
   Calculator,
   CheckCircle,
   DollarSign,
+  Handshake,
   ListOrdered,
   Lock,
   Percent,
@@ -90,6 +91,10 @@ const EVENT_STYLES: Readonly<Record<ActivityEventType, EventStyle>> = {
   clock_undone: { Icon: Timer, tone: "muted", label: "Clock" },
   clock_structure_updated: { Icon: Timer, tone: "muted", label: "Structure" },
   early_bird: { Icon: Bird, tone: "muted", label: "Early Bird" },
+  payouts_changed: { Icon: Calculator, tone: "muted", label: "Payouts" },
+  deal: { Icon: Handshake, tone: "accent", label: "Deal" },
+  table_opened: { Icon: Table2, tone: "primary", label: "Table Opened" },
+  seat_waiting: { Icon: Armchair, tone: "accent", label: "Waiting" },
 };
 
 /** Rows written before Phase 2 may hold an event type the app no longer writes. */

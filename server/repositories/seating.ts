@@ -1,9 +1,12 @@
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
+  clubs,
   players,
   tournamentRegistrations,
+  tournaments,
   tournamentSeats,
   tournamentTables,
+  type Club,
   type InsertTournamentSeat,
   type InsertTournamentTable,
   type TournamentSeat,
@@ -25,12 +28,33 @@ import { publicPlayerColumns } from "./players";
 
 const statementTime = sql`clock_timestamp()`;
 
-/** A registration as seating sees it: whether it is still in, whether it has paid, and its public player. */
+/**
+ * A registration as seating sees it: whether it is still in, whether it has paid, its public player,
+ * and what the waiting list reads (round 5, item 15: when it signed up, and whether it has played).
+ */
 export interface SeatingEntry {
   registrationId: string;
   isEliminated: boolean;
   paymentConfirmed: boolean;
   player: PublicPlayer;
+  registrationTime: Date | null;
+  rebuys: number | null;
+  addons: number | null;
+  knockouts: number | null;
+  finalPosition: number | null;
+}
+
+/** What a tournament's seating settings fall back on: its club's table defaults (round 5). */
+export type ClubSeatingDefaults = Pick<Club, "defaultSeatsPerTable" | "defaultTableShape">;
+
+/** The club defaults of the tournament's club; null when there is no such tournament. */
+export async function clubSeatingDefaultsOf(ex: Executor, tournamentId: string): Promise<ClubSeatingDefaults | null> {
+  const [row] = await ex
+    .select({ defaultSeatsPerTable: clubs.defaultSeatsPerTable, defaultTableShape: clubs.defaultTableShape })
+    .from(tournaments)
+    .innerJoin(clubs, eq(clubs.id, tournaments.clubId))
+    .where(eq(tournaments.id, tournamentId));
+  return row ?? null;
 }
 
 /** Every table of the tournament, archived ones included, by table number. */
@@ -50,6 +74,11 @@ export async function seatingEntriesOf(ex: Executor, tournamentId: string): Prom
       isEliminated: tournamentRegistrations.isEliminated,
       paymentConfirmed: tournamentRegistrations.paymentConfirmed,
       player: publicPlayerColumns,
+      registrationTime: tournamentRegistrations.registrationTime,
+      rebuys: tournamentRegistrations.rebuys,
+      addons: tournamentRegistrations.addons,
+      knockouts: tournamentRegistrations.knockouts,
+      finalPosition: tournamentRegistrations.finalPosition,
     })
     .from(tournamentRegistrations)
     .innerJoin(players, eq(players.id, tournamentRegistrations.playerId))

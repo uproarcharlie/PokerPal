@@ -65,13 +65,15 @@ export function playersRoutes({ env, limiters }: RouteDeps): Router {
           { code: "custom", path: ["phone"], message: "Enter your phone number" },
         ]);
       }
-      const outcome = await createPlayer(env, req.body, { clubId: await addingClub(req.user, req.body) });
+      const clubId = await addingClub(req.user, req.body);
+      const outcome = await createPlayer(env, req.body, { clubId });
       if (outcome.kind === "phone_taken") throw await phoneTaken(req.user, outcome.other);
       // A new player's details are what the caller just typed; an existing one's only go to their staff.
       const full = req.user !== undefined && (outcome.kind === "created" || (await mayManage(req.user, outcome.player)));
       const player = full ? toStaffPlayer(outcome.player) : toPublicPlayer(outcome.player);
-      // The caller typed this player's details, so they may sign them up for any tournament (P2REV0-02).
-      const body = { ...player, signUpToken: issueSignUpToken(env, outcome.player.id) };
+      // The caller typed this player's details, so they may sign them up for any tournament (P2REV0-02);
+      // the token names the club whose sign-up rules they met (R5REV-SEC-01).
+      const body = { ...player, signUpToken: issueSignUpToken(env, outcome.player.id, clubId) };
       if (outcome.kind === "existing") res.status(200).json({ ...body, existing: true });
       else res.status(201).json(body);
     }),

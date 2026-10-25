@@ -1,16 +1,20 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { server } from "@test/msw/server";
+import type { AutoSeatResultDto } from "@shared/api/seating";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { installFakeXhr } from "@test/helpers/fake-xhr";
 import { clubDto, mockTournamentPages, registrationDto, tournamentDto } from "@test/helpers/f2-public";
+import { screenWidth } from "@test/helpers/f1-tournaments";
 import { apiError, mockSignedOut, renderWithApp } from "@test/helpers/web";
 import PublicRegisterPage from "./public-register";
 
 const tournament = tournamentDto({ status: "registration", buyInAmount: "50.00", maxPlayers: 40 });
 const club = clubDto();
+/** What the sign-up answers while the tournament has no tables: nothing about seats is shown. */
+const NO_TABLES: AutoSeatResultDto = { status: "waiting", reason: "no_tables" };
 const AVATAR = "/uploads/player_avatar/2d3e4f50-6a7b-4c8d-9e0f-b1c2d3e4f5a6/512.webp";
 const players = [
   { id: "p1", name: "Alice Smith", imageUrl: null },
@@ -87,7 +91,7 @@ describe("PublicRegisterPage: existing player", () => {
     server.use(
       http.post("/api/tournaments/t1/registrations", async ({ request }) => {
         registered = await request.json();
-        return HttpResponse.json({ id: "r1", playerId: "p2", player: players[1] }, { status: 201 });
+        return HttpResponse.json({ id: "r1", playerId: "p2", player: players[1], seating: NO_TABLES }, { status: 201 });
       }),
     );
     const user = userEvent.setup();
@@ -102,6 +106,65 @@ describe("PublicRegisterPage: existing player", () => {
     expect(registered).toEqual({ playerId: "p2", enteringHighHands: false });
     // Debounced: one search for what was typed, never a request for the whole player list.
     expect(asked).toEqual(["Al"]);
+  });
+
+  it.each([
+    [{ status: "seated", seat: { tableId: "tb2", tableNumber: 2, tableName: "Table 2", seatNumber: 7 } }, "You're at Table 2, Seat 7"],
+    [{ status: "waiting", reason: "tables_full" }, "Every table is full right now"],
+  ] satisfies [AutoSeatResultDto, string][])("says where automatic seating put them, with the way to the seat finder (round 5, item 9)", async (seating, words) => {
+    mockTournament();
+    mockSearch();
+    server.use(http.post("/api/tournaments/t1/registrations", () => HttpResponse.json({ id: "r1", playerId: "p2", player: players[1], seating }, { status: 201 })));
+    const user = userEvent.setup();
+    renderPage();
+
+    await chooseExistingPlayer(user, "Al", "Alan Jones");
+    await user.click(screen.getByTestId("complete-registration"));
+
+    expect(await screen.findByTestId("seat-assignment")).toHaveTextContent(words);
+    expect(screen.getByTestId("seat-assignment-finder")).toHaveAttribute("href", "/tournament/t1/seats");
+  });
+
+  it("tells a sign-up past a full field their number on the waiting list, and never that a seat is coming (round 5, item 15; 390 px)", async () => {
+    screenWidth(390);
+    mockTournament({ maxPlayers: 3 }, 3);
+    mockSearch();
+    server.use(
+      http.post("/api/tournaments/t1/registrations", () =>
+        HttpResponse.json(
+          { id: "r9", playerId: "p2", player: players[1], waitingListPosition: 2, seating: { status: "waiting", reason: "awaiting_payment" } },
+          { status: 201 },
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+    renderPage();
+
+    await chooseExistingPlayer(user, "Al", "Alan Jones");
+    await user.click(screen.getByTestId("complete-registration"));
+
+    expect(await screen.findByRole("heading", { level: 1, name: "You're on the waiting list — #2" })).toBeInTheDocument();
+    expect(screen.getByTestId("waiting-list-place")).toHaveTextContent("When a place opens, the tournament director calls the next player on the list.");
+    expect(screen.getByTestId("registered-player")).toHaveTextContent("Alan Jones");
+    expect(screen.queryByText("Registration Complete!")).not.toBeInTheDocument();
+    // Their seat is not "drawn once you've paid": they pay, and sit, only once they are called in.
+    expect(screen.queryByTestId("seat-assignment")).not.toBeInTheDocument();
+    expect(screen.getByText("Pay at the desk once you're called in")).toBeInTheDocument();
+    expect(screen.getByTestId("amount-due")).toHaveTextContent("$50.00");
+  });
+
+  it("says nothing about seats while the tournament has no tables", async () => {
+    mockTournament();
+    mockSearch();
+    server.use(http.post("/api/tournaments/t1/registrations", () => HttpResponse.json({ id: "r1", playerId: "p2", player: players[1], seating: NO_TABLES }, { status: 201 })));
+    const user = userEvent.setup();
+    renderPage();
+
+    await chooseExistingPlayer(user, "Al", "Alan Jones");
+    await user.click(screen.getByTestId("complete-registration"));
+
+    expect(await screen.findByText("Registration Complete!")).toBeInTheDocument();
+    expect(screen.queryByTestId("seat-assignment")).not.toBeInTheDocument();
   });
 
   it("waits for two letters before searching, and says when nobody matches", async () => {
@@ -122,7 +185,6 @@ describe("PublicRegisterPage: existing player", () => {
 
   it.each([
     ["ALREADY_REGISTERED", "You're already registered for this tournament. See you at the table!"],
-    ["TOURNAMENT_FULL", "Sorry, this tournament is full. Please speak to the tournament director, who can seat extra players."],
     ["HIGH_HAND_AWARDED", 'Every high-hand prize has already been won tonight. Choose "No thanks" and try again.'],
     ["TOURNAMENT_CLOSED", "Registration for this tournament has closed."],
     ["PRIZE_POOL_LOCKED", "Registration has closed: the prize pool is locked. Please speak to the tournament director."],
@@ -145,6 +207,7 @@ describe("PublicRegisterPage: new player", () => {
   async function fillNewPlayer(user: ReturnType<typeof userEvent.setup>) {
     await user.click(await screen.findByTestId("player-type-new"));
     await user.click(screen.getByTestId("step1-next"));
+    await user.click(screen.getByTestId("photo-skip"));
     await user.type(screen.getByTestId("player-name"), "Alice Smith");
     await user.type(screen.getByTestId("player-phone"), "021 555 0100");
     await user.click(screen.getByTestId("step2-next"));
@@ -212,7 +275,7 @@ describe("PublicRegisterPage: new player", () => {
       http.post("/api/players", () => HttpResponse.json({ id: "p9", name: "Alice Smith", imageUrl: null, signUpToken: "token-for-p9" }, { status: 201 })),
       http.post("/api/tournaments/t1/registrations", async ({ request }) => {
         registered = await request.json();
-        return HttpResponse.json({ id: "r9", playerId: "p9" }, { status: 201 });
+        return HttpResponse.json({ id: "r9", playerId: "p9", seating: NO_TABLES }, { status: 201 });
       }),
     );
     const user = userEvent.setup();
@@ -239,12 +302,30 @@ describe("PublicRegisterPage: closed tournaments", () => {
     expect(screen.queryByTestId("player-type-new")).not.toBeInTheDocument();
   });
 
-  it("says a full tournament is full before anyone types their details or uploads a photo (TN-03)", async () => {
+  it("keeps sign-ups open past Max players, saying first that the field is full and the number on the waiting list they'd get (round 5, item 15; TN-03)", async () => {
+    screenWidth(390);
     mockTournament({ maxPlayers: 3 }, 3);
     renderPage();
 
-    expect(await screen.findByTestId("registration-closed")).toHaveTextContent("Sorry, this tournament is full.");
-    expect(screen.queryByTestId("player-type-new")).not.toBeInTheDocument();
+    expect(await screen.findByTestId("waiting-list-notice")).toHaveTextContent("This tournament is full. You can still sign up: you'll be #1 on the waiting list");
+    expect(screen.getByTestId("player-type-new")).toBeInTheDocument();
+    expect(screen.queryByTestId("registration-closed")).not.toBeInTheDocument();
+  });
+
+  it("numbers the next sign-up after the ones already waiting", async () => {
+    const field = Array.from({ length: 3 }, (_, i) => registrationDto(`r${i}`, `P${i}`, { waitingListPosition: null }));
+    mockTournamentPages(tournamentDto({ ...tournament, maxPlayers: 3 }), [...field, registrationDto("r3", "P3", { waitingListPosition: 1 })], club);
+    renderPage();
+
+    expect(await screen.findByTestId("waiting-list-notice")).toHaveTextContent("you'll be #2 on the waiting list");
+  });
+
+  it("says nothing about a waiting list while the field has room", async () => {
+    mockTournament({ maxPlayers: 3 }, 2);
+    renderPage();
+
+    expect(await screen.findByTestId("player-type-new")).toBeInTheDocument();
+    expect(screen.queryByTestId("waiting-list-notice")).not.toBeInTheDocument();
   });
 
   it("keeps the form open while the game is in progress, and for the tournament's staff at a full table", async () => {
@@ -270,6 +351,7 @@ describe("PublicRegisterPage: new player details", () => {
   async function openNewPlayer(user: ReturnType<typeof userEvent.setup>) {
     await user.click(await screen.findByTestId("player-type-new"));
     await user.click(screen.getByTestId("step1-next"));
+    await user.click(screen.getByTestId("photo-skip"));
   }
 
   it("asks for a name and a phone number before signing anyone up", async () => {
@@ -379,97 +461,294 @@ describe("PublicRegisterPage: new player details", () => {
 describe("PublicRegisterPage: photo", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("keeps Continue waiting while the photo uploads, then signs up with it (PUB-22: the controls are buttons, not hover-only)", async () => {
-    const sent = installFakeXhr();
-    mockTournament();
-    let created: unknown;
+  const getUserMedia = () => vi.mocked(navigator.mediaDevices.getUserMedia);
+  const chooseFile = () => {
+    const input = document.querySelector('input[type="file"]:not([capture])') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File([new Uint8Array(64)], "me.jpg", { type: "image/jpeg" })] } });
+  };
+  const uploaded = (url = AVATAR) => ({ kind: "player_avatar", url, variants: {}, width: 512, height: 512, dominantColor: null });
+
+  async function openPhotoStep(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByTestId("player-type-new"));
+    await user.click(screen.getByTestId("step1-next"));
+  }
+
+  async function enterDetails(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(screen.getByTestId("player-name"), "Alice Smith");
+    await user.type(screen.getByTestId("player-phone"), "021 555 0100");
+    await user.click(screen.getByTestId("step2-next"));
+  }
+
+  /** What POST /api/players was sent, answering with the stored player (who keeps `stored`). */
+  function mockSignUp(stored: string | null = null, extra: Record<string, unknown> = {}): unknown[] {
+    const created: unknown[] = [];
     server.use(
       http.post("/api/players", async ({ request }) => {
-        created = await request.json();
-        return HttpResponse.json({ id: "p9", name: "Alice Smith", imageUrl: AVATAR, signUpToken: "token-p9" }, { status: 201 });
+        created.push(await request.json());
+        return HttpResponse.json({ id: "p9", name: "Alice Smith", imageUrl: stored, signUpToken: "token-p9", ...extra }, { status: extra.existing ? 200 : 201 });
       }),
     );
+    return created;
+  }
+
+  it("leads with a big Take a selfie, then Upload a photo instead, Pick an avatar and a small Skip for now (round 5, item 7)", async () => {
+    mockTournament();
     const user = userEvent.setup();
     renderPage();
 
-    await user.click(await screen.findByTestId("player-type-new"));
-    await user.click(screen.getByTestId("step1-next"));
-    expect(screen.getByRole("button", { name: "Take Photo" })).toBeVisible();
-    const input = document.querySelector('input[type="file"]:not([capture])') as HTMLInputElement;
-    fireEvent.change(input, { target: { files: [new File([new Uint8Array(64)], "me.jpg", { type: "image/jpeg" })] } });
+    await openPhotoStep(user);
+
+    expect(screen.getByText("Step 2 of 3")).toBeInTheDocument();
+    const group = screen.getByRole("group", { name: "Add your photo" });
+    const buttons = within(group).getAllByRole("button").map((button) => button.textContent);
+    expect(buttons).toEqual(["Take a selfie", "Upload a photo instead", "Pick an avatar"]);
+    expect(within(group).getByRole("button", { name: "Take a selfie" })).toHaveClass("h-14", "w-full");
+    expect(screen.getByTestId("photo-skip")).toHaveTextContent("Skip for now");
+    expect(screen.queryByTestId("player-name")).not.toBeInTheDocument();
+
+    // Focus follows each part of the step as it replaces the last.
+    await user.click(screen.getByTestId("photo-skip"));
+    await waitFor(() => expect(screen.getByTestId("registration-step")).toHaveFocus());
+    expect(screen.getByTestId("photo-summary")).toHaveTextContent("No photo");
+    expect(screen.getByTestId("player-name")).toBeInTheDocument();
+  });
+
+  it("takes a selfie with the front camera, frames it in the circle, and signs up with it", async () => {
+    const sent = installFakeXhr();
+    mockTournament();
+    const created = mockSignUp(AVATAR);
+    const user = userEvent.setup();
+    renderPage();
+    await openPhotoStep(user);
+
+    await user.click(screen.getByRole("button", { name: "Take a selfie" }));
+    const camera = await screen.findByRole("dialog", { name: "Take a selfie" });
+    expect(getUserMedia()).toHaveBeenLastCalledWith(expect.objectContaining({ video: expect.objectContaining({ facingMode: "user" }) }));
+    const video = camera.querySelector("video") as HTMLVideoElement;
+    await waitFor(() => expect(video.srcObject).not.toBeNull());
+    expect(video).toHaveClass("-scale-x-100");
+    Object.defineProperty(video, "videoWidth", { configurable: true, value: 1280 });
+    Object.defineProperty(video, "videoHeight", { configurable: true, value: 720 });
+    fireEvent.loadedData(video);
+    await user.click(within(camera).getByRole("button", { name: "Capture" }));
     await user.click(await screen.findByRole("button", { name: "Use this" }));
 
     await waitFor(() => expect(sent).toHaveLength(1));
-    expect(screen.getByTestId("step2-next")).toBeDisabled();
-    expect(screen.getByTestId("step2-next")).toHaveTextContent("Uploading photo...");
-    act(() => sent[0].respond(201, { kind: "player_avatar", url: AVATAR, variants: {}, width: 512, height: 512, dominantColor: null }));
-
-    await waitFor(() => expect(screen.getByTestId("step2-next")).toHaveTextContent("Continue"));
+    expect(screen.getByTestId("photo-next")).toHaveTextContent("Uploading photo...");
+    expect(screen.getByTestId("photo-next")).toBeDisabled();
+    act(() => sent[0].respond(201, uploaded()));
+    await waitFor(() => expect(screen.getByTestId("photo-next")).toHaveTextContent("Continue"));
     expect(screen.getByRole("img", { name: "Upload preview" })).toHaveAttribute("src", AVATAR);
-    expect(screen.getByRole("button", { name: "Remove" })).toBeVisible();
-    await user.type(screen.getByTestId("player-name"), "Alice Smith");
-    await user.type(screen.getByTestId("player-phone"), "021 555 0100");
-    await user.click(screen.getByTestId("step2-next"));
+    expect(screen.getByRole("button", { name: "Retake" })).toBeVisible();
+    expect(screen.queryByTestId("photo-skip")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("photo-next"));
+    expect(screen.getByTestId("photo-summary")).toHaveTextContent("Your photo");
+    await enterDetails(user);
 
     expect(await screen.findByText("Step 3 of 3")).toBeInTheDocument();
-    expect(created).toEqual({ name: "Alice Smith", phone: "021 555 0100", imageUrl: AVATAR, tournamentId: "t1" });
+    expect(created).toEqual([{ name: "Alice Smith", phone: "021 555 0100", imageUrl: AVATAR, tournamentId: "t1" }]);
   });
 
-  it("keeps the photo saved with the sign-up after Back, rather than a new one the server would drop (P3REV3-IMG-01)", async () => {
+  it("falls back to an upload, saying why, when the camera is blocked", async () => {
+    getUserMedia().mockRejectedValueOnce(new DOMException("Denied", "NotAllowedError"));
+    const openFiles = vi.spyOn(HTMLInputElement.prototype, "click");
+    onTestFinished(() => openFiles.mockRestore());
     mockTournament();
-    let posts = 0;
+    const user = userEvent.setup();
+    renderPage();
+    await openPhotoStep(user);
+
+    await user.click(screen.getByRole("button", { name: "Take a selfie" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Camera access is blocked for this page. Upload a photo instead");
+    await user.click(screen.getByRole("button", { name: "Upload a photo instead" }));
+
+    expect(screen.queryByRole("dialog", { name: "Take a selfie" })).not.toBeInTheDocument();
+    expect(openFiles.mock.contexts.at(-1)).toBe(document.querySelector('input[type="file"]:not([capture])'));
+  });
+
+  it("opens the phone's own camera app for the selfie where the browser has no live camera", async () => {
+    const mediaDevices = navigator.mediaDevices;
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: undefined });
+    onTestFinished(() => {
+      Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: mediaDevices });
+    });
+    const openFiles = vi.spyOn(HTMLInputElement.prototype, "click");
+    onTestFinished(() => openFiles.mockRestore());
+    mockTournament();
+    const user = userEvent.setup();
+    renderPage();
+    await openPhotoStep(user);
+
+    await user.click(screen.getByRole("button", { name: "Take a selfie" }));
+
+    expect(openFiles.mock.contexts.at(-1)).toHaveAttribute("capture", "user");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("signs up with an avatar picked from the grid: nothing uploaded (round 5, item 8)", async () => {
+    const sent = installFakeXhr();
+    mockTournament();
+    const created = mockSignUp("/avatars/shark.svg");
+    const user = userEvent.setup();
+    renderPage();
+    await openPhotoStep(user);
+
+    await user.click(screen.getByRole("button", { name: "Pick an avatar" }));
+    const picker = await screen.findByRole("dialog", { name: "Pick an avatar" });
+    expect(within(picker).getAllByRole("listitem")).toHaveLength(16);
+    await user.click(within(picker).getByRole("button", { name: "Shark" }));
+
+    expect(screen.queryByRole("dialog", { name: "Pick an avatar" })).not.toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Upload preview" })).toHaveAttribute("src", "/avatars/shark.svg");
+    expect(screen.getByRole("button", { name: "Change avatar" })).toBeVisible();
+    await user.click(screen.getByTestId("photo-next"));
+    expect(screen.getByTestId("photo-summary")).toHaveTextContent("Your avatar");
+    await enterDetails(user);
+
+    expect(await screen.findByText("Step 3 of 3")).toBeInTheDocument();
+    expect(created).toEqual([{ name: "Alice Smith", phone: "021 555 0100", imageUrl: "/avatars/shark.svg", tournamentId: "t1" }]);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("goes back from the details to the picture, and from the picture to the first step, keeping what was chosen", async () => {
+    mockTournament();
+    const user = userEvent.setup();
+    renderPage();
+    await openPhotoStep(user);
+    await user.click(screen.getByRole("button", { name: "Pick an avatar" }));
+    await user.click(await screen.findByRole("button", { name: "Royal crown" }));
+    await user.click(screen.getByTestId("photo-next"));
+    await user.type(screen.getByTestId("player-name"), "Alice Smith");
+
+    await user.click(screen.getByTestId("change-photo"));
+    expect(screen.getByRole("img", { name: "Upload preview" })).toHaveAttribute("src", "/avatars/crown.svg");
+    await user.click(screen.getByTestId("photo-next"));
+    expect(screen.getByTestId("player-name")).toHaveValue("Alice Smith");
+    await user.click(screen.getByTestId("step2-back"));
+    expect(screen.getByRole("group", { name: "Add your photo" })).toBeInTheDocument();
+    await user.click(screen.getByTestId("photo-back"));
+    expect(screen.getByText("Step 1 of 3")).toBeInTheDocument();
+  });
+
+  it("offers no Skip where the club asks every new player for a picture, and goes on once there is one", async () => {
+    mockTournamentPages(tournament, [], clubDto({ requireSignupPhoto: true }));
+    const user = userEvent.setup();
+    renderPage();
+    await openPhotoStep(user);
+
+    expect(await screen.findByTestId("photo-required")).toHaveTextContent("Central Stars asks every new player for a photo or an avatar.");
+    expect(screen.queryByTestId("photo-skip")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("photo-next")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Pick an avatar" }));
+    await user.click(await screen.findByRole("button", { name: "Lucky clover" }));
+
+    expect(screen.queryByTestId("photo-required")).not.toBeInTheDocument();
+    expect(screen.getByTestId("photo-next")).toBeEnabled();
+  });
+
+  it("goes back to the picture when the server asks for one (PHOTO_REQUIRED), with no Skip from then on", async () => {
+    mockTournament();
     server.use(
-      http.post("/api/players", () => {
-        posts += 1;
-        return HttpResponse.json({ id: "p9", name: "Alice Smith", imageUrl: null, signUpToken: "token-p9" }, { status: 201 });
-      }),
+      http.post("/api/players", () =>
+        apiError(400, "PHOTO_REQUIRED", "Add a photo or pick an avatar to sign up", [{ path: ["imageUrl"], message: "Add a photo or pick an avatar to sign up" }]),
+      ),
     );
     const user = userEvent.setup();
     renderPage();
+    await openPhotoStep(user);
+    await user.click(screen.getByTestId("photo-skip"));
+    await enterDetails(user);
 
-    await user.click(await screen.findByTestId("player-type-new"));
-    await user.click(screen.getByTestId("step1-next"));
-    await user.type(screen.getByTestId("player-name"), "Alice Smith");
-    await user.type(screen.getByTestId("player-phone"), "021 555 0100");
-    await user.click(screen.getByTestId("step2-next"));
+    const group = await screen.findByRole("group", { name: "Add your photo" });
+    expect(group.parentElement).toHaveTextContent("Add a photo or pick an avatar to sign up");
+    expect(screen.queryByTestId("photo-skip")).not.toBeInTheDocument();
+    expect(screen.getByTestId("photo-required")).toBeInTheDocument();
+    expect(screen.queryByTestId("sign-up-problem")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Pick an avatar" }));
+    await user.click(await screen.findByRole("button", { name: "Star" }));
+    expect(group.parentElement).not.toHaveTextContent("Add a photo or pick an avatar to sign up");
+  });
+
+  it("keeps the picture saved with the sign-up after Back, rather than a new one the server would drop (P3REV3-IMG-01)", async () => {
+    mockTournament();
+    const created = mockSignUp(null);
+    const user = userEvent.setup();
+    renderPage();
+    await openPhotoStep(user);
+    await user.click(screen.getByTestId("photo-skip"));
+    await enterDetails(user);
     expect(await screen.findByText("Step 3 of 3")).toBeInTheDocument();
 
     await user.click(screen.getByTestId("step3-back"));
+    expect(screen.getByTestId("photo-summary")).toHaveTextContent("Saved with your sign-up");
+    expect(screen.queryByTestId("change-photo")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("step2-back"));
     expect(screen.getByText("Saved with your sign-up. The TD can change your photo at the desk.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Take Photo" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Upload" })).toBeDisabled();
+    for (const name of ["Take a selfie", "Upload a photo instead", "Pick an avatar"]) expect(screen.getByRole("button", { name })).toBeDisabled();
+    expect(screen.queryByTestId("photo-skip")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("photo-next"));
     await user.click(screen.getByTestId("step2-next"));
     expect(await screen.findByText("Step 3 of 3")).toBeInTheDocument();
-    expect(posts).toBe(1);
+    expect(created).toHaveLength(1);
     expect(screen.queryByText("Welcome back!")).not.toBeInTheDocument();
   });
 
   it("tells a returning player their new photo was not saved, and shows the one they have (P3REV3-IMG-01)", async () => {
     const sent = installFakeXhr();
     mockTournament();
-    server.use(
-      http.post("/api/players", () =>
-        HttpResponse.json({ id: "p1", name: "Alice Smith", imageUrl: null, existing: true, signUpToken: "token-for-p1" }),
-      ),
-    );
+    mockSignUp(null, { id: "p1", existing: true, signUpToken: "token-for-p1" });
     const user = userEvent.setup();
     renderPage();
-
-    await user.click(await screen.findByTestId("player-type-new"));
-    await user.click(screen.getByTestId("step1-next"));
-    const input = document.querySelector('input[type="file"]:not([capture])') as HTMLInputElement;
-    fireEvent.change(input, { target: { files: [new File([new Uint8Array(64)], "me.jpg", { type: "image/jpeg" })] } });
+    await openPhotoStep(user);
+    chooseFile();
     await user.click(await screen.findByRole("button", { name: "Use this" }));
     await waitFor(() => expect(sent).toHaveLength(1));
-    act(() => sent[0].respond(201, { kind: "player_avatar", url: AVATAR, variants: {}, width: 512, height: 512, dominantColor: null }));
-    await waitFor(() => expect(screen.getByTestId("step2-next")).toHaveTextContent("Continue"));
-    await user.type(screen.getByTestId("player-name"), "Alice Smith");
-    await user.type(screen.getByTestId("player-phone"), "021 555 0100");
-    await user.click(screen.getByTestId("step2-next"));
+    act(() => sent[0].respond(201, uploaded()));
+    await waitFor(() => expect(screen.getByTestId("photo-next")).toHaveTextContent("Continue"));
+    await user.click(screen.getByTestId("photo-next"));
+    await enterDetails(user);
 
     expect(await screen.findByText(/Your new photo was not saved: the TD can change it at the desk/)).toBeInTheDocument();
     await user.click(screen.getByTestId("step3-back"));
-    expect(screen.queryByRole("img", { name: "Upload preview" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("photo-summary")).toHaveTextContent("No photo");
+  });
+
+  it("shows the player's picture large once they are registered (round 5, item 14)", async () => {
+    mockTournament();
+    mockSignUp("/avatars/rocket.svg");
+    server.use(http.post("/api/tournaments/t1/registrations", () => HttpResponse.json({ id: "r9", playerId: "p9", seating: NO_TABLES }, { status: 201 })));
+    const user = userEvent.setup();
+    renderPage();
+    await openPhotoStep(user);
+    await user.click(screen.getByRole("button", { name: "Pick an avatar" }));
+    await user.click(await screen.findByRole("button", { name: "Rocket" }));
+    await user.click(screen.getByTestId("photo-next"));
+    await enterDetails(user);
+    await user.click(await screen.findByTestId("complete-registration"));
+
+    const registered = await screen.findByTestId("registered-player");
+    expect(registered).toHaveTextContent("Alice Smith");
+    // The name is written beside it, so the picture itself is not announced twice.
+    const picture = registered.querySelector("img") as HTMLImageElement;
+    expect(picture).toHaveAttribute("src", "/avatars/rocket.svg");
+    expect(picture).toHaveAttribute("width", "96");
+    expect(screen.getByText("Registration Complete!")).toBeInTheDocument();
+  });
+
+  it("shows a returning player's initials when they have no photo", async () => {
+    mockTournament();
+    mockSearch();
+    server.use(http.post("/api/tournaments/t1/registrations", () => HttpResponse.json({ id: "r1", playerId: "p3", seating: NO_TABLES }, { status: 201 })));
+    const user = userEvent.setup();
+    renderPage();
+
+    await chooseExistingPlayer(user, "Bob", "Bob Brown");
+    await user.click(screen.getByTestId("complete-registration"));
+
+    expect(await screen.findByTestId("registered-player")).toHaveTextContent("BBBob Brown");
   });
 });
 
@@ -493,7 +772,7 @@ describe("PublicRegisterPage: high hands and the total", () => {
     server.use(
       http.post("/api/tournaments/t1/registrations", async ({ request }) => {
         registered = await request.json();
-        return HttpResponse.json({ id: "r1", playerId: "p3" }, { status: 201 });
+        return HttpResponse.json({ id: "r1", playerId: "p3", seating: NO_TABLES }, { status: 201 });
       }),
     );
     const user = userEvent.setup();
@@ -530,7 +809,7 @@ describe("PublicRegisterPage: high hands and the total", () => {
   it("starts again for the next player on the same phone", async () => {
     mockTournament();
     mockSearch();
-    server.use(http.post("/api/tournaments/t1/registrations", () => HttpResponse.json({ id: "r1", playerId: "p3" }, { status: 201 })));
+    server.use(http.post("/api/tournaments/t1/registrations", () => HttpResponse.json({ id: "r1", playerId: "p3", seating: NO_TABLES }, { status: 201 })));
     const user = userEvent.setup();
     renderPage();
 

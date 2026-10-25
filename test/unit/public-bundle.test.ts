@@ -75,7 +75,8 @@ const STAFF_ONLY = [
   /^client\/src\/features\/seasons\/(?!api\.ts$|hooks\.ts$|components\/(season-leaderboard-card|season-leaderboard-table|rank-badge|active-season-badge)\.tsx$)/,
   /^client\/src\/features\/clubs\/components\/(rich-text-editor|address-autocomplete)\.tsx$/,
   // Phase 4: the TD's seating, clock and AP panels; the TV, the seat finder and the season page load only these.
-  /^client\/src\/features\/(seating|clock|prize-pool|public-season)\/(?!api\.ts$|hooks\.ts$|server-time\.ts$|pages\/|components\/public\/)/,
+  // Round 5: the club colours editor likewise (public pages wear the colours through components/public/).
+  /^client\/src\/features\/(seating|clock|prize-pool|public-season|branding)\/(?!api\.ts$|hooks\.ts$|server-time\.ts$|pages\/|components\/public\/)/,
   /^(@tiptap\/|@googlemaps\/)/,
 ];
 

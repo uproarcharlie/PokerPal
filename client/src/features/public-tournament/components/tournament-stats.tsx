@@ -7,8 +7,10 @@ import { figureOf, FigureValue } from "@/components/shared/query-figure";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { isClosedStatus } from "@shared/domain/tournaments";
+import { lineupOf } from "../waiting-list";
 
-function Stat({ icon, label, value, tint }: { icon: ReactNode; label: string; value: ReactNode; tint: string }) {
+function Stat({ icon, label, value, tint, note }: { icon: ReactNode; label: string; value: ReactNode; tint: string; note?: ReactNode }) {
   return (
     <Card>
       <CardContent className="p-4 sm:pt-6">
@@ -19,6 +21,7 @@ function Stat({ icon, label, value, tint }: { icon: ReactNode; label: string; va
           <div className="min-w-0">
             <p className="text-xs text-muted-foreground">{label}</p>
             <p className="truncate text-lg font-bold text-foreground sm:text-2xl">{value}</p>
+            {note}
           </div>
         </div>
       </CardContent>
@@ -33,10 +36,15 @@ interface TournamentStatsProps {
   timeZone: string;
 }
 
-/** Entrants against the cap, who is still in while it runs, the buy-in and the start time. */
+/**
+ * The field against the cap (and the waiting list behind a full one: round 5, item 15), who is still
+ * in while it runs, the buy-in and the start time.
+ */
 export function TournamentStats({ tournament, registrations, timeZone }: TournamentStatsProps) {
-  const entrants = figureOf(registrations, (list) => list.length);
-  const stillIn = figureOf(registrations, (list) => list.filter((registration) => !registration.isEliminated).length);
+  const field = (list: readonly PublicRegistration[]) => lineupOf(list, tournament.maxPlayers).field;
+  const entrants = figureOf(registrations, (list) => field(list).length);
+  const stillIn = figureOf(registrations, (list) => field(list).filter((registration) => !registration.isEliminated).length);
+  const waiting = registrations.data ? lineupOf(registrations.data, tournament.maxPlayers).waiting.length : 0;
   return (
     <div className="mb-6 grid grid-cols-2 gap-3 md:mb-8 md:grid-cols-4 md:gap-4">
       <Stat
@@ -47,6 +55,13 @@ export function TournamentStats({ tournament, registrations, timeZone }: Tournam
           <>
             <FigureValue figure={entrants} loadingClassName="h-6 w-8" />/{tournament.maxPlayers}
           </>
+        }
+        note={
+          waiting > 0 && !isClosedStatus(tournament.status) ? (
+            <p className="text-xs font-medium text-muted-foreground" data-testid="waiting-list-count">
+              +{waiting} on the waiting list
+            </p>
+          ) : null
         }
       />
       {tournament.status === "in_progress" ? (

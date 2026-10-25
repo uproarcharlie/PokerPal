@@ -12,12 +12,20 @@ function renderCalculator(
   rows: ReadonlyArray<EntryInput & { id?: string; finalPosition?: number | null; prizeAmount?: string | null }>,
   rakeLabel?: string,
   highHandAwardsCents?: number[],
+  carryTarget?: string,
 ) {
   const breakdown = computePrizePool(t, rows);
   const registrations = rows.map((row, i) => ({ id: row.id ?? `r${i}`, ...row }));
   const display = payoutsForDisplay(t, breakdown, registrations);
   return render(
-    <PrizePoolCalculator tournament={t} breakdown={breakdown} display={display} rakeLabel={rakeLabel} highHandAwardsCents={highHandAwardsCents} />,
+    <PrizePoolCalculator
+      tournament={t}
+      breakdown={breakdown}
+      display={display}
+      rakeLabel={rakeLabel}
+      highHandAwardsCents={highHandAwardsCents}
+      carryTarget={carryTarget}
+    />,
   );
 }
 
@@ -148,6 +156,40 @@ describe("PrizePoolCalculator", () => {
     expect(screen.queryByText(/Real-time/)).not.toBeInTheDocument();
   });
 
+  it("names the deal the players still in made, from the snapshot (round 5)", () => {
+    const snapshot = {
+      pool: {
+        grossCents: 80_000,
+        rakeCalculatedCents: 0,
+        rakeOverrideCents: null,
+        manualPrizePoolCents: null,
+        netCents: 80_000,
+        netSource: "calculated",
+        impliedRakeCents: 0,
+        structure: { requested: "standard", used: "standard", basisPoints: [5000, 3000, 2000] },
+      },
+      deal: {
+        reason: "Chip chop at 2 handed",
+        totalCents: 64_000,
+        players: [
+          { registrationId: "r0", playerId: "p0", playerName: "Ann", position: 1, plannedCents: 40_000, amountCents: 34_000 },
+          { registrationId: "r1", playerId: "p1", playerName: "Bea", position: 2, plannedCents: 24_000, amountCents: 30_000 },
+        ],
+      },
+      paid: [
+        { position: 1, registrationId: "r0", playerId: "p0", playerName: "Ann", basisPoints: 5000, amountCents: 34_000 },
+        { position: 2, registrationId: "r1", playerId: "p1", playerName: "Bea", basisPoints: 3000, amountCents: 30_000 },
+        { position: 3, registrationId: "r2", playerId: "p2", playerName: "Cal", basisPoints: 2000, amountCents: 16_000 },
+      ],
+    } as unknown as PrizePoolSnapshot;
+    renderCalculator({ ...tournament, status: "completed", prizePoolSnapshot: snapshot }, entries);
+
+    expect(screen.getByTestId("paid-out")).toHaveTextContent("$800");
+    expect(screen.getByTestId("paid-deal")).toHaveTextContent(
+      "Deal: Ann $340, Bea $300 (Chip chop at 2 handed). The 2 players still in shared the $640 their places paid.",
+    );
+  });
+
   it("marks a tournament finalized before snapshots as recalculated, beside what was really paid", () => {
     const legacy = Array.from({ length: 19 }, (_, i) => ({ buyIns: 1, finalPosition: i + 1, prizeAmount: ["238.00", "143.00", "95.00"][i] ?? null }));
 
@@ -173,7 +215,7 @@ describe("PrizePoolCalculator", () => {
 
       expect(screen.queryByText("Prize pool will be calculated")).not.toBeInTheDocument();
       expect(screen.getByTestId("gross-total")).toHaveTextContent("$0");
-      expect(screen.getByTestId("manual-adjustment")).toHaveTextContent("Added by the club+$500");
+      expect(screen.getByTestId("difference-added-by-club")).toHaveTextContent("Added by the club+$500");
       expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$500");
     });
 
@@ -183,8 +225,32 @@ describe("PrizePoolCalculator", () => {
 
       expect(screen.getByTestId("gross-total")).toHaveTextContent("$1,550");
       expect(screen.getByTestId("rake-amount")).toHaveTextContent("-$155");
-      expect(screen.getByTestId("manual-adjustment")).toHaveTextContent("Manual adjustment-$95");
+      expect(screen.getByTestId("difference-kept-by-club")).toHaveTextContent("Kept by the club−$95");
       expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$1,300");
+    });
+
+    it("says where the difference went when the TD chose: carried over, or added to the places (round 5, item 16)", () => {
+      renderCalculator({ ...tournament, manualPrizePool: "1300.00", prizeDifference: "carry" }, entries, "AP", [], "Winter League");
+      expect(screen.getByTestId("difference-carried-over")).toHaveTextContent("Carried over to Winter League−$95");
+      expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$1,300");
+    });
+
+    it("adds money carried in from an earlier tournament, and notes a leftover the places were paid on top", () => {
+      const carriedIn = [{ carryOverId: "co1", fromTournamentId: "t0", fromName: "Test Wednesday", amountCents: 5_000 }];
+      renderCalculator({ ...tournament, manualPrizePool: "1300.00", prizeDifference: "first", carriedIn }, entries);
+
+      expect(screen.getByTestId("difference-carried-in")).toHaveTextContent("Carried over from Test Wednesday+$50");
+      expect(screen.queryByTestId("difference-kept-by-club")).not.toBeInTheDocument();
+      expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$1,445");
+      expect(screen.getByTestId("leftover-note")).toHaveTextContent("Includes $145 left over, added to 1st");
+    });
+
+    it("shows fixed prizes with nothing taken in yet: the club adds them all", () => {
+      const fixed = { ...tournament, payoutStructure: "custom", customPayouts: '{"v":2,"places":[{"amountCents":30000},{"amountCents":20000}]}' };
+      renderCalculator(fixed, []);
+
+      expect(screen.getByTestId("difference-added-by-club")).toHaveTextContent("Added by the club+$500");
+      expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$500");
     });
 
     it("adds up line by line once finalized, from the frozen pool: the rates' AP and the manual difference", () => {
@@ -206,9 +272,42 @@ describe("PrizePoolCalculator", () => {
 
       expect(screen.getByTestId("gross-total")).toHaveTextContent("$400");
       expect(screen.getByTestId("rake-amount")).toHaveTextContent("-$40");
-      expect(screen.getByTestId("manual-adjustment")).toHaveTextContent("Manual adjustment-$60");
+      expect(screen.getByTestId("difference-kept-by-club")).toHaveTextContent("Kept by the club−$60");
       expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$300");
       expect(screen.getByTestId("manual-pool-note")).toHaveTextContent("Set manually (calculated: $360)");
+    });
+
+    it("shows a round 5 snapshot's difference as finalize froze it", () => {
+      const snapshot = {
+        pool: {
+          grossCents: 40_000,
+          rakeCalculatedCents: 4_000,
+          rakeOverrideCents: null,
+          manualPrizePoolCents: null,
+          netCents: 30_000,
+          netSource: "calculated",
+          impliedRakeCents: 4_000,
+          structure: { requested: "custom", used: "custom", basisPoints: [10_000] },
+          difference: {
+            choice: "carry",
+            availableCents: 36_000,
+            setCents: 30_000,
+            cents: 6_000,
+            keptByClubCents: 0,
+            addedToPrizesCents: 0,
+            carriedOverCents: 6_000,
+            addedByClubCents: 0,
+            carryTarget: "Winter League",
+          },
+        },
+        paid: [{ position: 1, registrationId: "r0", playerId: "p0", playerName: "Ann", basisPoints: 10_000, amountCents: 30_000 }],
+      } as unknown as PrizePoolSnapshot;
+
+      renderCalculator({ ...tournament, status: "completed", prizePoolSnapshot: snapshot }, entries);
+
+      expect(screen.getByTestId("difference-carried-over")).toHaveTextContent("Carried over to Winter League−$60");
+      expect(screen.queryByTestId("difference-kept-by-club")).not.toBeInTheDocument();
+      expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$300");
     });
   });
 

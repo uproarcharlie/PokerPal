@@ -7,9 +7,12 @@ import { useToast } from "@/hooks/use-toast";
 import { errorMessage, hasErrorCode } from "@/lib/api/http";
 import { formatMoney, ordinal } from "@/lib/format";
 import type { FinalizePreviewInput } from "@shared/api/finalize";
+import { useTournament } from "../../hooks";
 import { tournamentDeskQueries } from "../../staff-api";
 import { useFinalizeTournament } from "../../staff-hooks";
-import { FinishOrderList, moved, PLAN_CHANGED_NOTICE, PlanTable, PlanWarnings } from "./finalize-plan";
+import { useDealDraft } from "./deal";
+import { DealPendingNote, DealSection } from "./deal-editor";
+import { FinishOrderList, moved, PLAN_CHANGED_NOTICE, PlanTable, PlanWarnings, refusalText } from "./finalize-plan";
 
 export interface Finisher {
   registrationId: string;
@@ -27,7 +30,9 @@ interface CorrectResultsDialogProps {
 /**
  * Correct Results, for a finalized tournament (D19): eliminations can no longer be edited, so a
  * mis-tapped bust is fixed by giving the whole finishing order again. The server previews it (forced),
- * shows what was paid before, and pays the new plan only with that preview's hash.
+ * shows what was paid before, and pays the new plan only with that preview's hash. A tournament
+ * finalized with a deal starts from that deal again (without it the players still in would be paid
+ * their places' payouts); it can be changed or dropped.
  */
 export function CorrectResultsDialog({ open, onOpenChange, tournamentId, finishers }: CorrectResultsDialogProps) {
   return (
@@ -44,11 +49,16 @@ function CorrectResultsBody({ tournamentId, finishers, onClose }: { tournamentId
   const [order, setOrder] = useState<string[]>(() => finishers.map((finisher) => finisher.registrationId));
   const [notice, setNotice] = useState<string | null>(null);
   const nameOf = new Map(finishers.map((finisher) => [finisher.registrationId, finisher.playerName]));
-  const input: FinalizePreviewInput = { finishOrder: order, force: true };
+  const tournament = useTournament(tournamentId);
+  // A tournament finalized with a deal starts its correction from that deal, once the first plan says who is still in.
+  const deal = useDealDraft({ previous: tournament.data ? (tournament.data.prizePoolSnapshot?.deal ?? null) : undefined });
+  const input: FinalizePreviewInput = { finishOrder: order, force: true, ...(deal.deal ? { deal: deal.deal } : {}) };
 
   const preview = useQuery({ ...tournamentDeskQueries.finalizePreview(tournamentId, input), placeholderData: keepPreviousData });
   const plan = preview.data;
   const current = plan && !preview.isPlaceholderData ? plan : undefined;
+
+  deal.follow(current);
 
   const move = (index: number, delta: -1 | 1) => {
     setNotice(null);
@@ -64,11 +74,14 @@ function CorrectResultsBody({ tournamentId, finishers, onClose }: { tournamentId
           onClose();
           toast({ title: "Results corrected", description: "The positions, prizes and points have been finalized again." });
         },
-        onError: (error) => setNotice(hasErrorCode(error, "PLAN_CHANGED") ? PLAN_CHANGED_NOTICE : errorMessage(error)),
+        onError: (error) => {
+          if (hasErrorCode(error, "DEAL_INVALID")) void preview.refetch();
+          setNotice(hasErrorCode(error, "PLAN_CHANGED") ? PLAN_CHANGED_NOTICE : errorMessage(error));
+        },
       },
     );
 
-  const canConfirm = current !== undefined && current.ok && !!current.planHash && !preview.isFetching;
+  const canConfirm = current !== undefined && current.ok && !!current.planHash && !preview.isFetching && deal.ready;
 
   return (
     <>
@@ -82,6 +95,7 @@ function CorrectResultsBody({ tournamentId, finishers, onClose }: { tournamentId
 
       <div className="space-y-4">
         <FinishOrderList order={order} nameOf={nameOf} onMove={move} disabled={correct.isPending} />
+        <DealSection deal={deal} order={order} onEdit={() => setNotice(null)} disabled={correct.isPending} />
         {preview.isError ? (
           <Alert variant="destructive">
             <AlertDescription>{errorMessage(preview.error)}</AlertDescription>
@@ -95,12 +109,13 @@ function CorrectResultsBody({ tournamentId, finishers, onClose }: { tournamentId
               </p>
             ) : null}
             <PlanWarnings warnings={plan.warnings} />
-            <PlanTable plan={plan} />
-            {current && !current.ok && current.message ? (
+            <PlanTable plan={plan} deal={current && deal.deal ? current.dealable : null} />
+            {current && !current.ok && refusalText(current) ? (
               <Alert variant="destructive">
-                <AlertDescription>{current.message}</AlertDescription>
+                <AlertDescription>{refusalText(current)}</AlertDescription>
               </Alert>
             ) : null}
+            <DealPendingNote deal={deal} />
           </>
         ) : null}
         {notice ? (
@@ -111,12 +126,13 @@ function CorrectResultsBody({ tournamentId, finishers, onClose }: { tournamentId
       </div>
 
       <DialogFooter className="gap-2">
-        <Button type="button" variant="outline" onClick={onClose} disabled={correct.isPending}>
+        <Button type="button" variant="outline" className="h-11" onClick={onClose} disabled={correct.isPending}>
           Cancel
         </Button>
         <Button
           type="button"
           variant="destructive"
+          className="h-11"
           disabled={!canConfirm}
           busy={correct.isPending}
           onClick={() => current?.planHash && confirm(current.planHash)}

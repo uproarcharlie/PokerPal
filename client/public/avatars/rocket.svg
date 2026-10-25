@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">
+<title>Rocket</title>
+<defs><radialGradient id="glow" cx=".32" cy=".26" r=".85"><stop offset="0" stop-color="#fff" stop-opacity=".14"/><stop offset=".65" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>
+<rect width="96" height="96" fill="#1E1B4B"/>
+<rect width="96" height="96" fill="url(#glow)"/>
+<circle cx="18" cy="22" r="1.6" fill="#fff"/><circle cx="76" cy="18" r="1.4" fill="#fff"/><circle cx="84" cy="46" r="1.2" fill="#fff"/><circle cx="22" cy="70" r="1.4" fill="#fff"/><circle cx="70" cy="76" r="1.6" fill="#fff"/><circle cx="14" cy="46" r="1.1" fill="#fff"/><circle cx="60" cy="12" r="1.1" fill="#fff"/>
+<g transform="rotate(38 48 48)">
+<path d="M40 60Q48 86 56 60Z" fill="#F59E0B"/>
+<path d="M44 60Q48 74 52 60Z" fill="#FDE047"/>
+<path d="M38 50L27 65L38 62Z" fill="#DC2626"/>
+<path d="M58 50L69 65L58 62Z" fill="#DC2626"/>
+<path d="M48 14C58 24 60 40 58 60H38C36 40 38 24 48 14Z" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1.5"/>
+<path d="M48 14C52 18 55 22 56.5 26H39.5C41 22 44 18 48 14Z" fill="#DC2626"/>
+<circle cx="48" cy="38" r="6" fill="#38BDF8" stroke="#1E3A8A" stroke-width="2.5"/>
+<path d="M38 58H58" stroke="#CBD5E1" stroke-width="2"/>
+</g>
+</svg>

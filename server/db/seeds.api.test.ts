@@ -8,6 +8,7 @@ import { asc, eq } from "drizzle-orm";
 import type { Pool } from "pg";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AUDIT_ACTIONS, type AuditData } from "@shared/api/admin";
+import { CENTRAL_STARS_THEME, themeProblems } from "@shared/domain/theme";
 import { auditLog, clubManagers, clubs, playerHomeClubs, tournamentRegistrations, users } from "@shared/schema";
 import { createClub, createPlayer, createTournament, createUser } from "@test/factories";
 import { resetDb, testDb } from "@test/helpers";
@@ -21,6 +22,8 @@ import {
   runBootSeeds,
   seedCentralStarsOwner,
   seedCentralStarsRakeLabel,
+  seedCentralStarsTableDefaults,
+  seedCentralStarsTheme,
   seedPlayerHomeClubs,
   type SeedLogger,
 } from "./seeds";
@@ -261,6 +264,106 @@ describe("seedCentralStarsRakeLabel", () => {
   });
 });
 
+describe("seedCentralStarsTableDefaults (round 5)", () => {
+  const defaultsOf = async (clubId: string) => {
+    const [club] = await testDb().select().from(clubs).where(eq(clubs.id, clubId));
+    return { seats: club.defaultSeatsPerTable, shape: club.defaultTableShape };
+  };
+  const tablesAudit = () => testDb().select().from(auditLog).where(eq(auditLog.action, "seed_club_table_defaults"));
+
+  it("gives Central Stars 9-seat rectangle tables, audits it, and touches no other club", async () => {
+    const centralStars = await createClub({ name: "Central Stars", slug: "central-stars" });
+    const other = await createClub();
+
+    const outcome = await seedCentralStarsTableDefaults(getPool());
+
+    expect(outcome).toEqual({ applied: true, detail: `club ${centralStars.id} now defaults to 9 seats per table and rectangle tables` });
+    expect(await defaultsOf(centralStars.id)).toEqual({ seats: 9, shape: "rectangle" });
+    expect(await defaultsOf(other.id)).toEqual({ seats: null, shape: null });
+    const data: AuditData["seed_club_table_defaults"] = { defaultSeatsPerTable: 9, defaultTableShape: "rectangle" };
+    expect(await tablesAudit()).toEqual([expect.objectContaining({ actorUserId: null, targetType: "club", targetId: centralStars.id, data })]);
+  });
+
+  it("fills only what is still NULL, and audits only that", async () => {
+    const club = await createClub({ name: "Central Stars", slug: "central-stars", defaultSeatsPerTable: 10 });
+
+    expect(await seedCentralStarsTableDefaults(getPool())).toEqual({ applied: true, detail: `club ${club.id} now defaults to rectangle tables` });
+    expect(await defaultsOf(club.id)).toEqual({ seats: 10, shape: "rectangle" });
+    expect((await tablesAudit())[0].data).toEqual({ defaultTableShape: "rectangle" });
+  });
+
+  it("never overwrites defaults the club chose", async () => {
+    const club = await createClub({ name: "Central Stars", slug: "central-stars", defaultSeatsPerTable: 8, defaultTableShape: "oval" });
+
+    expect(await seedCentralStarsTableDefaults(getPool())).toEqual({ applied: false, reason: `club ${club.id} already has its table defaults` });
+    expect(await defaultsOf(club.id)).toEqual({ seats: 8, shape: "oval" });
+    expect(await tablesAudit()).toEqual([]);
+  });
+
+  it("runs at most once: defaults the owner later clears stay cleared at the next boot", async () => {
+    const club = await createClub({ name: "Central Stars", slug: "central-stars" });
+    expect((await seedCentralStarsTableDefaults(getPool())).applied).toBe(true);
+    await testDb().update(clubs).set({ defaultSeatsPerTable: null, defaultTableShape: null }).where(eq(clubs.id, club.id));
+
+    expect(await seedCentralStarsTableDefaults(getPool())).toEqual({ applied: false, reason: expect.stringContaining("set by this seed before") });
+    expect(await defaultsOf(club.id)).toEqual({ seats: null, shape: null });
+    expect(await tablesAudit()).toHaveLength(1);
+  });
+
+  it("changes nothing when no club, or more than one, is Central Stars", async () => {
+    expect(await seedCentralStarsTableDefaults(getPool())).toEqual({ applied: false, reason: "no club is Central Stars" });
+    const first = await createClub({ name: "Central Stars", slug: "central-stars" });
+    const second = await createClub({ name: "CENTRAL STARS", slug: "cs-two" });
+
+    expect(await seedCentralStarsTableDefaults(getPool())).toEqual({ applied: false, reason: expect.stringMatching(/^2 clubs look like Central Stars/) });
+    expect([await defaultsOf(first.id), await defaultsOf(second.id)]).toEqual([{ seats: null, shape: null }, { seats: null, shape: null }]);
+  });
+});
+
+describe("seedCentralStarsTheme (round 5)", () => {
+  const themeOf = async (clubId: string) => (await testDb().select().from(clubs).where(eq(clubs.id, clubId)))[0].theme;
+  const themeAudit = () => testDb().select().from(auditLog).where(eq(auditLog.action, "seed_club_theme"));
+
+  it("dresses Central Stars in its electric blue and gold, audits it, and touches no other club", async () => {
+    const centralStars = await createClub({ name: "Central Stars", slug: "central-stars" });
+    const other = await createClub();
+
+    const outcome = await seedCentralStarsTheme(getPool());
+
+    expect(outcome).toEqual({ applied: true, detail: `club ${centralStars.id} now wears the Central Stars colours (#1E7BFF and #F2C14E)` });
+    const theme = await themeOf(centralStars.id);
+    expect(theme).toEqual(CENTRAL_STARS_THEME);
+    expect(themeProblems(theme)).toEqual([]);
+    expect(await themeOf(other.id)).toBeNull();
+    const data: AuditData["seed_club_theme"] = { previousTheme: null, theme: CENTRAL_STARS_THEME };
+    expect(await themeAudit()).toEqual([expect.objectContaining({ actorUserId: null, targetType: "club", targetId: centralStars.id, data })]);
+  });
+
+  it("never overwrites colours the club chose", async () => {
+    const own = { v: 1 as const, preset: null, colors: { primary: "#AA0000", accent: "#00AA00" } };
+    const club = await createClub({ name: "Central Stars", slug: "central-stars", theme: own });
+
+    expect(await seedCentralStarsTheme(getPool())).toEqual({ applied: false, reason: `club ${club.id} already has its colours` });
+    expect(await themeOf(club.id)).toEqual(own);
+    expect(await themeAudit()).toEqual([]);
+  });
+
+  it("runs at most once: a club that goes back to the LovePoker look keeps it at the next boot", async () => {
+    const club = await createClub({ name: "Central Stars", slug: "central-stars" });
+    expect((await seedCentralStarsTheme(getPool())).applied).toBe(true);
+    await testDb().update(clubs).set({ theme: null }).where(eq(clubs.id, club.id));
+
+    expect(await seedCentralStarsTheme(getPool())).toEqual({ applied: false, reason: expect.stringContaining("since been cleared") });
+    expect(await themeOf(club.id)).toBeNull();
+  });
+
+  it("changes nothing when no club is Central Stars", async () => {
+    const other = await createClub();
+    expect(await seedCentralStarsTheme(getPool())).toEqual({ applied: false, reason: "no club is Central Stars" });
+    expect(await themeOf(other.id)).toBeNull();
+  });
+});
+
 describe("seedPlayerHomeClubs (P2REV0-01)", () => {
   /** A registration written straight to the table, as builds before home clubs did (no home club recorded). */
   async function legacyRegistration(playerId: string, clubId: string, registrationTime: string) {
@@ -313,9 +416,13 @@ describe("runBootSeeds", () => {
     expect(logger.lines).toEqual([
       "info Central Stars owner: unchanged; no club is Central Stars",
       "info Central Stars AP label: unchanged; no club is Central Stars",
+      "info Central Stars tables: unchanged; no club is Central Stars",
+      "info Central Stars colours: unchanged; no club is Central Stars",
       "info Player home clubs: unchanged; every registered player already has one",
       expect.stringMatching(/^info Central Stars owner: set; club .+ is now owned by charlie@eccuity\.com \(user .+\)$/),
       expect.stringMatching(/^info Central Stars AP label: set; club .+ now calls its rake "AP"$/),
+      expect.stringMatching(/^info Central Stars tables: set; club .+ now defaults to 9 seats per table and rectangle tables$/),
+      expect.stringMatching(/^info Central Stars colours: set; club .+ now wears the Central Stars colours \(#1E7BFF and #F2C14E\)$/),
       "info Player home clubs: unchanged; every registered player already has one",
     ]);
   });
@@ -330,7 +437,7 @@ describe("runBootSeeds", () => {
     await runBootSeeds(getPool(), recordingLogger());
 
     const rows = await testDb().select().from(auditLog).orderBy(asc(auditLog.action));
-    expect(rows.map((row) => row.action)).toEqual(["seed_club_owner", "seed_club_rake_label", "seed_player_home_clubs"]);
+    expect(rows.map((row) => row.action)).toEqual(["seed_club_owner", "seed_club_rake_label", "seed_club_table_defaults", "seed_club_theme", "seed_player_home_clubs"]);
     expect(rows.every((row) => (AUDIT_ACTIONS as readonly string[]).includes(row.action))).toBe(true);
     const label: AuditData["seed_club_rake_label"] = { previousRakeLabel: null, rakeLabel: "AP" };
     expect(rows.find((row) => row.action === "seed_club_rake_label")).toMatchObject({ actorUserId: null, targetType: "club", targetId: centralStars.id, data: label });
@@ -344,6 +451,8 @@ describe("runBootSeeds", () => {
     expect(logger.lines).toEqual([
       "error Central Stars owner: failed, nothing changed (connection refused)",
       "error Central Stars AP label: failed, nothing changed (connection refused)",
+      "error Central Stars tables: failed, nothing changed (connection refused)",
+      "error Central Stars colours: failed, nothing changed (connection refused)",
       "error Player home clubs: failed, nothing changed (connection refused)",
     ]);
   });
@@ -357,8 +466,29 @@ describe("runBootSeeds", () => {
       expect(logger.lines).toEqual([
         "info Central Stars owner: unchanged; the clubs table does not exist yet (the migrations have not run)",
         "info Central Stars AP label: unchanged; the clubs table does not exist yet (the migrations have not run)",
+        "info Central Stars tables: unchanged; the clubs table does not exist yet (the migrations have not run)",
+        "info Central Stars colours: unchanged; the clubs table does not exist yet (the migrations have not run)",
         "info Player home clubs: unchanged; the player_home_clubs table does not exist yet (the migrations have not run)",
       ]);
+    } finally {
+      await dropScratchDatabase(scratch);
+    }
+  });
+
+  it("skips a seed whose columns the database does not have yet (round 5's), saying which", async () => {
+    const scratch = await createScratchDatabase("seeds_old_clubs");
+    try {
+      await scratch.pool.query("CREATE TABLE clubs (id varchar PRIMARY KEY, name text, slug text, owner_id varchar, rake_label text, default_seats_per_table integer)");
+      await scratch.pool.query("CREATE TABLE audit_log (id varchar, actor_user_id varchar, action text, target_type text, target_id varchar, data jsonb)");
+      const logger = recordingLogger();
+      await runBootSeeds(scratch.pool, logger);
+
+      expect(logger.lines).toEqual(
+        expect.arrayContaining([
+          "info Central Stars tables: unchanged; the clubs.default_table_shape column does not exist yet (the migrations have not run)",
+          "info Central Stars colours: unchanged; the clubs.theme column does not exist yet (the migrations have not run)",
+        ]),
+      );
     } finally {
       await dropScratchDatabase(scratch);
     }
@@ -396,6 +526,8 @@ describe("runBootSeeds", () => {
       expect(await ownerOf(club.id)).toBe(charlie.id);
       expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[seed\] Central Stars owner: set; /));
       expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[seed\] Central Stars AP label: set; /));
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[seed\] Central Stars tables: set; /));
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[seed\] Central Stars colours: set; /));
     } finally {
       log.mockRestore();
     }

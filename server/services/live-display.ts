@@ -18,9 +18,13 @@ import {
 import type { LiveDisplayDto, PublicSeasonLeaderboardDto } from "@shared/api/live-display";
 import { isBlindPresetKey } from "@shared/domain/blind-structures";
 import { CLOCK_LIMITS, computeChipStats, normalizeClock, structureHash, undoAvailable } from "@shared/domain/clock";
+import type { Cents } from "@shared/domain/money";
 import { offersAddons, offersRebuys } from "@shared/domain/player-actions";
-import { rakeLabel } from "@shared/domain/prize-pool";
+import { carryTargetName, differenceLines, type DifferenceLine } from "@shared/domain/prize-difference";
+import { rakeLabel, type PrizePoolBreakdown } from "@shared/domain/prize-pool";
+import { readTheme } from "@shared/domain/theme";
 import { publicPaths } from "@shared/domain/urls";
+import { fieldEntries } from "@shared/domain/waiting-list";
 import type { Season, Tournament, TournamentClock, TournamentRegistration } from "@shared/schema";
 import { db } from "../db";
 import { viewerFor } from "../http/authz";
@@ -99,11 +103,30 @@ function showsPrizePool(setting: ClockDisplaySettings["showPrizePool"], tourname
   return setting === "always" || tournament.prizePoolLocked === true || tournament.status === "completed";
 }
 
-/** Who is still in and who earned the early-bird bonus (the entry counts come with the prize pool). */
-function fieldStats(registrations: readonly TournamentRegistration[]): { remaining: number; earlyBirds: number } {
+/**
+ * The pool's honest breakdown beside it on the TV (round 5, item 16: the same lines as the TD's and the
+ * public pages), with the AP alone that goes with it: as finalize froze them once paid (a snapshot
+ * from before round 5 records no difference, nor does a tournament whose results were typed in), else
+ * live.
+ */
+function poolBreakdown(tournament: Tournament, breakdown: PrizePoolBreakdown, carryTarget: string): { lines: DifferenceLine[]; apCents: Cents } {
+  if (tournament.status === "completed") {
+    const pool = tournament.prizePoolSnapshot?.pool;
+    if (!pool) return { lines: [], apCents: 0 };
+    return { lines: differenceLines(pool, pool.difference?.carryTarget ?? carryTarget), apCents: pool.rakeOverrideCents ?? pool.rakeCalculatedCents };
+  }
+  return { lines: differenceLines(breakdown, carryTarget), apCents: breakdown.rake.applied };
+}
+
+/**
+ * Who is still in and who earned the early-bird bonus (the entry counts come with the prize pool),
+ * of the field: the waiting list (round 5, item 15) is not playing, so it counts toward neither.
+ */
+function fieldStats(tournament: Pick<Tournament, "maxPlayers">, registrations: readonly TournamentRegistration[]): { remaining: number; earlyBirds: number } {
+  const field = fieldEntries(registrations, tournament.maxPlayers);
   return {
-    remaining: registrations.filter((registration) => registration.isEliminated !== true).length,
-    earlyBirds: registrations.filter((registration) => registration.earlyBird).length,
+    remaining: field.filter((registration) => registration.isEliminated !== true).length,
+    earlyBirds: field.filter((registration) => registration.earlyBird).length,
   };
 }
 
@@ -152,9 +175,10 @@ export async function liveDisplay(req: Request, id: string): Promise<LiveDisplay
   const prizePool = toPrizePoolDto({ tournament, registrations, club, playerNames: new Map() });
   const { breakdown, display } = prizePool;
   const { counts } = breakdown;
-  const field = fieldStats(registrations);
+  const field = fieldStats(tournament, registrations);
+  // Counted for the TV only when it shows them: the chips in play, the average stack, or both.
   const chips =
-    clock && settings.showAverageStack
+    clock && (settings.showAverageStack || settings.showChipsInPlay)
       ? computeChipStats(clockStructureOf(clock), { buyIns: counts.buyIns, rebuys: counts.rebuys, addons: counts.addons, earlyBirds: field.earlyBirds }, field.remaining, null)
       : { totalChips: null, averageStack: null };
   const completed = tournament.status === "completed";
@@ -162,6 +186,9 @@ export async function liveDisplay(req: Request, id: string): Promise<LiveDisplay
   const showAp = settings.showAp && tournament.status !== "cancelled";
   // A pool fixed above what was taken in (a guarantee) makes the implied AP negative: the club adds money.
   const ap = breakdown.impliedRake;
+  const pool = show ? poolBreakdown(tournament, breakdown, carryTargetName(season?.name)) : null;
+  // While the lines beside the pool say what the club kept, carried over or added, the AP is the AP alone.
+  const itemised = pool !== null && pool.lines.length > 0;
   const nowMs = Date.now();
   const key = await clockKeyView(req, clock, tournament.clubId, viewer.canManage, nowMs);
   const canControl = (viewer.canManage || key.carried) && !isClosed(tournament);
@@ -178,7 +205,7 @@ export async function liveDisplay(req: Request, id: string): Promise<LiveDisplay
       offersRebuys: offersRebuys(tournament),
       offersAddons: offersAddons(tournament),
     },
-    club: { id: club.id, name: club.name, slug: club.slug, imageUrl: club.imageUrl, rakeLabel: rakeLabel(club) },
+    club: { id: club.id, name: club.name, slug: club.slug, imageUrl: club.imageUrl, rakeLabel: rakeLabel(club), theme: readTheme(club.theme) },
     season: season ? { id: season.id, name: season.name } : null,
     clock: clock ? toClockDto(clock, { nowMs, canControl }) : null,
     stats: {
@@ -190,7 +217,7 @@ export async function liveDisplay(req: Request, id: string): Promise<LiveDisplay
       earlyBirds: field.earlyBirds,
       activeTables,
       totalChips: chips.totalChips,
-      averageStack: chips.averageStack,
+      averageStack: settings.showAverageStack ? chips.averageStack : null,
     },
     money: {
       show,
@@ -199,12 +226,13 @@ export async function liveDisplay(req: Request, id: string): Promise<LiveDisplay
       // Never below zero on the room's screen, whatever the rates stored before AMOUNT_OVER_PRICE was refused.
       netCents: show ? (completed ? display.totalCents : Math.max(0, breakdown.net)) : null,
       netSource: show ? breakdown.netSource : null,
-      apCents: showAp ? Math.max(0, ap) : null,
-      clubAddedCents: showAp && ap < 0 ? -ap : null,
+      apCents: showAp ? (itemised ? pool.apCents : Math.max(0, ap)) : null,
+      clubAddedCents: showAp && !itemised && ap < 0 ? -ap : null,
       payouts: show && settings.showPayouts ? display.rows.map(({ position, amountCents }) => ({ position, amountCents })) : null,
+      lines: pool?.lines ?? null,
     },
     qr: qrTargetOf(settings.qrTarget, tournament.id, season ?? null),
-    viewer: { canControl, clockKeyIssuedAt: key.issuedAt, clockKeyExpiresAt: key.expiresAt },
+    viewer: { canControl, canChangeDisplay: viewer.canManage && !isClosed(tournament), clockKeyIssuedAt: key.issuedAt, clockKeyExpiresAt: key.expiresAt },
     // Last, after every read: each screen ticks from this.
     serverNow: Date.now(),
   };
@@ -228,7 +256,7 @@ export async function publicSeasonLeaderboard(seasonId: string): Promise<PublicS
       endDate: season.endDate?.toISOString() ?? null,
       isActive: season.isActive === true,
     },
-    club: { id: club.id, name: club.name, slug: club.slug, imageUrl: club.imageUrl },
+    club: { id: club.id, name: club.name, slug: club.slug, imageUrl: club.imageUrl, theme: readTheme(club.theme) },
     entries,
     tournaments,
     generatedAt: new Date().toISOString(),

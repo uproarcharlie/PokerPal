@@ -58,7 +58,7 @@ describe("GET /api/public/seasons/:id/leaderboard", () => {
     expect(response.headers["cache-control"]).toBe("no-store");
     expect(response.body).toEqual({
       season: { id: season.id, name: "Winter 2026", startDate: "2026-06-01T00:00:00.000Z", endDate: null, isActive: true },
-      club: { id: club.id, name: "Central Stars", slug: club.slug, imageUrl: "/uploads/club.webp" },
+      club: { id: club.id, name: "Central Stars", slug: club.slug, imageUrl: "/uploads/club.webp", theme: null },
       entries: legacy.body,
       tournaments: { completed: 2, total: 3 },
       generatedAt: expect.any(String),

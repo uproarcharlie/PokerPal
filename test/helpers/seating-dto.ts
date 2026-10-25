@@ -6,9 +6,10 @@
  */
 import { http, HttpResponse } from "msw";
 import type { PublicPlayer } from "@shared/api/public";
-import type { PublicSeatingDto, SeatingDto, SeatingMutationDto, SeatMoveDto, SeatRefDto, TableDto } from "@shared/api/seating";
-import type { SeatReason } from "@shared/domain/seating";
-import { suggestTables } from "@shared/domain/seating";
+import type { PublicSeatingDto, SeatingDto, SeatingMutationDto, SeatMoveDto, SeatRefDto, TableAdviceDto, TableDto } from "@shared/api/seating";
+import type { SeatingSnapshot, SeatMove, SeatReason } from "@shared/domain/seating";
+import { adviseTables, resolveSeatingSettings, setupTableCount, type AdvisorContext, type SeatingSettings } from "@shared/domain/table-advisor";
+import type { TableShape } from "@shared/domain/table-layout";
 import type { TournamentStatus } from "@shared/domain/tournaments";
 import { server } from "../msw/server";
 import { recordRequests } from "./requests";
@@ -26,6 +27,7 @@ export interface TableSpec {
   number: number;
   name?: string | null;
   seats?: number;
+  shape?: TableShape;
   status?: "active" | "broken";
   /** Who sits where: seat number → entry (empty seats left out). */
   seated?: Partial<Record<number, EntrySpec>>;
@@ -40,6 +42,10 @@ export interface SeatingSpec {
   version?: string;
   suggestions?: Partial<SeatingDto["suggestions"]>;
   lastChange?: SeatingDto["lastChange"];
+  /** Default: a 40-player tournament's defaults (9 seats, 2 starting tables, open when full, seat on sign-up, oval). */
+  settings?: Partial<SeatingDto["settings"]>;
+  /** Default: no advice, the counts from the tables and the waiting. */
+  advisor?: Partial<SeatingDto["advisor"]>;
 }
 
 export const seatPlayer = (entry: EntrySpec): PublicPlayer => ({ id: `p-${entry.id}`, name: entry.name, imageUrl: entry.imageUrl ?? null });
@@ -65,6 +71,7 @@ export function tableDto(table: TableSpec): TableDto {
     name: table.name ?? null,
     displayName: displayName(table),
     seatCount,
+    shape: table.shape ?? "oval",
     status,
     occupied: seats.filter((seat) => seat.registrationId !== null).length,
     seats,
@@ -86,7 +93,8 @@ export function seatingDto(spec: SeatingSpec = {}): SeatingDto {
   for (const table of active) {
     for (const seat of table.seats) if (seat.registrationId) seatByRegistrationId[seat.registrationId] = { tableNumber: table.tableNumber, seatNumber: seat.seatNumber };
   }
-  const setup = active.length === 0 ? { seatCount: 9, ...suggestTables(activePlayers, 9) } : null;
+  const settings: SeatingSettings = { ...resolveSeatingSettings({ tournament: { maxPlayers: 40 } }), ...spec.settings };
+  const setup = active.length === 0 ? setupSuggestion(settings, activePlayers) : null;
   return {
     tournamentId: spec.tournamentId ?? "t1",
     tournamentStatus: spec.tournamentStatus ?? (spec.readOnly ? "completed" : "in_progress"),
@@ -105,8 +113,61 @@ export function seatingDto(spec: SeatingSpec = {}): SeatingDto {
       maxDiff: counts.length > 1 ? Math.max(...counts) - Math.min(...counts) : 0,
     },
     suggestions: { balance: [], breakTable: null, finalTable: null, setup, ...spec.suggestions },
+    settings,
+    advisor: { phase: "growing", players: activePlayers, waiting: unseated.length, notArrived: 0, overCapacity: 0, advice: [], ...spec.advisor },
     seatByRegistrationId,
     lastChange: spec.lastChange ?? null,
+  };
+}
+
+/** What the server's setup suggestion is for `players` (server/services/seating-views setupSuggestion). */
+function setupSuggestion(settings: SeatingSettings, players: number): NonNullable<SeatingDto["suggestions"]["setup"]> {
+  const tableCount = setupTableCount(settings, players);
+  const seated = Math.min(players, tableCount * settings.seatsPerTable);
+  return {
+    seatCount: settings.seatsPerTable,
+    tableCount,
+    perTable: Array.from({ length: tableCount }, (_, i) => Math.floor(seated / tableCount) + (i < seated % tableCount ? 1 : 0)),
+  };
+}
+
+/**
+ * `spec`'s seating with the table advisor's real advice (shared/domain/table-advisor adviseTables, as
+ * the server works it out), its moves named as the server names them: for tests of the advice banner
+ * that should hold whatever the advisor's rules say.
+ */
+export function advisedSeatingDto(spec: SeatingSpec = {}, context: AdvisorContext = {}): SeatingDto {
+  const seating = seatingDto(spec);
+  const active = seating.tables.filter((table) => table.status === "active");
+  const snapshot: SeatingSnapshot = {
+    tables: seating.tables.map(({ id, tableNumber, seatCount, status }) => ({ id, tableNumber, seatCount, status })),
+    seats: active.flatMap((table) => table.seats.flatMap((seat) => (seat.registrationId ? [{ registrationId: seat.registrationId, tableId: table.id, seatNumber: seat.seatNumber }] : []))),
+    eligible: [
+      ...active.flatMap((table) => table.seats.flatMap((seat) => (seat.registrationId ? [{ registrationId: seat.registrationId, paymentConfirmed: seat.paymentConfirmed !== false }] : []))),
+      ...seating.unseated.map((entry) => ({ registrationId: entry.registrationId, paymentConfirmed: entry.paymentConfirmed })),
+    ],
+  };
+  const names = new Map([
+    ...active.flatMap((table) => table.seats.flatMap((seat) => (seat.registrationId && seat.player ? [[seat.registrationId, seat.player.name] as const] : []))),
+    ...seating.unseated.map((entry) => [entry.registrationId, entry.player.name] as const),
+  ]);
+  const result = adviseTables(snapshot, seating.settings, context);
+  const ref = (spot: SeatMove["from"], newTable: number | null) => {
+    if (!spot) return null;
+    const table = seating.tables.find((candidate) => candidate.id === spot.tableId);
+    const tableNumber = table?.tableNumber ?? newTable ?? 0;
+    // The table the advice would open is not in the seating yet: it is named as it will be ("Table 3", under NEW_TABLE_ID).
+    return seatRef(spot.tableId, tableNumber, spot.seatNumber, table?.displayName ?? `Table ${tableNumber}`);
+  };
+  return {
+    ...seating,
+    advisor: {
+      ...result,
+      advice: result.advice.map((advice) => ({
+        ...advice,
+        moves: advice.moves.map((move) => seatMove(move.registrationId, names.get(move.registrationId) ?? "Unknown player", ref(move.from, advice.tableNumber), ref(move.to, advice.tableNumber), move.reason)),
+      })),
+    },
   };
 }
 
@@ -126,6 +187,17 @@ export const seatMove = (registrationId: string, playerName: string, from: SeatR
   reason,
 });
 
+/** One piece of the table advisor's advice, as the server words it. */
+export const tableAdvice = (kind: TableAdviceDto["kind"], message: string, rest: Partial<TableAdviceDto> = {}): TableAdviceDto => ({
+  kind,
+  message,
+  tableId: null,
+  tableNumber: null,
+  moves: [],
+  players: 0,
+  ...rest,
+});
+
 export const seatingMutation = (seating: SeatingDto, moves: SeatMoveDto[] = [], extra: Partial<SeatingMutationDto> = {}): SeatingMutationDto => ({ seating, moves, ...extra });
 
 /** What anyone sees of `spec` on the seat finder: active tables, and every seated player by name. */
@@ -134,11 +206,12 @@ export function publicSeatingDto(spec: SeatingSpec & { tournamentName?: string }
   const active = seating.tables.filter((table) => table.status === "active");
   return {
     tournament: { id: seating.tournamentId, name: spec.tournamentName ?? "Friday Freezeout", status: seating.tournamentStatus },
-    club: { id: "c1", name: "Central Stars", slug: "central-stars", imageUrl: null },
+    club: { id: "c1", name: "Central Stars", slug: "central-stars", imageUrl: null, theme: null },
     tables: active.map((table) => ({
       tableNumber: table.tableNumber,
       displayName: table.displayName,
       seatCount: table.seatCount,
+      shape: table.shape,
       seats: table.seats.map((seat) => ({ seatNumber: seat.seatNumber, player: seat.player })),
     })),
     players: active

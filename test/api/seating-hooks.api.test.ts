@@ -18,7 +18,7 @@ import {
   type TournamentRegistration,
   type TournamentTable,
 } from "@shared/schema";
-import { createTournament } from "../factories";
+import { createTournament, type NewTournament } from "../factories";
 import { createSeat, createTable, registerPlayers } from "../factories/seating";
 import { resetDb, testDb } from "../helpers";
 import { clubWithStaff } from "../helpers/club-staff";
@@ -26,9 +26,9 @@ import { clubWithStaff } from "../helpers/club-staff";
 beforeEach(resetDb);
 
 /** In play: Alice at Table 2 seat 4, Bob at Table 1 seat 1, Cara waiting; a $50 re-buy on sale. */
-async function liveGame() {
+async function liveGame(overrides: Partial<NewTournament> = {}) {
   const staff = await clubWithStaff();
-  const tournament = await createTournament({ clubId: staff.club.id, status: "in_progress", rebuyAmount: "50.00" });
+  const tournament = await createTournament({ clubId: staff.club.id, status: "in_progress", rebuyAmount: "50.00", ...overrides });
   const [alice, bob, cara] = await registerPlayers(tournament.id, ["Alice", "Bob", "Cara"]);
   const tables = [await createTable({ tournamentId: tournament.id, tableNumber: 1 }), await createTable({ tournamentId: tournament.id, tableNumber: 2 })];
   await seat(tables[1], alice, 4);
@@ -119,44 +119,67 @@ describe("an undone bust", () => {
     expect(entry.playerId).toBe(alice.playerId);
   });
 
-  it("leaves the player waiting when someone took the seat meanwhile", async () => {
-    const game = await liveGame();
-    const { tournament, alice, cara, tables, td } = game;
-    await bust(td, alice);
-    await td.post(`/api/tournaments/${tournament.id}/seating/assign`).send({ registrationId: cara.id, tableId: tables[1].id, seatNumber: 4 });
+  it("when someone took the seat meanwhile, auto-seats the player as a new arrival (round 5), or leaves them waiting with auto-seat off", async () => {
+    for (const autoSeat of [null, "off"] as const) {
+      const game = await liveGame({ autoSeat });
+      const { tournament, alice, cara, tables, td } = game;
+      await bust(td, alice);
+      await td.post(`/api/tournaments/${tournament.id}/seating/assign`).send({ registrationId: cara.id, tableId: tables[1].id, seatNumber: 4 });
 
-    await unbust(td, alice);
+      await unbust(td, alice);
 
-    const seating = await seatingOf(td, tournament.id);
-    expect(seating.seatByRegistrationId[alice.id]).toBeUndefined();
-    expect(seating.seatByRegistrationId[cara.id]).toEqual({ tableNumber: 2, seatNumber: 4 });
-    expect(seating.unseated.map((entry) => entry.registrationId)).toEqual([alice.id]);
-    expect((await activity(tournament.id)).slice(-2)).toEqual([
-      ["seat_assigned", "Cara seated at Table 2, Seat 4"],
-      ["player_restored", "Alice was restored to active"],
-    ]);
-  });
-
-  it("leaves the player waiting when the table was broken or the seat no longer exists", async () => {
-    const broken = await liveGame();
-    await bust(broken.td, broken.alice);
-    await broken.td.post(`/api/tournaments/${broken.tournament.id}/tables/${broken.tables[1].id}/break`).send({});
-    await unbust(broken.td, broken.alice);
-
-    const shrunk = await liveGame();
-    await bust(shrunk.td, shrunk.alice);
-    await shrunk.td.patch(`/api/tournaments/${shrunk.tournament.id}/tables/${shrunk.tables[1].id}`).send({ seatCount: 3 });
-    await unbust(shrunk.td, shrunk.alice);
-
-    for (const game of [broken, shrunk]) {
-      const seating = await seatingOf(game.td, game.tournament.id);
-      expect(seating.seatByRegistrationId[game.alice.id]).toBeUndefined();
-      expect(seating.unseated.map((entry) => entry.registrationId)).toContain(game.alice.id);
+      const seating = await seatingOf(td, tournament.id);
+      expect(seating.seatByRegistrationId[cara.id]).toEqual({ tableNumber: 2, seatNumber: 4 });
+      const log = (await activity(tournament.id)).slice(-2);
+      if (autoSeat === "off") {
+        expect(seating.seatByRegistrationId[alice.id]).toBeUndefined();
+        expect(seating.unseated.map((entry) => entry.registrationId)).toEqual([alice.id]);
+        expect(log).toEqual([
+          ["seat_assigned", "Cara seated at Table 2, Seat 4"],
+          ["player_restored", "Alice was restored to active"],
+        ]);
+      } else {
+        // Table 1 has Bob alone, Table 2 Cara alone: the tie goes either way, never to the seats taken.
+        const spot = seating.seatByRegistrationId[alice.id];
+        expect(spot).toBeDefined();
+        expect([`${spot.tableNumber}:${spot.seatNumber}`]).not.toEqual(expect.arrayContaining(["2:4", "1:1"]));
+        expect(log).toEqual([
+          ["player_restored", "Alice was restored to active"],
+          ["seat_assigned", `Alice is back in, seated at Table ${spot.tableNumber}, Seat ${spot.seatNumber}`],
+        ]);
+        const rows = await seatRowsOf(alice.id);
+        expect(rows[rows.length - 1].assignedBy).toBeNull();
+      }
     }
   });
 
-  it("does not take back a seat the player had left before they were busted", async () => {
-    const game = await liveGame();
+  it("when the table was broken or the seat no longer exists, auto-seats them elsewhere, or (off) leaves them waiting", async () => {
+    for (const autoSeat of [null, "off"] as const) {
+      const broken = await liveGame({ autoSeat });
+      await bust(broken.td, broken.alice);
+      await broken.td.post(`/api/tournaments/${broken.tournament.id}/tables/${broken.tables[1].id}/break`).send({});
+      await unbust(broken.td, broken.alice);
+
+      const shrunk = await liveGame({ autoSeat });
+      await bust(shrunk.td, shrunk.alice);
+      await shrunk.td.patch(`/api/tournaments/${shrunk.tournament.id}/tables/${shrunk.tables[1].id}`).send({ seatCount: 3 });
+      await unbust(shrunk.td, shrunk.alice);
+
+      for (const game of [broken, shrunk]) {
+        const seating = await seatingOf(game.td, game.tournament.id);
+        if (autoSeat === "off") {
+          expect(seating.seatByRegistrationId[game.alice.id]).toBeUndefined();
+          expect(seating.unseated.map((entry) => entry.registrationId)).toContain(game.alice.id);
+        } else {
+          expect(seating.seatByRegistrationId[game.alice.id]).toBeDefined();
+          expect(seating.unseated.map((entry) => entry.registrationId)).not.toContain(game.alice.id);
+        }
+      }
+    }
+  });
+
+  it("does not take back a seat the player had left before they were busted (auto-seat may give them a new one)", async () => {
+    const game = await liveGame({ autoSeat: "off" });
     const { tournament, alice, td } = game;
     await td.post(`/api/tournaments/${tournament.id}/seating/unseat`).send({ registrationId: alice.id });
     await bust(td, alice);

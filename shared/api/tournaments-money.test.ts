@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { finalizePreviewSchema, finalizeSchema } from "./finalize";
-import { prizePoolAdjustmentSchema, rakeRatesSchema } from "./prize-pool";
+import { dealSchema, finalizePreviewSchema, finalizeSchema, PUBLIC_SNAPSHOT_FIELDS, toDealInput } from "./finalize";
+import { payoutsUpdateSchema, prizePoolAdjustmentSchema, rakeRatesSchema, toPayoutPlaces } from "./prize-pool";
 import { createTournamentSchema, updateTournamentSchema } from "./tournaments";
 import { HIGH_HAND_PRIZES_MAX } from "../domain/prize-pool";
 
@@ -161,5 +161,92 @@ describe("finalize", () => {
     expect(finalizePreviewSchema.parse({ finishOrder: ["r1"], expectedPlanHash: "0".repeat(32) })).toEqual({
       finishOrder: ["r1"],
     });
+  });
+});
+
+describe("the payout editor (round 5)", () => {
+  it("sets a standard structure, or a custom one place by place", () => {
+    expect(payoutsUpdateSchema.parse({ payoutStructure: "top5", reason: " Bigger field " })).toEqual({ payoutStructure: "top5", reason: "Bigger field" });
+    const custom = payoutsUpdateSchema.parse({
+      payoutStructure: "custom",
+      places: [
+        { kind: "percent", percent: 50 },
+        { kind: "amount", amount: 300 },
+        { kind: "percent", percent: 33.33 },
+      ],
+    });
+    expect(custom.places).toEqual([
+      { kind: "percent", percent: 50 },
+      { kind: "amount", amount: "300.00" },
+      { kind: "percent", percent: 33.33 },
+    ]);
+    expect(toPayoutPlaces(custom.places ?? [])).toEqual([
+      { kind: "percent", basisPoints: 5000 },
+      { kind: "amount", amountCents: 30_000 },
+      { kind: "percent", basisPoints: 3333 },
+    ]);
+  });
+
+  it("refuses a custom structure without places, and places the domain refuses, at the place", () => {
+    const missing = payoutsUpdateSchema.safeParse({ payoutStructure: "custom" });
+    expect(missing.success).toBe(false);
+    expect(missing.error?.issues.map((issue) => [issue.path, issue.message])).toEqual([[["places"], "Set up the places a custom structure pays"]]);
+    const bad = payoutsUpdateSchema.safeParse({
+      payoutStructure: "custom",
+      places: [
+        { kind: "percent", percent: 20 },
+        { kind: "percent", percent: 30.005 },
+        { kind: "percent", percent: 90 },
+      ],
+    });
+    expect(bad.error?.issues.map((issue) => [issue.path, issue.message])).toEqual([
+      [["places", 1], "Place 2 must be a percentage above 0 and at most 100, with at most 2 decimal places"],
+      [["places", 2], "Place 3 pays a bigger share than a place above it"],
+      [["places"], "The percentages add up to 110%, over 100%"],
+    ]);
+    expect(payoutsUpdateSchema.safeParse({ payoutStructure: "custom", places: [{ kind: "percent", percent: 0 }] }).success).toBe(false);
+    expect(payoutsUpdateSchema.safeParse({ payoutStructure: "custom", places: [{ kind: "amount", amount: "-5" }] }).success).toBe(false);
+    expect(payoutsUpdateSchema.safeParse({ payoutStructure: "custom", places: [] }).success).toBe(false);
+    expect(payoutsUpdateSchema.safeParse({ payoutStructure: "top4" }).success).toBe(false);
+  });
+});
+
+describe("a deal at finalize (round 5)", () => {
+  const deal = { reason: " Chip chop ", amounts: [{ registrationId: "r1", amount: "450" }, { registrationId: "r2", amount: 350.5 }] };
+
+  it("is sent with the finish order to the preview and to finalize, amounts as money", () => {
+    const parsed = finalizeSchema.parse({ finishOrder: ["r1", "r2"], deal });
+    expect(parsed.deal).toEqual({ reason: "Chip chop", amounts: [{ registrationId: "r1", amount: "450.00" }, { registrationId: "r2", amount: "350.50" }] });
+    expect(finalizePreviewSchema.parse({ deal }).deal).toEqual(parsed.deal);
+    expect(toDealInput(dealSchema.parse(deal))).toEqual({
+      reason: "Chip chop",
+      amounts: [
+        { registrationId: "r1", amountCents: 45_000 },
+        { registrationId: "r2", amountCents: 35_050 },
+      ],
+    });
+  });
+
+  it("needs two or more players and a reason", () => {
+    expect(dealSchema.safeParse({ ...deal, amounts: deal.amounts.slice(0, 1) }).success).toBe(false);
+    expect(dealSchema.safeParse({ ...deal, reason: "  " }).success).toBe(false);
+    expect(dealSchema.safeParse({ ...deal, reason: "x".repeat(201) }).success).toBe(false);
+    expect(dealSchema.safeParse({ ...deal, amounts: [{ registrationId: "r1", amount: "1.005" }, deal.amounts[1]] }).success).toBe(false);
+  });
+
+  it("is public in the snapshot, like who was paid what", () => {
+    expect(PUBLIC_SNAPSHOT_FIELDS).toContain("deal");
+  });
+});
+
+describe("seating settings on the tournament (round 5)", () => {
+  it("take seats per table 2–10, starting tables, the open-table threshold, the auto-seat mode and the shape; blank or null clears them", () => {
+    const parsed = updateTournamentSchema.parse({ seatsPerTable: 6, startingTables: 2, openTableAt: 5, autoSeat: "once_paid", tableShape: "rectangle" });
+    expect(parsed).toEqual({ seatsPerTable: 6, startingTables: 2, openTableAt: 5, autoSeat: "once_paid", tableShape: "rectangle" });
+    expect(updateTournamentSchema.parse({ seatsPerTable: "", autoSeat: null, tableShape: null })).toEqual({ seatsPerTable: null, autoSeat: null, tableShape: null });
+    for (const bad of [{ seatsPerTable: 1 }, { seatsPerTable: 11 }, { startingTables: 0 }, { startingTables: 51 }, { openTableAt: 11 }, { autoSeat: "later" }, { tableShape: "hexagon" }]) {
+      expect(updateTournamentSchema.safeParse(bad).success).toBe(false);
+    }
+    expect(createTournamentSchema.parse({ ...modalPayload, seatsPerTable: 9, tableShape: "rectangle" })).toMatchObject({ seatsPerTable: 9, tableShape: "rectangle" });
   });
 });

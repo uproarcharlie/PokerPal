@@ -503,7 +503,7 @@ describe("isLiveOpsRequest", () => {
     expect(ops("PATCH", "/tournaments/t1/tables/tb1")).toBe(true);
     expect(ops("DELETE", "/tournaments/t1/tables/tb1")).toBe(true);
     expect(ops("POST", "/tournaments/t1/tables/tb1/break")).toBe(true);
-    for (const action of ["setup", "draw", "assign", "unseat", "balance", "final-table", "undo"]) {
+    for (const action of ["setup", "draw", "assign", "unseat", "balance", "final-table", "undo", "open-table"]) {
       expect(ops("POST", `/tournaments/t1/seating/${action}`)).toBe(true);
     }
     expect(ops("POST", "/tournaments/t1/early-birds")).toBe(true);

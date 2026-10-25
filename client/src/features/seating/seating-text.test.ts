@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/api/http";
 import type { ErrorCode } from "@shared/api/errors";
 import { seatingDto, seatingMutation, seatMove, seatRef } from "@test/helpers/seating-dto";
-import { changeOutcome, failedTitle, moveText, seatingRefusal, seatingSummary, tablesText } from "./seating-text";
+import { changeOutcome, failedTitle, moveText, seatingRefusal, seatingSummary, tablesNeeded, tablesText } from "./seating-text";
 
 const refusal = (code: ErrorCode, error: string, details?: unknown) => new ApiError({ status: 409, code, error, details });
 
@@ -112,5 +112,20 @@ describe("words", () => {
   it("names a move by the table's own name", () => {
     expect(moveText(seatMove("r1", "Alice", null, seatRef("tA", 1, 3, "Feature table"), "draw"))).toBe("Alice → Feature table, Seat 3");
     expect(moveText(seatMove("r1", "Alice", seatRef("tA", 1, 3), null, "unseat"))).toBe("Alice unseated");
+  });
+});
+
+describe("tablesNeeded", () => {
+  it("says how many tables max players need at the seats per table (blank: the club's, else 9)", () => {
+    expect(tablesNeeded("18", "", null)).toBe("Up to 2 tables of 9");
+    expect(tablesNeeded("40", "6", 9)).toBe("Up to 7 tables of 6");
+    expect(tablesNeeded("19", "", 10)).toBe("Up to 2 tables of 10");
+    expect(tablesNeeded("1000", "2", null)).toBe("Up to 50 tables of 2");
+  });
+
+  it("says nothing until both are numbers a table could take", () => {
+    expect(tablesNeeded("", "9", null)).toBeNull();
+    expect(tablesNeeded("18", "11", null)).toBeNull();
+    expect(tablesNeeded("lots", "9", null)).toBeNull();
   });
 });

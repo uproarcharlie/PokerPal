@@ -1,10 +1,13 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { MoreHorizontal } from "lucide-react";
 import type { ClockDto } from "@shared/api/clock";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { CLOCK_LIMITS, type DerivedClock } from "@shared/domain/clock";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { useToast } from "@/hooks/use-toast";
@@ -16,7 +19,7 @@ import type { ClockOpenRequest } from "./clock-status-chip";
 import { periodName } from "./public/clock-face";
 import { SetTimeDialog, type SetTimeLevel } from "./set-time-dialog";
 
-type ControlDialog = "reset" | "remove";
+type ControlDialog = "reset" | "remove" | "jump";
 
 const levelShown = (derived: DerivedClock): SetTimeLevel => ({ levelIndex: derived.levelIndex, levelName: periodName(derived) });
 
@@ -30,6 +33,8 @@ interface ClockControlsProps {
    * keyboard or a finger, never a mouse: TDN2-CHIP-FOCUS-SPACE).
    */
   openRequest?: ClockOpenRequest | null;
+  /** The panel's rows of buttons, or a phone's: Start / Pause full width, and the rarer actions in a More menu. */
+  layout?: "panel" | "phone";
 }
 
 const UNDO_MINUTES = CLOCK_LIMITS.undoWindowMs / 60_000;
@@ -39,7 +44,7 @@ const UNDO_MINUTES = CLOCK_LIMITS.undoWindowMs / 60_000;
  * time, jump to a level, and (asked first) reset or remove. Each sends the level and status on screen;
  * Set time sends the level it was opened for, so a level that ends while the TD types is refused.
  */
-export function ClockControls({ tournament, clock, derived, openRequest = null }: ClockControlsProps) {
+export function ClockControls({ tournament, clock, derived, openRequest = null, layout = "panel" }: ClockControlsProps) {
   const { toast } = useToast();
   const { send, perform, busy } = useClockActions(tournament.id);
   const { remove } = useClockConfig(tournament.id);
@@ -50,6 +55,7 @@ export function ClockControls({ tournament, clock, derived, openRequest = null }
   const alsoStartId = useId();
   const jumpId = useId();
   const toggle = useRef<HTMLButtonElement>(null);
+  const phone = layout === "phone";
 
   useEffect(() => {
     if (!openRequest) return;
@@ -92,62 +98,8 @@ export function ClockControls({ tournament, clock, derived, openRequest = null }
     toast({ title: "Clock removed", description: "Set it up again from a preset, the generator or an earlier game." });
   };
 
-  return (
-    <div className="space-y-4">
-      <ClockActionButtons
-        status={derived.status}
-        busy={busy}
-        onAct={(intent) => void act(intent)}
-        alsoStartTournament={alsoStartTournament}
-        undo={undo}
-        layout="panel"
-        toggleRef={toggle}
-        extra={
-          <Button variant="outline" onClick={() => setTimeFor(levelShown(derived))} disabled={finished}>
-            Set time…
-          </Button>
-        }
-      />
-
-      {startable && !running && !finished ? (
-        <div className="flex items-center gap-3">
-          <Checkbox id={alsoStartId} checked={alsoStart} onCheckedChange={(checked) => setAlsoStart(checked === true)} />
-          <Label htmlFor={alsoStartId} className="font-normal">
-            Also start the tournament (status In Progress)
-          </Label>
-        </div>
-      ) : null}
-
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-        <div className="min-w-0 flex-1 space-y-2">
-          <Label htmlFor={jumpId}>Jump to level</Label>
-          <NativeSelect id={jumpId} value={levels[jumpIndex]?.id ?? ""} onChange={(event) => setJumpTo(event.target.value)} disabled={finished}>
-            {levels.map((level, index) => (
-              <option key={level.id} value={level.id}>
-                {levelOption(levels, index)}
-              </option>
-            ))}
-          </NativeSelect>
-        </div>
-        <Button
-          variant="outline"
-          busy={busy.has("jump")}
-          disabled={finished}
-          onClick={() => void act({ action: "jump", levelIndex: jumpIndex }).then((done) => done && setJumpTo(null))}
-        >
-          Go to level
-        </Button>
-      </div>
-
-      <div className="flex flex-wrap gap-2 border-t border-border pt-4">
-        <Button variant="outline" onClick={() => setDialog("reset")} disabled={finished}>
-          Reset clock…
-        </Button>
-        <Button variant="outline" className="text-destructive" onClick={() => setDialog("remove")}>
-          Remove clock…
-        </Button>
-      </div>
-
+  const dialogs = (
+    <>
       <SetTimeDialog
         level={timeFor}
         onClose={() => setTimeFor(null)}
@@ -175,6 +127,133 @@ export function ClockControls({ tournament, clock, derived, openRequest = null }
         destructive
         onConfirm={removeClock}
       />
+    </>
+  );
+
+  const jump = (
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+      <div className="min-w-0 flex-1 space-y-2">
+        <Label htmlFor={jumpId}>Jump to level</Label>
+        <NativeSelect id={jumpId} value={levels[jumpIndex]?.id ?? ""} onChange={(event) => setJumpTo(event.target.value)} disabled={finished} className={phone ? "h-11 text-base" : undefined}>
+          {levels.map((level, index) => (
+            <option key={level.id} value={level.id}>
+              {levelOption(levels, index)}
+            </option>
+          ))}
+        </NativeSelect>
+      </div>
+      <Button
+        variant={phone ? "default" : "outline"}
+        className={phone ? "h-11" : undefined}
+        busy={busy.has("jump")}
+        disabled={finished}
+        onClick={() =>
+          void act({ action: "jump", levelIndex: jumpIndex }).then((done) => {
+            if (!done) return;
+            setJumpTo(null);
+            if (phone) setDialog(null);
+          })
+        }
+      >
+        Go to level
+      </Button>
+    </div>
+  );
+
+  const alsoStartRow =
+    startable && !running && !finished ? (
+      <div className="flex min-h-11 items-center gap-3">
+        <Checkbox id={alsoStartId} checked={alsoStart} onCheckedChange={(checked) => setAlsoStart(checked === true)} />
+        <Label htmlFor={alsoStartId} className="font-normal">
+          Also start the tournament (status In Progress)
+        </Label>
+      </div>
+    ) : null;
+
+  if (phone) {
+    return (
+      <div className="space-y-3">
+        <ClockActionButtons
+          status={derived.status}
+          busy={busy}
+          onAct={(intent) => void act(intent)}
+          alsoStartTournament={alsoStartTournament}
+          undo={undo}
+          layout="phone"
+          toggleRef={toggle}
+          extra={
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="h-12 text-base [&_svg]:size-5">
+                  <MoreHorizontal aria-hidden="true" />
+                  More
+                  <span className="sr-only"> clock actions</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-56">
+                <DropdownMenuItem className="min-h-11" disabled={finished} onSelect={() => setTimeFor(levelShown(derived))}>
+                  Set time…
+                </DropdownMenuItem>
+                <DropdownMenuItem className="min-h-11" disabled={finished} onSelect={() => setDialog("jump")}>
+                  Go to a level…
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem className="min-h-11" disabled={finished} onSelect={() => setDialog("reset")}>
+                  Reset clock…
+                </DropdownMenuItem>
+                <DropdownMenuItem className="min-h-11 text-destructive" onSelect={() => setDialog("remove")}>
+                  Remove clock…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          }
+        />
+        {alsoStartRow}
+        <Dialog open={dialog === "jump"} onOpenChange={(open) => setDialog(open ? "jump" : null)}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Go to a level</DialogTitle>
+              <DialogDescription>The clock moves to the start of the level you choose, running or paused as it is.</DialogDescription>
+            </DialogHeader>
+            {jump}
+          </DialogContent>
+        </Dialog>
+        {dialogs}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <ClockActionButtons
+        status={derived.status}
+        busy={busy}
+        onAct={(intent) => void act(intent)}
+        alsoStartTournament={alsoStartTournament}
+        undo={undo}
+        layout="panel"
+        toggleRef={toggle}
+        extra={
+          <Button variant="outline" onClick={() => setTimeFor(levelShown(derived))} disabled={finished}>
+            Set time…
+          </Button>
+        }
+      />
+
+      {alsoStartRow}
+
+      {jump}
+
+      <div className="flex flex-wrap gap-2 border-t border-border pt-4">
+        <Button variant="outline" onClick={() => setDialog("reset")} disabled={finished}>
+          Reset clock…
+        </Button>
+        <Button variant="outline" className="text-destructive" onClick={() => setDialog("remove")}>
+          Remove clock…
+        </Button>
+      </div>
+
+      {dialogs}
     </div>
   );
 }

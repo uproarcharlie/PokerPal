@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { fakeMediaStream } from "@test/helpers/media";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { CameraDialog } from "./camera-dialog";
-import { CAMERA_ERROR_MESSAGE } from "./use-camera-capture";
+import { CAMERA_BLOCKED_MESSAGE, CAMERA_BUSY_MESSAGE, CAMERA_ERROR_MESSAGE, NO_CAMERA_MESSAGE } from "./use-camera-capture";
 
 const getUserMedia = () => vi.mocked(navigator.mediaDevices.getUserMedia);
 
@@ -116,16 +116,65 @@ describe("CameraDialog", () => {
     expect(stream.getTracks()[0].stop).toHaveBeenCalled();
   });
 
-  it("offers Upload instead when the camera cannot be opened", async () => {
+  it("offers an upload instead when the camera is blocked", async () => {
     getUserMedia().mockRejectedValueOnce(new DOMException("Denied", "NotAllowedError"));
     const onChooseFile = vi.fn();
     render(<Harness onChooseFile={onChooseFile} />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(CAMERA_ERROR_MESSAGE);
-    await userEvent.click(screen.getByRole("button", { name: "Upload instead" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(CAMERA_BLOCKED_MESSAGE);
+    await userEvent.click(screen.getByRole("button", { name: "Upload a photo instead" }));
 
     expect(onChooseFile).toHaveBeenCalled();
     expect(screen.getByText("camera closed")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["NotFoundError", NO_CAMERA_MESSAGE],
+    ["OverconstrainedError", NO_CAMERA_MESSAGE],
+    ["NotReadableError", CAMERA_BUSY_MESSAGE],
+    ["SecurityError", CAMERA_BLOCKED_MESSAGE],
+    ["UnknownError", CAMERA_ERROR_MESSAGE],
+  ])("says plainly why the camera did not open (%s)", async (reason, message) => {
+    getUserMedia().mockRejectedValueOnce(new DOMException("No", reason));
+    render(<Harness />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(screen.getByRole("button", { name: "Upload a photo instead" })).toBeVisible();
+  });
+
+  it("asks for the camera again from Try again, once it is free or allowed", async () => {
+    getUserMedia().mockRejectedValueOnce(new DOMException("Busy", "NotReadableError"));
+    render(<Harness />);
+    await screen.findByRole("alert");
+
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    await waitFor(() => expect(getUserMedia()).toHaveBeenCalledTimes(2));
+    expect(getUserMedia().mock.calls[1][0]).toMatchObject({ video: { facingMode: "user" } });
+    expect(await screen.findByRole("button", { name: "Capture" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("fills a phone's screen, and shows a circle to put a face in once the front camera's picture is in", async () => {
+    function Selfie() {
+      const [open, setOpen] = useState(true);
+      return <CameraDialog open={open} onOpenChange={setOpen} onCapture={() => {}} onChooseFile={() => {}} title="Take a selfie" />;
+    }
+    render(<Selfie />);
+    const dialog = await screen.findByRole("dialog", { name: "Take a selfie" });
+
+    expect(dialog).toHaveClass("h-dvh", "max-w-none", "sm:max-w-xl");
+    expect(screen.queryByTestId("face-guide")).not.toBeInTheDocument();
+    const video = dialog.querySelector("video") as HTMLVideoElement;
+    await waitFor(() => expect(video.srcObject).not.toBeNull());
+    firstFrame(video);
+    expect(screen.getByTestId("face-guide")).toHaveAttribute("aria-hidden", "true");
+    // Capture is the big button within thumb reach, and every control is a 44 px target or more.
+    expect(within(dialog).getByRole("button", { name: "Capture" })).toHaveClass("h-14");
+    for (const name of ["Cancel", "Switch camera"]) expect(within(dialog).getByRole("button", { name })).toHaveClass("h-12");
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Switch camera" }));
+    await waitFor(() => expect(screen.queryByTestId("face-guide")).not.toBeInTheDocument());
   });
 
   it("closes on Escape without closing the form sheet it was opened from", async () => {

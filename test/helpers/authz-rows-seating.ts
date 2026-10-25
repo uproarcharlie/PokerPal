@@ -1,9 +1,10 @@
 /**
  * The authz matrix's rows for tables and seating (phase4-contracts §3.1), spread into ROUTES by
- * test/api/authz-matrix.api.test.ts: one row per guarded route server/routes/seating.ts mounts. Every
- * route needs a manager of the tournament's club; the public seat finder has no guard and no row.
+ * test/api/authz-matrix.api.test.ts: one row per guarded route server/routes/seating.ts mounts (round 5:
+ * open-table too). Every route needs a manager of the tournament's club; the public seat finder has no
+ * guard and no row.
  */
-import type { SeatingMutationDto } from "@shared/api/seating";
+import type { SeatingDto, SeatingMutationDto } from "@shared/api/seating";
 import type { Club } from "@shared/schema";
 import { createTable } from "../factories/seating";
 import { registeredPlayer, single, staffOf, tournamentIn, type RouteRow } from "./authz-matrix";
@@ -85,6 +86,16 @@ export const SEATING_ROUTE_ROWS: Record<string, RouteRow> = {
     guards: MANAGER,
     cases: single(staffOf(200), async ({ club }) => ({ path: path((await tournamentWithTable(club)).tournament.id, "seating/final-table"), json: {} })),
     missing: () => ({ path: path(UNKNOWN_ID, "seating/final-table"), json: {} }),
+  },
+  "POST /api/tournaments/:id/seating/open-table": {
+    guards: MANAGER,
+    // Sent with the seating's version as the club's owner reads it, as the advisor's Apply sends it.
+    cases: single(staffOf(201), async ({ club, staff }) => {
+      const { tournament } = await tournamentWithTable(club);
+      const seating = (await staff.owner.agent.get(path(tournament.id, "seating"))).body as SeatingDto;
+      return { path: path(tournament.id, "seating/open-table"), json: { expectedVersion: seating.version } };
+    }),
+    missing: () => ({ path: path(UNKNOWN_ID, "seating/open-table"), json: { expectedVersion: "00000000" } }),
   },
   "POST /api/tournaments/:id/seating/undo": {
     guards: MANAGER,

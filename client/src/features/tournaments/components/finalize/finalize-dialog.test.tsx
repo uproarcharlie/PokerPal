@@ -18,6 +18,7 @@ import {
   previewOf as preview,
   previewPrizePool,
 } from "@test/helpers/f1-tournaments";
+import { computePrizePool } from "@shared/domain/prize-pool";
 import { FinalizeDialog } from "./finalize-dialog";
 
 const warnings = ["The prize pool is not locked"];
@@ -70,6 +71,36 @@ describe("FinalizeDialog", () => {
     renderWithApp(<FinalizeDialog open onOpenChange={() => undefined} tournamentId="t1" />);
     expect(await screen.findByTestId("finalize-ap")).toHaveTextContent("$50");
     expect(screen.getByText("AP the club keeps")).toBeInTheDocument();
+  });
+
+  it("says where the money the prizes leave goes before finalizing: carried over, kept or added (round 5, item 16)", async () => {
+    // $500 in, $25 AP: $475 available. The pool fixed at $400 carries $75 over to the season's next tournament.
+    const breakdown = computePrizePool(
+      { buyInAmount: "100.00", rakeType: "fixed", rakeAmount: "5.00", payoutStructure: "standard", manualPrizePool: "400.00", prizeDifference: "carry" },
+      [{ buyIns: 2 }, { buyIns: 2 }, { buyIns: 1 }],
+    );
+    mockPreview(() => preview({ planHash: HASH_A, prizePool: { ...previewPrizePool, breakdown, carryTarget: "Winter League" } }));
+    renderDialog();
+
+    expect(await screen.findByTestId("finalize-summary")).toHaveTextContent("Prize pool $400· AP $25· Carried over to Winter League $75");
+    expect(screen.getByTestId("finalize-pool")).toHaveTextContent("$400");
+  });
+
+  it("opens full screen on a phone, Finalize kept in view under the plan", async () => {
+    mockPreview(() => preview({ planHash: HASH_A }));
+    renderDialog();
+
+    expect(await screen.findByRole("dialog", { name: "End Tournament" })).toBeInTheDocument();
+    expect(screen.getByTestId("finalize-sheet")).toHaveClass("w-full", "h-dvh");
+    expect(await screen.findByTestId("confirm-finalize")).toHaveClass("h-11");
+  });
+
+  it("shows no breakdown line when the prizes are exactly the money available", async () => {
+    mockPreview(() => preview({ planHash: HASH_A }));
+    renderDialog();
+
+    expect(await screen.findByTestId("finalize-pool")).toBeInTheDocument();
+    expect(screen.queryByTestId("finalize-summary")).not.toBeInTheDocument();
   });
 
   it("asks for the finishing order, previews it, and finalizes the plan it showed", async () => {

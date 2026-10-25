@@ -6,7 +6,11 @@ import type { ClockDisplaySettings } from "./api/clock"; // type-only: no runtim
 import type { PrizePoolSnapshot } from "./api/finalize"; // type-only: no runtime import cycle
 import type { AnteMode, BlindLevel, ClockStatus, ClockUndo } from "./domain/clock";
 import type { ReleaseReason } from "./domain/seating";
+import { AUTO_SEAT_MODES, type AutoSeatMode } from "./domain/table-advisor";
+import { TABLE_SHAPES, type TableShape } from "./domain/table-layout";
+import type { ClubTheme } from "./domain/theme";
 import { PAYOUT_STRUCTURE_KEYS } from "./domain/payouts";
+import type { CarriedIn, PrizeDifferenceChoice } from "./domain/prize-difference";
 
 // Clubs table
 export const clubs = pgTable("clubs", {
@@ -23,6 +27,12 @@ export const clubs = pgTable("clubs", {
   instagramUrl: text("instagram_url"),
   websiteUrl: text("website_url"),
   rakeLabel: text("rake_label"), // The club's name for its rake, e.g. "AP"; null or blank shows "Rake". Display only.
+  // Round 5 (migrations/0010): defaults for the club's tournaments' tables (null: 9 seats, oval), whether
+  // its QR sign-up requires a photo, and its colours (null: the LovePoker look; read with readTheme).
+  defaultSeatsPerTable: integer("default_seats_per_table"),
+  defaultTableShape: text("default_table_shape").$type<TableShape>(),
+  requireSignupPhoto: boolean("require_signup_photo").notNull().default(false),
+  theme: jsonb("theme").$type<ClubTheme>(),
   ownerId: varchar("owner_id").references(() => users.id, { onDelete: "set null" }), // Club owner
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => ({
@@ -133,11 +143,51 @@ export const tournaments = pgTable("tournaments", {
   finalizedBy: varchar("finalized_by"), // users.id, audit text (no FK)
   useClubAddress: boolean("use_club_address").default(true),
   address: text("address"),
+  // Seating settings (migrations/0011; shared/domain/table-advisor resolveSeatingSettings): null takes the
+  // club's default or the app's (9 seats, 2 starting tables, open the next when every table is full,
+  // seat new players as they register, oval).
+  seatsPerTable: integer("seats_per_table"),
+  startingTables: integer("starting_tables"),
+  openTableAt: integer("open_table_at"),
+  autoSeat: text("auto_seat").$type<AutoSeatMode>(),
+  tableShape: text("table_shape").$type<TableShape>(),
   createdAt: timestamp("created_at").defaultNow(),
+  // Round 5 item 16 (migrations/0013; shared/domain/prize-difference): where a difference between the prizes
+  // as set and the money available goes (null: the club keeps it), and the money carried into the pool from
+  // earlier tournaments (null: none), kept in step with prize_carry_overs by the carry-over service.
+  prizeDifference: text("prize_difference").$type<PrizeDifferenceChoice>(),
+  carriedIn: jsonb("carried_in").$type<CarriedIn[]>(),
 }, (table) => ({
   clubIdx: index("idx_tournaments_club_id").on(table.clubId),
   seasonIdx: index("idx_tournaments_season_id").on(table.seasonId),
   pointsSystemIdx: index("idx_tournaments_points_system_id").on(table.pointsSystemId),
+}));
+
+/**
+ * Prize money a finalized tournament carried over (migrations/0014; round 5 item 16): one row per source
+ * tournament, written by finalize when its TD chose "Carry it over", for its season's next tournament (or
+ * the club's, with no season) to add to its pool. `applied_to_tournament_id` is the tournament that took
+ * it (null: still free); that tournament's carried_in lists it.
+ */
+export const prizeCarryOvers = pgTable("prize_carry_overs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sourceTournamentId: varchar("source_tournament_id").notNull(),
+  sourceName: text("source_name").notNull(),
+  targetSeasonId: varchar("target_season_id"),
+  amountCents: integer("amount_cents").notNull(),
+  appliedToTournamentId: varchar("applied_to_tournament_id"),
+  appliedAt: timestamp("applied_at", { withTimezone: true, mode: "date" }),
+  appliedBy: varchar("applied_by"), // users.id, audit text (no FK)
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  createdBy: varchar("created_by"), // users.id, audit text (no FK)
+}, (table) => ({
+  sourceFk: foreignKey({ name: "fk_prize_carry_overs_source", columns: [table.sourceTournamentId], foreignColumns: [tournaments.id] }).onDelete("cascade"),
+  seasonFk: foreignKey({ name: "fk_prize_carry_overs_season", columns: [table.targetSeasonId], foreignColumns: [seasons.id] }).onDelete("set null"),
+  appliedToFk: foreignKey({ name: "fk_prize_carry_overs_applied_to", columns: [table.appliedToTournamentId], foreignColumns: [tournaments.id] }).onDelete("set null"),
+  sourceUq: unique("uq_prize_carry_overs_source").on(table.sourceTournamentId),
+  amountCk: check("ck_prize_carry_overs_amount", sql`amount_cents >= 0`),
+  appliedToIdx: index("idx_prize_carry_overs_applied_to").on(table.appliedToTournamentId),
+  seasonIdx: index("idx_prize_carry_overs_season").on(table.targetSeasonId),
 }));
 
 // Tournament registrations
@@ -273,6 +323,7 @@ export const tournamentTables = pgTable("tournament_tables", {
   status: text("status").$type<"active" | "broken">().notNull().default("active"),
   brokenAt: timestamp("broken_at", { withTimezone: true, mode: "date" }),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  shape: text("shape").$type<TableShape>(), // migrations/0012; null: the tournament's shape (resolveTableShape)
 }, (table) => ({
   tournamentFk: foreignKey({ name: "fk_tournament_tables_tournament", columns: [table.tournamentId], foreignColumns: [tournaments.id] }).onDelete("cascade"),
   numberUq: unique("uq_tournament_tables_number").on(table.tournamentId, table.tableNumber),
@@ -396,7 +447,10 @@ export const insertUserSchema = createInsertSchema(users, {
   lastLoginAt: true,
 });
 
-export const insertClubSchema = createInsertSchema(clubs).omit({
+export const insertClubSchema = createInsertSchema(clubs, {
+  defaultTableShape: z.enum(TABLE_SHAPES).nullable().optional(),
+  theme: z.custom<ClubTheme>().nullable().optional(),
+}).omit({
   id: true,
   createdAt: true,
 });
@@ -425,6 +479,8 @@ export const insertTournamentSchema = createInsertSchema(tournaments, {
   addonRakeAmount: z.union([z.string(), z.number(), z.null()]).transform(val => val === null ? null : String(val)).optional().nullable(),
   highHandAmount: z.union([z.string(), z.number(), z.null()]).transform(val => val === null ? null : String(val)).optional().nullable(),
   highHandRakeAmount: z.union([z.string(), z.number(), z.null()]).transform(val => val === null ? null : String(val)).optional().nullable(),
+  autoSeat: z.enum(AUTO_SEAT_MODES).nullable().optional(),
+  tableShape: z.enum(TABLE_SHAPES).nullable().optional(),
   rakeType: z.enum(["none", "percentage", "fixed"]).optional(),
   rebuyRakeType: z.enum(["none", "percentage", "fixed"]).optional(),
   addonRakeType: z.enum(["none", "percentage", "fixed"]).optional(),
@@ -445,6 +501,8 @@ export const insertTournamentSchema = createInsertSchema(tournaments, {
   prizePoolSnapshot: true,
   finalizedAt: true,
   finalizedBy: true,
+  prizeDifference: true,
+  carriedIn: true,
 });
 
 export const insertTournamentRegistrationSchema = createInsertSchema(tournamentRegistrations, {
@@ -518,6 +576,8 @@ export type InsertTournamentSeat = typeof tournamentSeats.$inferInsert;
 
 export type TournamentClock = typeof tournamentClocks.$inferSelect;
 export type InsertTournamentClock = typeof tournamentClocks.$inferInsert;
+
+export type PrizeCarryOver = typeof prizeCarryOvers.$inferSelect;
 
 export type AuditLogEntry = typeof auditLog.$inferSelect;
 export type InsertAuditLogEntry = typeof auditLog.$inferInsert;

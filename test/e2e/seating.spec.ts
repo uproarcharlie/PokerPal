@@ -36,7 +36,7 @@ test("a TD draws seats, moves a player, and a bust frees the seat that a restore
   await test.step("the TD sets up the tables and draws everyone a seat in one tap", async () => {
     await page.goto(`/admin/tournaments/${tournament.id}`);
     await page.getByRole("tab", { name: "Tables & Seating" }).click();
-    await expect(page.getByText("12 players still in. Suggested: 2 tables: 6 / 6.")).toBeVisible();
+    await expect(page.getByText("12 players still in. Start with 2 tables: 6 / 6.")).toBeVisible();
     await page.getByTestId("open-seating-setup").click();
 
     const setup = page.getByRole("dialog", { name: "Set up tables & draw seats" });

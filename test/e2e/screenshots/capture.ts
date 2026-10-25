@@ -135,6 +135,9 @@ for (const viewport of VIEWPORTS) {
       await page.goto(`/register/${demo.upcoming.id}`);
       await page.getByTestId("player-type-new").click();
       await page.getByTestId("step1-next").click();
+      await expect(page.getByRole("button", { name: "Take a selfie" })).toBeVisible();
+      await capture(page, "qr-signup-photo");
+      await page.getByTestId("photo-skip").click();
       await page.getByTestId("player-name").fill("Tama Rangi");
       await capture(page, "qr-signup-new");
 

@@ -19,6 +19,9 @@ import { conflictDisplay, useClockConfig } from "../staff-hooks";
 import { StructureChooser } from "./structure-chooser";
 import { boxGrid, NAME_COLUMN, StructureRow } from "./structure-row";
 
+/** A thumb's 44 px on a phone, where the structure is edited in a full-screen sheet. */
+const FOOT_BUTTON = "h-11 md:h-10";
+
 const STACKS = [
   { name: "startingStack", label: "Starting stack", description: "Needed for the chips in play and the average stack" },
   { name: "rebuyStack", label: "Re-buy stack", description: "Blank: the starting stack" },
@@ -33,6 +36,10 @@ interface StructureEditorProps {
   /** The id of the level the clock is on. */
   currentLevelId: string | null;
   timeZone?: string;
+  /** In a sheet of its own (a phone's Clock tab): no card round it, never folded. */
+  bare?: boolean;
+  /** Opens "Change the rest of the structure" (offered beside Show and edit). */
+  onChangeRest?: () => void;
 }
 
 /**
@@ -43,7 +50,7 @@ interface StructureEditorProps {
  * around the level it is on. Folded away once the clock has started (rarely touched in play, and long),
  * unless it holds unsaved changes, until the TD opens or folds it (TDN2-TV-CARD-BURIED).
  */
-export const StructureEditor = memo(function StructureEditor({ tournamentId, clubId, clock, currentLevelId, timeZone }: StructureEditorProps) {
+export const StructureEditor = memo(function StructureEditor({ tournamentId, clubId, clock, currentLevelId, timeZone, bare = false, onChangeRest }: StructureEditorProps) {
   const { toast } = useToast();
   const { save } = useClockConfig(tournamentId);
   const [base, setBase] = useState(() => ({ hash: clock.structureHash, presetKey: clock.presetKey }));
@@ -53,7 +60,7 @@ export const StructureEditor = memo(function StructureEditor({ tournamentId, clu
   const contentId = useId();
   const form = useForm<StructureFormValues>({ resolver: formResolver(structureFormSchema), defaultValues: structureValues(clock.structure) });
   const { control, register, formState } = form;
-  const open = unfolded ?? (clock.status === "idle" || formState.isDirty);
+  const open = bare || (unfolded ?? (clock.status === "idle" || formState.isDirty));
   const rows = useFieldArray({ control, name: "levels" });
   const [levels = [], anteMode = clock.structure.anteMode] = useWatch({ control, name: ["levels", "anteMode"] });
   const holdsLevel = clock.status === "running" || clock.status === "paused";
@@ -86,154 +93,169 @@ export const StructureEditor = memo(function StructureEditor({ tournamentId, clu
     }
   });
 
+  const editor = (
+    <>
+      <Form {...form}>
+        <form onSubmit={submit} noValidate className="space-y-6" aria-label="Blind structure">
+          {clock.structureHash !== base.hash ? (
+            <div role="status" className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-muted p-3 text-sm text-foreground">
+              The structure was changed on another device.
+              <Button type="button" size="sm" variant="outline" onClick={() => load(clock)}>
+                Load the latest (drops your changes)
+              </Button>
+            </div>
+          ) : null}
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <FormField
+              control={control}
+              name="anteMode"
+              render={({ field }) => (
+                <FormItem className="lg:col-span-1">
+                  <FormLabel>Antes</FormLabel>
+                  <FormControl>
+                    <NativeSelect {...field}>
+                      {ANTE_MODES.map((mode) => (
+                        <option key={mode} value={mode}>
+                          {ANTE_MODE_LABELS[mode]}
+                        </option>
+                      ))}
+                    </NativeSelect>
+                  </FormControl>
+                </FormItem>
+              )}
+            />
+            {STACKS.map((stack) => (
+              <FormField
+                key={stack.name}
+                control={control}
+                name={stack.name}
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{stack.label}</FormLabel>
+                    <FormControl>
+                      <Input inputMode="numeric" {...field} />
+                    </FormControl>
+                    <FormDescription>{stack.description}</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            ))}
+          </div>
+
+          <div>
+            <div className="flex gap-2 px-1" aria-hidden="true">
+              <span className={cn("hidden sm:block", NAME_COLUMN)} />
+              <div className={boxGrid(anteMode)}>
+                {["Small blind", "Big blind", ...(anteMode === "none" ? [] : [anteMode === "bb_ante" ? "BB ante" : "Ante"]), "Minutes"].map((heading) => (
+                  <span key={heading} className="text-xs font-semibold text-muted-foreground">
+                    {heading}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <ol role="list" aria-label="Levels and breaks" className="mt-1 space-y-1">
+              {rows.fields.map((row, index) => {
+                const current = row.levelId === currentLevelId;
+                return (
+                  <StructureRow
+                    key={row.id}
+                    index={index}
+                    kind={row.kind}
+                    title={rowTitle(rows.fields, index)}
+                    anteMode={anteMode}
+                    register={register}
+                    errors={formState.errors.levels}
+                    current={current}
+                    actions={{
+                      insertLevel: () => rows.insert(index + 1, suggestedRow(levels, anteMode, index)),
+                      insertBreak: () => rows.insert(index + 1, breakRow(levels)),
+                      moveUp: index > 0 ? () => rows.move(index, index - 1) : undefined,
+                      moveDown: index < rows.fields.length - 1 ? () => rows.move(index, index + 1) : undefined,
+                      remove: current && holdsLevel ? undefined : () => rows.remove(index),
+                      keptBecause: "The clock is on this level",
+                    }}
+                  />
+                );
+              })}
+            </ol>
+            {listProblem ? (
+              <p role="alert" className="mt-2 text-sm font-medium text-destructive">
+                {listProblem}
+              </p>
+            ) : null}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" className={FOOT_BUTTON} onClick={() => rows.append(suggestedRow(levels, anteMode))}>
+              <Plus aria-hidden="true" />
+              Add level
+            </Button>
+            <Button type="button" variant="outline" className={FOOT_BUTTON} onClick={() => rows.append(breakRow(levels))}>
+              <Plus aria-hidden="true" />
+              Add break
+            </Button>
+            <Button type="button" variant="ghost" className={FOOT_BUTTON} onClick={() => setReplacing(true)}>
+              Replace structure…
+            </Button>
+            <div className="flex w-full flex-wrap gap-2 sm:ml-auto sm:w-auto">
+              <Button type="button" variant="outline" className={FOOT_BUTTON} disabled={!formState.isDirty} onClick={() => load(clock)}>
+                Discard changes
+              </Button>
+              <Button type="submit" className={FOOT_BUTTON} busy={save.isPending} disabled={!formState.isDirty}>
+                Save structure
+              </Button>
+            </div>
+          </div>
+        </form>
+      </Form>
+
+      <Dialog open={replacing} onOpenChange={setReplacing}>
+        <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Replace the structure</DialogTitle>
+            <DialogDescription>The levels below are replaced with your choice; nothing changes on the clock until you save.</DialogDescription>
+          </DialogHeader>
+          <StructureChooser
+            clubId={clubId}
+            tournamentId={tournamentId}
+            timeZone={timeZone}
+            labels={{ preset: "Load", generator: "Load these levels", copy: "Load this structure" }}
+            pending={null}
+            onChoose={(structure, source) => replaceWith(structure, source)}
+          />
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+
+  if (bare) return <div className="space-y-4">{editor}</div>;
+
   return (
     <Card>
-      <CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
+      <CardHeader className="flex-row flex-wrap items-start justify-between gap-3 space-y-0">
         <div className="space-y-1.5">
           <CardTitle>Blind structure</CardTitle>
           <CardDescription>
             {rowsSummary(levels)}
           </CardDescription>
         </div>
-        <Button type="button" variant="outline" size="sm" aria-expanded={open} aria-controls={contentId} onClick={() => setUnfolded(!open)}>
-          <ChevronDown aria-hidden="true" className={cn("transition-transform", open && "rotate-180")} />
-          {open ? "Hide" : "Show and edit"}
-          <span className="sr-only"> the blind structure</span>
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {onChangeRest ? (
+            <Button type="button" variant="outline" size="sm" onClick={onChangeRest} disabled={clock.status === "finished"}>
+              Change the rest…
+            </Button>
+          ) : null}
+          <Button type="button" variant="outline" size="sm" aria-expanded={open} aria-controls={contentId} onClick={() => setUnfolded(!open)}>
+            <ChevronDown aria-hidden="true" className={cn("transition-transform", open && "rotate-180")} />
+            {open ? "Hide" : "Show and edit"}
+            <span className="sr-only"> the blind structure</span>
+          </Button>
+        </div>
       </CardHeader>
       <CardContent id={contentId} hidden={!open} className="px-3 sm:px-6">
-        <Form {...form}>
-          <form onSubmit={submit} noValidate className="space-y-6" aria-label="Blind structure">
-            {clock.structureHash !== base.hash ? (
-              <div role="status" className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-muted p-3 text-sm text-foreground">
-                The structure was changed on another device.
-                <Button type="button" size="sm" variant="outline" onClick={() => load(clock)}>
-                  Load the latest (drops your changes)
-                </Button>
-              </div>
-            ) : null}
-
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
-              <FormField
-                control={control}
-                name="anteMode"
-                render={({ field }) => (
-                  <FormItem className="lg:col-span-1">
-                    <FormLabel>Antes</FormLabel>
-                    <FormControl>
-                      <NativeSelect {...field}>
-                        {ANTE_MODES.map((mode) => (
-                          <option key={mode} value={mode}>
-                            {ANTE_MODE_LABELS[mode]}
-                          </option>
-                        ))}
-                      </NativeSelect>
-                    </FormControl>
-                  </FormItem>
-                )}
-              />
-              {STACKS.map((stack) => (
-                <FormField
-                  key={stack.name}
-                  control={control}
-                  name={stack.name}
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{stack.label}</FormLabel>
-                      <FormControl>
-                        <Input inputMode="numeric" {...field} />
-                      </FormControl>
-                      <FormDescription>{stack.description}</FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              ))}
-            </div>
-
-            <div>
-              <div className="flex gap-2 px-1" aria-hidden="true">
-                <span className={cn("hidden sm:block", NAME_COLUMN)} />
-                <div className={boxGrid(anteMode)}>
-                  {["Small blind", "Big blind", ...(anteMode === "none" ? [] : [anteMode === "bb_ante" ? "BB ante" : "Ante"]), "Minutes"].map((heading) => (
-                    <span key={heading} className="text-xs font-semibold text-muted-foreground">
-                      {heading}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <ol role="list" aria-label="Levels and breaks" className="mt-1 space-y-1">
-                {rows.fields.map((row, index) => {
-                  const current = row.levelId === currentLevelId;
-                  return (
-                    <StructureRow
-                      key={row.id}
-                      index={index}
-                      kind={row.kind}
-                      title={rowTitle(rows.fields, index)}
-                      anteMode={anteMode}
-                      register={register}
-                      errors={formState.errors.levels}
-                      current={current}
-                      actions={{
-                        insertLevel: () => rows.insert(index + 1, suggestedRow(levels, anteMode, index)),
-                        insertBreak: () => rows.insert(index + 1, breakRow(levels)),
-                        moveUp: index > 0 ? () => rows.move(index, index - 1) : undefined,
-                        moveDown: index < rows.fields.length - 1 ? () => rows.move(index, index + 1) : undefined,
-                        remove: current && holdsLevel ? undefined : () => rows.remove(index),
-                        keptBecause: "The clock is on this level",
-                      }}
-                    />
-                  );
-                })}
-              </ol>
-              {listProblem ? (
-                <p role="alert" className="mt-2 text-sm font-medium text-destructive">
-                  {listProblem}
-                </p>
-              ) : null}
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="outline" onClick={() => rows.append(suggestedRow(levels, anteMode))}>
-                <Plus aria-hidden="true" />
-                Add level
-              </Button>
-              <Button type="button" variant="outline" onClick={() => rows.append(breakRow(levels))}>
-                <Plus aria-hidden="true" />
-                Add break
-              </Button>
-              <Button type="button" variant="ghost" onClick={() => setReplacing(true)}>
-                Replace structure…
-              </Button>
-              <div className="flex w-full flex-wrap gap-2 sm:ml-auto sm:w-auto">
-                <Button type="button" variant="outline" disabled={!formState.isDirty} onClick={() => load(clock)}>
-                  Discard changes
-                </Button>
-                <Button type="submit" busy={save.isPending} disabled={!formState.isDirty}>
-                  Save structure
-                </Button>
-              </div>
-            </div>
-          </form>
-        </Form>
-
-        <Dialog open={replacing} onOpenChange={setReplacing}>
-          <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-3xl">
-            <DialogHeader>
-              <DialogTitle>Replace the structure</DialogTitle>
-              <DialogDescription>The levels below are replaced with your choice; nothing changes on the clock until you save.</DialogDescription>
-            </DialogHeader>
-            <StructureChooser
-              clubId={clubId}
-              tournamentId={tournamentId}
-              timeZone={timeZone}
-              labels={{ preset: "Load", generator: "Load these levels", copy: "Load this structure" }}
-              pending={null}
-              onChoose={(structure, source) => replaceWith(structure, source)}
-            />
-          </DialogContent>
-        </Dialog>
+        {editor}
       </CardContent>
     </Card>
   );

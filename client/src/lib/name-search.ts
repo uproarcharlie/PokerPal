@@ -22,3 +22,8 @@ export function nameMatches(name: string, typed: string): boolean {
   const nameWords = foldName(name).split(" ");
   return words.every((word) => nameWords.some((part) => part.startsWith(word)));
 }
+
+/** The items whose name matches what was typed (nameMatches), or every item while nothing is typed. */
+export function matchingNames<T>(items: readonly T[], nameOf: (item: T) => string, typed: string): readonly T[] {
+  return foldName(typed) === "" ? items : items.filter((item) => nameMatches(nameOf(item), typed));
+}

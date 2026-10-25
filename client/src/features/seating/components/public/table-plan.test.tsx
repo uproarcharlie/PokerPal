@@ -19,8 +19,8 @@ describe("TablePlan", () => {
       "Seat 3: Bob Jones, not paid",
       "Seat 4, empty",
     ]);
-    // The first name under the photo; the full name is read once.
-    expect(within(plan).getByText("Aroha")).toHaveAttribute("class", expect.stringContaining("truncate"));
+    // Under the photo the name as every drawing writes it, the TV's too (R5REV3-CQ-07); the full name is read once.
+    expect(within(plan).getByText("Aroha N.")).toHaveAttribute("class", expect.stringContaining("truncate"));
   });
 
   it("makes every seat a button for the TD, the one picked up pressed", async () => {
@@ -44,6 +44,24 @@ describe("TablePlan", () => {
     await user.click(seat);
     expect(onSeatPress).not.toHaveBeenCalled();
     expect(seat).not.toBeDisabled();
+  });
+
+  it("draws the table in its shape (round 5): an oval by default, a rectangle's felt as a rounded rectangle", () => {
+    const { container, rerender } = render(<TablePlan name="Table 2" seatCount={9} seats={seats} />);
+    expect(screen.getByRole("group", { name: "Table 2: 2 of 9 seats taken" })).toHaveAttribute("data-shape", "oval");
+    expect(container.querySelectorAll("svg rect")).toHaveLength(0);
+
+    rerender(<TablePlan name="Table 2" seatCount={9} shape="rectangle" seats={seats} />);
+    expect(screen.getByRole("group", { name: "Table 2: 2 of 9 seats taken" })).toHaveAttribute("data-shape", "rectangle");
+    expect(container.querySelectorAll("svg rect")).toHaveLength(2);
+    expect(screen.getAllByRole("listitem")).toHaveLength(9);
+  });
+
+  it("marks the seats new arrivals just sat down in", () => {
+    render(<TablePlan name="Table 2" seatCount={4} seats={seats} fresh={new Set([3])} />);
+
+    expect(screen.getByText("Seat 3: Bob Jones, not paid").parentElement?.innerHTML).toContain("ring-status-live-foreground");
+    expect(screen.getByText("Seat 1: Aroha Ngata").parentElement?.innerHTML).not.toContain("ring-status-live-foreground");
   });
 
   it("names each seat as the TD's screen words it", () => {

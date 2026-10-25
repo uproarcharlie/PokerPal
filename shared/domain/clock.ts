@@ -370,6 +370,19 @@ export type ClockAction =
  */
 export const CLOCK_KEY_HEADER = "X-Clock-Key";
 
+/**
+ * The TV's edge margins (TV overscan): the percent of the screen's width and height kept clear on each
+ * side, for a TV that crops its picture's edges (round 5, item 22). Part of each clock's display
+ * settings (shared/api/clock.ts), here without zod for the TV.
+ */
+export const EDGE_MARGINS = [0, 2.5, 5] as const;
+export type EdgeMargin = (typeof EDGE_MARGINS)[number];
+/** Many TVs crop 2–5% of the picture: the TV keeps 2.5% clear unless the TD chooses otherwise. */
+export const DEFAULT_EDGE_MARGIN: EdgeMargin = 2.5;
+
+/** How loud the TV plays its sounds (0–1) unless the TD chooses otherwise (round 5, item 20). */
+export const DEFAULT_SOUND_VOLUME = 0.8;
+
 /** The activity_log event types the clock writes (auto-advance writes none). */
 export const CLOCK_EVENT_TYPES = [
   "clock_started",

@@ -12,9 +12,12 @@ import type {
 } from "@shared/api/pending-actions";
 import type { FinalizeInput, FinalizePreviewDto, FinalizePreviewInput, FinalizeResultDto } from "@shared/api/finalize";
 import type {
+  AdjustCountsInput,
   ConfirmedRegistrationDto,
   ManagedRegistration,
+  PaymentConfirmedDto,
   PendingRegistrationDto,
+  RegistrationCreatedDto,
   StaffRegistrationInput,
   UpdateRegistrationInput,
 } from "@shared/api/registrations";
@@ -69,9 +72,9 @@ export const updateTournament = (id: string, input: UpdateTournamentInput) =>
 
 export const deleteTournament = (id: string) => apiSend<{ success: true; message: string }>("DELETE", tournamentPath(id));
 
-/** The TD's desk: a player who has played before, with their opening entries. */
+/** The TD's desk: a player who has played before, with their opening entries, and where auto-seat put them (round 5). */
 export const registerPlayer = (tournamentId: string, input: StaffRegistrationInput) =>
-  apiSend<ManagedRegistration>("POST", `${tournamentPath(tournamentId)}/registrations`, input);
+  apiSend<RegistrationCreatedDto>("POST", `${tournamentPath(tournamentId)}/registrations`, input);
 
 export const updateRegistration = (id: string, input: UpdateRegistrationInput) =>
   apiSend<ManagedRegistration>("PUT", `/api/registrations/${segment(id)}`, input);
@@ -79,8 +82,16 @@ export const updateRegistration = (id: string, input: UpdateRegistrationInput) =
 /** A mistaken sign-up taken out again (only while nothing has happened to the entry). */
 export const removeRegistration = (id: string) => apiSend("DELETE", `/api/registrations/${segment(id)}`);
 
+/** Confirms a payment; under "once they've paid" the answer says where auto-seat put the player (round 5). */
 export const confirmPayment = (registrationId: string) =>
-  apiSend<ManagedRegistration>("PATCH", `/api/registrations/${segment(registrationId)}/confirm-payment`);
+  apiSend<PaymentConfirmedDto>("PATCH", `/api/registrations/${segment(registrationId)}/confirm-payment`);
+
+/**
+ * A re-buy or add-on sold at the desk (or a count corrected): added on the server under its lock, with
+ * the house rules and the prize-pool lock checked there. A re-buy by a player who is out puts them back in.
+ */
+export const adjustCounts = (registrationId: string, input: AdjustCountsInput) =>
+  apiSend<ManagedRegistration>("POST", `/api/registrations/${segment(registrationId)}/counts`, input);
 
 /** Applies a player's request exactly once; `reenter` answers 409 REBUY_BEFORE_ELIMINATION. */
 export const confirmPendingAction = (actionId: string, input: ConfirmPendingActionInput = {}) =>

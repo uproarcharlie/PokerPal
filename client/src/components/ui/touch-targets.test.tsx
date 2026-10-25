@@ -1,4 +1,8 @@
-/** The shared controls TDs tap on a phone are 40 px or more (phase3-conventions §3.11, MA-08). */
+/**
+ * The shared controls TDs tap on a phone are 40 px or more (phase3-conventions §3.11, MA-08), the close
+ * button 44 px (round 5). Each one's drawn size on the TD's phone page is measured in a browser by
+ * test/e2e/touch-targets.spec.ts (R5REV3-CQ-14).
+ */
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
@@ -10,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "./sheet";
 
 describe("touch targets", () => {
-  it("gives a dialog's and a sheet's close button a 40 px box", () => {
+  it("gives a dialog's and a sheet's close button a 44 px box", () => {
     render(
       <>
         <Dialog open>
@@ -28,7 +32,7 @@ describe("touch targets", () => {
       </>,
     );
 
-    for (const close of screen.getAllByRole("button", { name: "Close", hidden: true })) expect(close).toHaveClass("h-10", "w-10");
+    for (const close of screen.getAllByRole("button", { name: "Close", hidden: true })) expect(close).toHaveClass("h-11", "w-11");
   });
 
   it("makes each menu item 40 px tall on a phone", async () => {

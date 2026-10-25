@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Pencil, Percent, SlidersHorizontal } from "lucide-react";
+import { Pencil, Percent, SlidersHorizontal, Trophy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LoadingRows, QueryState } from "@/components/shared/query-state";
@@ -12,10 +12,13 @@ import { isClosedStatus } from "@shared/domain/tournaments";
 import { usePrizePool } from "../hooks";
 import { ApAdjustDialog } from "./ap-adjust-dialog";
 import { FrozenBreakdown, LiveBreakdown } from "./ap-breakdown";
+import { CarryOverPanel } from "./carry-over-panel";
+import { NoApTonight } from "./no-ap-tonight";
+import { PayoutEditorSheet } from "./payout-editor-sheet";
 import { RakeLabelDialog } from "./rake-label-dialog";
 import { RakeRatesSheet } from "./rake-rates-sheet";
 
-type Editor = "adjust" | "rates" | "rename";
+type Editor = "adjust" | "rates" | "rename" | "payouts";
 
 function description(tournament: TournamentDetailDto, prizePool: PrizePoolDto | undefined): string {
   if (tournament.status === "completed") return "Finalized — showing what was paid.";
@@ -27,9 +30,9 @@ function description(tournament: TournamentDetailDto, prizePool: PrizePoolDto | 
 /**
  * The tournament's AP (the club's name for its rake): the AP each rule takes, the manual AP total for a
  * low turnout, and what the club keeps (or adds to a pool fixed by hand), as the server works them out;
- * the prize pool card beside it shows what came in and the pool. The club's staff adjust it, change the
- * rates and rename it while the tournament is open; once it is completed the panel shows what finalize
- * froze.
+ * the prize pool card beside it shows what came in and the pool. The club's staff take the AP off for
+ * the night in one tap, adjust it, change the rates, rename it and edit the payouts while the
+ * tournament is open; once it is completed the panel shows what finalize froze.
  */
 export function ApPanel({ tournament }: { tournament: TournamentDetailDto }) {
   const prizePool = usePrizePool(tournament.id, { follow: tournament });
@@ -49,17 +52,24 @@ export function ApPanel({ tournament }: { tournament: TournamentDetailDto }) {
           </CardTitle>
           <p className="mt-1 text-sm text-muted-foreground">{description(tournament, prizePool.data)}</p>
         </div>
+        {prizePool.data && !isClosedStatus(tournament.status) ? (
+          <NoApTonight tournament={tournament} prizePool={prizePool.data} label={label} canEdit={canEdit} />
+        ) : null}
         {canEdit ? (
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => setEditor("adjust")} data-testid="adjust-ap">
+            <Button variant="outline" className="h-11" onClick={() => setEditor("adjust")} data-testid="adjust-ap">
               <SlidersHorizontal aria-hidden="true" />
               Adjust {label}
             </Button>
-            <Button variant="outline" onClick={() => setEditor("rates")} data-testid="edit-ap-rates">
+            <Button variant="outline" className="h-11" onClick={() => setEditor("rates")} data-testid="edit-ap-rates">
               Edit {label} rates
             </Button>
+            <Button variant="outline" className="h-11" onClick={() => setEditor("payouts")} data-testid="edit-payouts">
+              <Trophy aria-hidden="true" />
+              Edit payouts
+            </Button>
             {club.data ? (
-              <Button variant="outline" onClick={() => setEditor("rename")} data-testid="rename-ap">
+              <Button variant="outline" className="h-11" onClick={() => setEditor("rename")} data-testid="rename-ap">
                 <Pencil aria-hidden="true" />
                 Rename {label}
               </Button>
@@ -69,7 +79,12 @@ export function ApPanel({ tournament }: { tournament: TournamentDetailDto }) {
       </CardHeader>
       <CardContent className="p-4 sm:p-6">
         <QueryState query={prizePool} loading={<LoadingRows rows={5} />} errorTitle={`The ${label} could not be loaded`}>
-          {(pool) => <PanelBody tournament={tournament} prizePool={pool} label={label} timeZone={clubTimeZone(club.data)} />}
+          {(pool) => (
+            <div className="space-y-4">
+              <PanelBody tournament={tournament} prizePool={pool} label={label} timeZone={clubTimeZone(club.data)} />
+              <CarryOverPanel tournament={tournament} prizePool={pool} />
+            </div>
+          )}
         </QueryState>
       </CardContent>
 
@@ -78,6 +93,7 @@ export function ApPanel({ tournament }: { tournament: TournamentDetailDto }) {
         <>
           <ApAdjustDialog tournament={tournament} label={label} {...editorProps("adjust")} />
           <RakeRatesSheet tournament={tournament} label={label} {...editorProps("rates")} />
+          <PayoutEditorSheet tournament={tournament} {...editorProps("payouts")} />
           {club.data ? <RakeLabelDialog club={club.data} {...editorProps("rename")} /> : null}
         </>
       ) : null}

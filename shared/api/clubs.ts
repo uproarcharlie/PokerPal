@@ -1,6 +1,9 @@
 /** /api/clubs/*: club profile, club staff (owner + managers). Public reads use ClubDto (shared/api/public). */
 import { z } from "zod";
-import { httpUrlSchema, idSchema, imageUrlSchema, optionalText, requiredText } from "./common";
+import { SEATING_LIMITS } from "../domain/seating";
+import { TABLE_SHAPES } from "../domain/table-layout";
+import { readTheme, themeProblems, type ClubTheme } from "../domain/theme";
+import { httpUrlSchema, idSchema, imageUrlSchema, nullableIntegerSchema, optionalText, requiredText } from "./common";
 import { accountEmailSchema } from "./auth";
 
 /**
@@ -46,6 +49,18 @@ export const rakeLabelSchema = optionalText(16);
 export const timezoneSchema = optionalText(64);
 
 /**
+ * clubs.theme (round 5): checked by shared/domain/theme themeProblems (version 1, a known preset or
+ * null, colours as #RRGGBB, nothing else) and stored with its colours in upper case. Null goes back
+ * to the LovePoker look.
+ */
+export const clubThemeSchema = z
+  .unknown()
+  .superRefine((value, ctx) => {
+    for (const problem of themeProblems(value)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: problem.path, message: problem.message });
+  })
+  .transform((value) => readTheme(value) as ClubTheme);
+
+/**
  * Club fields staff may write. `description` is rich text: the server sanitises it to an allowlist of
  * tags and http(s)/mailto links before storing (SEC-08), so what it returns may differ from the input.
  * Never accepted: ownerId (PUT /api/clubs/:id/owner), id, createdAt.
@@ -63,6 +78,11 @@ const clubFields = {
   instagramUrl: httpUrlSchema,
   websiteUrl: httpUrlSchema,
   rakeLabel: rakeLabelSchema,
+  /** Round 5: the club's tournaments' tables (null: 9 seats, oval), its QR sign-up's photo rule, and its colours. */
+  defaultSeatsPerTable: nullableIntegerSchema(SEATING_LIMITS.minSeats, SEATING_LIMITS.maxSeats),
+  defaultTableShape: z.enum(TABLE_SHAPES).nullable().optional(),
+  requireSignupPhoto: z.boolean().optional(),
+  theme: clubThemeSchema.nullable().optional(),
 };
 
 /**

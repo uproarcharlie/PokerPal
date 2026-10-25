@@ -16,9 +16,13 @@ import type { TournamentListItemDto } from "@shared/api/tournaments";
 type Column = ResponsiveColumn<TournamentListItemDto>;
 type ClubOf = (tournament: TournamentListItemDto) => ClubDto | undefined;
 
-/** Paid entries for the club's staff, else everyone registered, out of the most allowed. */
-export const playersText = (tournament: TournamentListItemDto) =>
-  `${tournament.confirmedPlayerCount ?? tournament.registeredCount}/${tournament.maxPlayers}`;
+/**
+ * Paid entries for the club's staff, else the field, out of the most allowed, and the waiting list
+ * behind a full field ("18/18 · 1 waiting": round 5, item 15), as the server counts it.
+ */
+export function playersText({ registeredCount, waitingListCount, confirmedPlayerCount, maxPlayers }: TournamentListItemDto): string {
+  return `${confirmedPlayerCount ?? registeredCount - waitingListCount}/${maxPlayers}${waitingListCount > 0 ? ` · ${waitingListCount} waiting` : ""}`;
+}
 
 export function clubColumn(clubOf: ClubOf): Column {
   return {

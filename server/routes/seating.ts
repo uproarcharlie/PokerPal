@@ -6,6 +6,7 @@ import {
   createTablesSchema,
   drawSeatsSchema,
   finalTableSchema,
+  openTableSchema,
   seatingSetupSchema,
   undoSeatingSchema,
   unseatSchema,
@@ -16,6 +17,7 @@ import {
   type CreateTablesInput,
   type DrawSeatsInput,
   type FinalTableInput,
+  type OpenTableInput,
   type SeatingSetupInput,
   type UndoSeatingInput,
   type UnseatInput,
@@ -33,6 +35,7 @@ import {
   drawSeats,
   getPublicSeating,
   getSeating,
+  openTable,
   removeTable,
   setUpSeating,
   undoSeatingChange,
@@ -140,6 +143,15 @@ export function seatingRoutes(): Router {
     validateBody(finalTableSchema),
     asyncHandler<TournamentParams, unknown, FinalTableInput>(async (req, res) => {
       res.json(await drawFinalTable(req, req.params.id, req.body));
+    }),
+  );
+
+  router.post(
+    "/api/tournaments/:id/seating/open-table",
+    requireClubManager(clubFrom.tournament()),
+    validateBody(openTableSchema),
+    asyncHandler<TournamentParams, unknown, OpenTableInput>(async (req, res) => {
+      res.status(201).json(await openTable(req, req.params.id, req.body));
     }),
   );
 

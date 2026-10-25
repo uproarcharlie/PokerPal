@@ -4,6 +4,7 @@ import type { Cents } from "@shared/domain/money";
 import { formatMoney, ordinal } from "@/lib/format";
 import { undistributedNote } from "@/lib/prize-pool";
 import { cn } from "@/lib/utils";
+import { LINE, px, type MoneyPlan, type MoneyText } from "./screen-plan";
 
 /** How many places the TV lists beside the clock (the payouts overlay lists them all). */
 export const PAYOUTS_SHOWN = 5;
@@ -25,64 +26,97 @@ export function unpaidNote(money: Pick<Money, "netCents" | "payouts">, entrants:
   return undistributedNote({ source: "live", undistributedCents: unpaidCents(money) }, entrants);
 }
 
+/** Said where the pool would be while the TD shows it only once it is locked. */
+export const POOL_HIDDEN_NOTE = "The prize pool is shown once it is locked";
+
+/**
+ * What the money panel says, for the screen to plan its room: the pool ("est." while it can still
+ * change), the top places, the pool's breakdown (what was carried in, what the club keeps, what is
+ * carried over, what the club adds), the club's take under its own name ("AP") or what the club adds
+ * to a guaranteed pool, and what of the pool no place pays yet; null when there is nothing to say.
+ */
+export function moneyText(money: Money, entrants: number, showPrizePool: ClockDisplaySettings["showPrizePool"] | null): MoneyText | null {
+  const hiddenUntilLocked = !money.show && showPrizePool !== "never";
+  const shown = money.show && money.netCents !== null;
+  const ap = money.apCents !== null ? { label: money.clubAddedCents !== null ? "Added by the club" : money.rakeLabel, amount: formatMoney(money.clubAddedCents ?? money.apCents) } : null;
+  if (!shown && !hiddenUntilLocked && !ap) return null;
+  return {
+    pool: shown ? { label: money.estimated ? "Prize pool est." : "Prize pool", amount: formatMoney(money.netCents ?? 0) } : null,
+    payouts: shown ? (money.payouts ?? []).slice(0, PAYOUTS_SHOWN).map((payout) => ({ place: ordinal(payout.position), amount: formatMoney(payout.amountCents) })) : [],
+    lines: shown ? (money.lines ?? []).map((line) => ({ label: line.label, amount: formatMoney(line.cents) })) : [],
+    ap,
+    note: shown ? unpaidNote(money, entrants) : hiddenUntilLocked ? POOL_HIDDEN_NOTE : null,
+  };
+}
+
+
 interface DisplayMoneyProps {
   money: Money;
-  /** Players entered: the unpaid part of the pool is said in their number. */
-  entrants: number;
-  /** The clock's setting, to say when a hidden pool will be shown; null without a clock. */
-  showPrizePool: ClockDisplaySettings["showPrizePool"] | null;
+  text: MoneyText;
+  /** The screen plan's money: what fits, and the sizes. */
+  plan: MoneyPlan;
   className?: string;
 }
 
 /**
- * The prize pool ("est." while it can still change), the top places (and what of the pool no place is
- * paid yet), and the club's take under its own name ("AP"), or what the club adds to a guaranteed
- * pool, when the TD chose to show it. All amounts are the server's.
+ * The prize pool, the top places that fit, the pool's breakdown (and what of the pool no place is paid
+ * yet), and the club's take under its own name ("AP"), or what the club adds to a guaranteed pool, when
+ * the TD chose to show it. All amounts are the server's.
  */
-export function DisplayMoney({ money, entrants, showPrizePool, className }: DisplayMoneyProps) {
-  const payouts = money.payouts?.slice(0, PAYOUTS_SHOWN) ?? [];
-  const hiddenUntilLocked = !money.show && showPrizePool !== "never";
-  const unpaid = unpaidNote(money, entrants);
-  if (!money.show && !hiddenUntilLocked && money.apCents === null) return null;
-
+export function DisplayMoney({ money, text, plan, className }: DisplayMoneyProps) {
+  const pad = `${px(plan.padY)} ${px(plan.padX)}`;
+  const payouts = text.payouts.slice(0, plan.payouts);
+  const lines = text.lines.slice(0, plan.lines);
   return (
-    <section aria-label="Prize pool" className={cn("space-y-[1vh]", className)} data-testid="display-money">
-      {money.show && money.netCents !== null ? (
-        <div className="rounded-lg border border-border bg-card/60 px-4 py-[1vh]">
-          <p className="flex items-center gap-2 text-[clamp(0.75rem,min(1.3vw,1.9vh),1.25rem)] font-semibold uppercase leading-tight tracking-wider text-muted-foreground">
+    <section aria-label="Prize pool" className={cn("flex min-w-0 flex-col", className)} style={{ gap: px(plan.gap) }} data-testid="display-money">
+      {plan.pool && text.pool ? (
+        <div className="rounded-lg border border-border bg-card/60" style={{ padding: pad }}>
+          <p className="flex items-center gap-2 truncate font-bold uppercase tracking-wider text-muted-foreground" style={{ fontSize: px(plan.label), lineHeight: LINE.label }}>
             Prize pool
             {money.estimated ? <span className="rounded border border-border px-1.5 text-[0.8em] normal-case tracking-normal">est.</span> : null}
           </p>
-          <p className="text-[clamp(1.6rem,min(4vw,5.4vh),3.75rem)] font-bold leading-tight tabular-nums text-accent-text">{formatMoney(money.netCents)}</p>
+          <p className="truncate font-extrabold tabular-nums text-accent-text" style={{ fontSize: px(plan.amount), lineHeight: 1.1 }}>
+            {text.pool.amount}
+          </p>
           {payouts.length > 0 ? (
-            <ol role="list" className="mt-1 space-y-0.5 text-[clamp(1rem,min(1.8vw,2.6vh),1.75rem)] leading-snug" aria-label="Payouts">
+            <ol role="list" aria-label="Payouts" style={{ fontSize: px(plan.row), lineHeight: LINE.row }}>
               {payouts.map((payout) => (
-                <li key={payout.position} className="flex justify-between gap-4 tabular-nums">
-                  <span className="text-muted-foreground">{ordinal(payout.position)}</span>
-                  <span className="font-semibold text-foreground">{formatMoney(payout.amountCents)}</span>
+                <li key={payout.place} className="flex justify-between gap-4 tabular-nums">
+                  <span className="font-semibold text-muted-foreground">{payout.place}</span>
+                  <span className="font-bold text-foreground">{payout.amount}</span>
                 </li>
               ))}
             </ol>
           ) : null}
-          {unpaid ? (
-            <p className="mt-1 text-[clamp(0.8rem,min(1.3vw,1.9vh),1.2rem)] leading-snug text-muted-foreground" data-testid="display-unpaid">
-              {unpaid}
+          {lines.length > 0 ? (
+            <ul role="list" aria-label="Prize pool breakdown" style={{ fontSize: px(plan.small), lineHeight: LINE.row }} data-testid="display-pool-lines">
+              {lines.map((line, index) => (
+                <li key={`${index}-${line.label}`} className="flex justify-between gap-4 tabular-nums">
+                  <span className="min-w-0 truncate font-semibold text-muted-foreground">{line.label}</span>
+                  <span className="shrink-0 font-bold text-foreground">{line.amount}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {plan.note && text.note ? (
+            <p className="line-clamp-3 font-semibold text-muted-foreground" style={{ fontSize: px(plan.small), lineHeight: LINE.row }} data-testid="display-unpaid">
+              {text.note}
             </p>
           ) : null}
         </div>
-      ) : hiddenUntilLocked ? (
-        <p className="rounded-lg border border-dashed border-border px-4 py-[1vh] text-[clamp(0.9rem,1.5vw,1.4rem)] text-muted-foreground">
-          The prize pool is shown once it is locked
+      ) : plan.note && text.note ? (
+        <p className="line-clamp-3 rounded-lg border border-dashed border-border font-semibold text-muted-foreground" style={{ fontSize: px(plan.small), lineHeight: LINE.row, padding: pad }}>
+          {text.note}
         </p>
       ) : null}
-      {money.apCents !== null ? (
+      {plan.ap && text.ap ? (
         // A pool guaranteed above what came in leaves the club no AP: the room is told what the club adds instead.
-        <div className="rounded-lg border border-border bg-card/60 px-4 py-[1vh]" data-testid="display-ap">
-          <p className="text-[clamp(0.75rem,min(1.3vw,1.9vh),1.25rem)] font-semibold uppercase leading-tight tracking-wider text-muted-foreground">
-            {money.clubAddedCents !== null ? "Added by the club" : money.rakeLabel}
+        <div className="rounded-lg border border-border bg-card/60" style={{ padding: pad }} data-testid="display-ap">
+          <p className="truncate font-bold uppercase tracking-wider text-muted-foreground" style={{ fontSize: px(plan.label), lineHeight: LINE.label }}>
+            {text.ap.label}
           </p>
-          <p className="text-[clamp(1.2rem,min(2.4vw,3.4vh),2.25rem)] font-bold leading-tight tabular-nums text-foreground">
-            {formatMoney(money.clubAddedCents ?? money.apCents)}
+          <p className="truncate font-extrabold tabular-nums text-foreground" style={{ fontSize: px(plan.label * (5 / 3)), lineHeight: 1.1 }}>
+            {text.ap.amount}
           </p>
         </div>
       ) : null}

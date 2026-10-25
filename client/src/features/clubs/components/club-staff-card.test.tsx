@@ -114,7 +114,8 @@ describe("ClubStaffCard", () => {
       await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
       expect(screen.queryByRole("heading", { name: "Invitations waiting to be accepted" })).not.toBeInTheDocument();
       await waitFor(() => expect(screen.getByRole("heading", { name: "Managers", level: 2 })).toHaveFocus());
-      expect(await screen.findByText("Invitation withdrawn")).toBeInTheDocument();
+      // One toast for each invitation withdrawn: they stack.
+      expect(await screen.findAllByText("Invitation withdrawn")).toHaveLength(2);
     });
 
     it("moves focus to the new link, ready to copy, instead of leaving it on a disabled Invite", async () => {

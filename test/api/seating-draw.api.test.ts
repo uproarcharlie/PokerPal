@@ -77,7 +77,7 @@ describe("POST /api/tournaments/:id/seating/setup", () => {
     expect(occupancy(body.seating).sort()).toEqual([7, 7, 7]);
     expectSoundSeating(body.seating, registrations.slice(0, 21).map((r) => r.id));
     expect(await activity(tournament.id)).toEqual([
-      { eventType: "tables_added", description: "Added 3 tables (9 seats)", playerId: null, data: { tableNumbers: [1, 2, 3], seatCount: 9 } },
+      { eventType: "tables_added", description: "Added 3 tables (9 seats)", playerId: null, data: { tableNumbers: [1, 2, 3], seatCount: 9, shape: "oval" } },
       {
         eventType: "seating_drawn",
         description: "Seats drawn for 21 players",
@@ -110,17 +110,26 @@ describe("POST /api/tournaments/:id/seating/setup", () => {
     expect(body.seating.stats).toMatchObject({ unseated: 3, unconfirmedUnseated: 3 });
   });
 
-  it("honours a table count, and creates nothing when it is too few (409 INSUFFICIENT_SEATS)", async () => {
-    const { tournament, td } = await world({ players: 12 });
+  it("honours a table count: with too few seats, those who have paid sit first and the rest wait for a table to open", async () => {
+    const { tournament, registrations, td } = await world({ players: 12 });
+    for (const registration of registrations.slice(0, 2)) {
+      await testDb().update(tournamentRegistrations).set({ paymentConfirmed: false }).where(eq(tournamentRegistrations.id, registration.id));
+    }
 
-    const tooFew = await td.post(path(tournament.id, "seating/setup")).send({ seatCount: 6, tableCount: 1 });
-    const four = await td.post(path(tournament.id, "seating/setup")).send({ seatCount: 6, tableCount: 4 });
+    const response = await td.post(path(tournament.id, "seating/setup")).send({ seatCount: 6, tableCount: 1 });
+    const again = await td.post(path(tournament.id, "seating/setup")).send({ seatCount: 6, tableCount: 4 });
 
-    expect(tooFew.status).toBe(409);
-    expect(tooFew.body).toMatchObject({ code: "INSUFFICIENT_SEATS", details: { needed: 12, available: 6 } });
-    expect(four.status).toBe(201);
-    expect(occupancy((four.body as SeatingMutationDto).seating)).toEqual([3, 3, 3, 3]);
-    expect((await activity(tournament.id)).map((entry) => entry.eventType)).toEqual(["tables_added", "seating_drawn"]);
+    expect(response.status).toBe(201);
+    const body = response.body as SeatingMutationDto;
+    expect(occupancy(body.seating)).toEqual([6]);
+    expect(body.moves.map((move) => move.registrationId)).not.toContain(registrations[0].id);
+    expect(body.moves.map((move) => move.registrationId)).not.toContain(registrations[1].id);
+    expect(body.seating.stats).toMatchObject({ unseated: 6, unconfirmedUnseated: 2 });
+    expect(body.seating.advisor.advice[0]).toMatchObject({ kind: "open_table", tableNumber: 2 });
+    expect(again.status).toBe(409);
+    expect(again.body).toMatchObject({ code: "TABLES_EXIST" });
+    const drawn = (await activity(tournament.id)).find((entry) => entry.eventType === "seating_drawn");
+    expect(drawn).toMatchObject({ description: "Seats drawn for 6 players; 6 players waiting for a seat", data: { players: 6, waiting: 6 } });
   });
 
   it("is refused once a table is in play (409 TABLES_EXIST), but not for archived ones", async () => {
@@ -131,19 +140,22 @@ describe("POST /api/tournaments/:id/seating/setup", () => {
     const second = await td.post(path(tournament.id, "seating/setup")).send({});
 
     expect(first.status).toBe(201);
-    expect((first.body as SeatingMutationDto).seating.tables.map((table) => table.tableNumber)).toEqual([2, 1]);
+    expect((first.body as SeatingMutationDto).seating.tables.map((table) => table.tableNumber)).toEqual([2, 3, 1]);
     expect(second.status).toBe(409);
     expect(second.body).toMatchObject({ code: "TABLES_EXIST" });
   });
 
-  it("puts out one empty table for a tournament nobody has entered yet", async () => {
+  it("puts out the starting tables (2) for a tournament nobody has entered yet, or 1 when max players fit at one", async () => {
     const { tournament, td } = await world();
+    const small = await createTournament({ clubId: tournament.clubId, status: "in_progress", maxPlayers: 9 });
 
     const response = await td.post(path(tournament.id, "seating/setup")).send({});
+    const oneTable = await td.post(path(small.id, "seating/setup")).send({});
 
     expect(response.status).toBe(201);
-    expect(response.body).toMatchObject({ moves: [], excludedUnconfirmed: 0, seating: { stats: { activeTables: 1, capacity: 9 } } });
+    expect(response.body).toMatchObject({ moves: [], excludedUnconfirmed: 0, seating: { stats: { activeTables: 2, capacity: 18 } } });
     expect((await activity(tournament.id)).map((entry) => entry.eventType)).toEqual(["tables_added"]);
+    expect(oneTable.body).toMatchObject({ seating: { stats: { activeTables: 1, capacity: 9 } } });
   });
 });
 
@@ -442,10 +454,10 @@ describe("POST /api/tournaments/:id/seating/balance", () => {
 
     expect(response.status).toBe(200);
     const body = response.body as SeatingMutationDto;
-    expect(body.moves).toEqual(shown.suggestions.balance);
+    expect(body.moves).toEqual(shown.advisor.advice.find((advice) => advice.kind === "balance")?.moves);
     expect(body.moves.map(describeMove)).toEqual(["Player 07: 1/7 -> 2/2 (balance)", "Player 06: 1/6 -> 2/3 (balance)", "Player 05: 1/5 -> 2/4 (balance)"]);
     expect(occupancy(body.seating)).toEqual([4, 4]);
-    expect(body.seating.suggestions.balance).toEqual([]);
+    expect(body.seating.advisor.advice).toEqual([]);
     expect(await activity(tournament.id)).toEqual([
       {
         eventType: "seating_balanced",
@@ -466,7 +478,8 @@ describe("POST /api/tournaments/:id/seating/balance", () => {
     expect(response.status).toBe(409);
     expect(response.body).toMatchObject({ code: "STALE_PLAN" });
     expect(response.body.details.seating).toEqual((await td.get(path(tournament.id, "seating"))).body);
-    expect(response.body.details.seating.suggestions.balance).toHaveLength(2);
+    // 7 players left after the bust: the advice is the final table now.
+    expect(response.body.details.seating.advisor.advice.map((advice: { kind: string }) => advice.kind)).toEqual(["final_table"]);
     expect(findForbiddenKeys(response.body)).toEqual([]);
   });
 
@@ -502,7 +515,7 @@ describe("POST /api/tournaments/:id/seating/final-table", () => {
 
     const response = await td.post(path(tournament.id, "seating/final-table")).send({});
 
-    expect(shown.suggestions.finalTable).toEqual({ tableId: tables[1].id, tableNumber: 2 });
+    expect(shown.advisor.advice[0]).toMatchObject({ kind: "final_table", tableId: tables[1].id, tableNumber: 2 });
     expect(response.status).toBe(200);
     const body = response.body as SeatingMutationDto;
     expect(body.moves.every((move) => move.reason === "final_table" && move.to?.tableNumber === 2)).toBe(true);
@@ -560,14 +573,13 @@ describe("POST /api/tournaments/:id/seating/final-table", () => {
     return { ...setup, noShows, tables };
   }
 
-  it("is suggested and drawn for the players at the tables, leaving those waiting for a seat as they are (TDN3-FINAL-TABLE-WAITING)", async () => {
-    const { tournament, registrations, noShows, tables, td } = await noShowsWaiting();
+  it("is drawn for the players at the tables, leaving those waiting for a seat as they are (TDN3-FINAL-TABLE-WAITING)", async () => {
+    const { tournament, registrations, noShows, td } = await noShowsWaiting();
     const shown = (await td.get(path(tournament.id, "seating"))).body as SeatingDto;
 
     const response = await td.post(path(tournament.id, "seating/final-table")).send({ expectedVersion: shown.version });
 
     expect(shown.stats).toMatchObject({ activePlayers: 10, seated: 8, unseated: 2, unconfirmedUnseated: 2 });
-    expect(shown.suggestions.finalTable).toEqual({ tableId: tables[0].id, tableNumber: 1 });
     expect(response.status).toBe(200);
     const { seating, moves } = response.body as SeatingMutationDto;
     expectSoundSeating(seating, registrations.map((r) => r.id));

@@ -7,7 +7,11 @@ import { PageHeader } from "@/components/shared/page-header";
 import { PageSpinner } from "@/components/shared/page-spinner";
 import { PAGE_STATE_CLASS, QueryState } from "@/components/shared/query-state";
 import { TabHost, type HostedTab } from "@/components/shared/tab-host";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/contexts/auth-context";
+import { ClubColoursTab } from "@/features/branding/components/club-colours-tab";
+import { SignupPhotoField } from "@/features/players/components/signup-photo-field";
+import { ClubTableDefaultsFields } from "@/features/seating/components/club-table-defaults-fields";
 import { clubTimeZone } from "@/lib/format";
 import { ClubNotFound } from "../components/club-not-found";
 import { ClubProfileForm } from "../components/club-profile-form";
@@ -27,12 +31,32 @@ function ManagersTab({ club, canInviteOwner }: { club: ClubDto; canInviteOwner: 
   );
 }
 
+/** What every tournament of the club starts with: its tables, and whether a new player needs a photo to sign up. */
+function TournamentDefaultsTab({ club }: { club: ClubDto }) {
+  return (
+    <div className="space-y-6">
+      <ClubTableDefaultsFields club={club} />
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-xl">Sign-up</CardTitle>
+          <CardDescription>How players sign themselves up from a tournament&apos;s QR code.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <SignupPhotoField club={club} />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function ClubSettings({ club }: { club: ClubDto }) {
   const { isAdmin } = useAuth();
-  // Each tab is one entry; a club's branding (Phase 5) is another.
+  // Each tab is one entry: the club's colours are one (round 5); its fuller branding (Phase 5) extends that tab.
   const tabs: HostedTab[] = [
     { value: "profile", label: "Profile", content: <ClubProfileForm club={club} />, keepMounted: true },
     { value: "social", label: "Social links", content: <ClubSocialForm club={club} />, keepMounted: true },
+    { value: "tournaments", label: "Tournaments", content: <TournamentDefaultsTab club={club} />, keepMounted: true },
+    { value: "colours", label: "Colours", content: <ClubColoursTab club={club} />, keepMounted: true },
   ];
   // Managers and deletion are the owner's and admins' (the staff list answers 403 to managers).
   if (club.viewer.canOwn) tabs.push({ value: "managers", label: "Managers", content: <ManagersTab club={club} canInviteOwner={isAdmin} /> });
@@ -52,7 +76,7 @@ function ClubSettings({ club }: { club: ClubDto }) {
   );
 }
 
-/** A club's settings, for the people who run it: profile, social links and (owner, admins) its managers. */
+/** A club's settings, for the people who run it: profile, social links, tournament defaults, colours and (owner, admins) its managers. */
 export default function ClubSettingsPage() {
   const { id = "" } = useParams<{ id: string }>();
   const club = useClub(id);

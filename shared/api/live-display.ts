@@ -6,7 +6,9 @@
  * by the `live` rate limit, never the venue's shared budget.
  */
 import type { Cents } from "../domain/money";
+import type { DifferenceLine } from "../domain/prize-difference";
 import type { NetSource } from "../domain/prize-pool";
+import type { ClubTheme } from "../domain/theme";
 import type { TournamentStatus } from "../domain/tournaments";
 import type { ClockDto, QrTarget } from "./clock";
 import type { LeaderboardEntryDto } from "./seasons";
@@ -35,7 +37,8 @@ export interface LiveDisplayDto {
     offersRebuys: boolean;
     offersAddons: boolean;
   };
-  club: { id: string; name: string; slug: string; imageUrl: string | null; rakeLabel: string };
+  /** `theme`: the club's colours (round 5; readTheme), null for the LovePoker look: the TV wears them. */
+  club: { id: string; name: string; slug: string; imageUrl: string | null; rakeLabel: string; theme: ClubTheme | null };
   /** Null when the tournament has no season (or it was deleted). */
   season: { id: string; name: string } | null;
   /** Null until the TD sets the clock up. */
@@ -49,8 +52,9 @@ export interface LiveDisplayDto {
     addons: number;
     earlyBirds: number;
     activeTables: number;
-    /** computeChipStats: null when a stack it needs is not set, or showAverageStack is off. */
+    /** computeChipStats: null when a stack it needs is not set, or both showAverageStack and showChipsInPlay are off. */
     totalChips: number | null;
+    /** computeChipStats: null when a stack it needs is not set, or showAverageStack is off. */
     averageStack: number | null;
   };
   money: {
@@ -67,15 +71,27 @@ export interface LiveDisplayDto {
      * yet (P4REV4-R3-CQ-03); kept until the client's display fixtures stop setting it, then removed.
      */
     netSource: NetSource | null;
-    /** The club's take (impliedRake, never below 0), only with displaySettings.showAp. */
+    /**
+     * Only with displaySettings.showAp: the club's take (impliedRake, never below 0); while `lines`
+     * itemise the pool, the AP alone (the rates' or the manual total), what the club kept, carried
+     * over or added being in those lines.
+     */
     apCents: Cents | null;
     /**
-     * With showAp, when the prize pool is fixed above what was taken in (a guarantee): what the club
-     * adds on top, e.g. 60000 for "Added by the club $600" (apCents is then 0). Null otherwise.
+     * With showAp, when the prize pool is fixed above what was taken in (a guarantee) and no `lines`
+     * itemise it: what the club adds on top, e.g. 60000 for "Added by the club $600" (apCents is then
+     * 0). Null otherwise.
      */
     clubAddedCents: Cents | null;
     /** Null unless shown with showPayouts. */
     payouts: Array<{ position: number; amountCents: Cents }> | null;
+    /**
+     * Null unless shown. The pool's honest breakdown beside it (round 5, item 16; differenceLines, the
+     * TD's and the public pages' lines): money carried in from earlier tournaments, what the club keeps
+     * of the difference, what is carried over and where, what was added to the prizes, what the club
+     * adds. Completed: as finalize froze it. Empty when the prizes are exactly the money available.
+     */
+    lines: DifferenceLine[] | null;
   };
   /** Where the QR code leads (a path on this site), or null for no QR. Season falls back to the tournament page. */
   qr: { target: Exclude<QrTarget, "none">; path: string } | null;
@@ -85,6 +101,12 @@ export interface LiveDisplayDto {
      * a screen holding the clock key in force (CLOCK_KEY_HEADER). The TV then shows its controls.
      */
     canControl: boolean;
+    /**
+     * The tournament is open and the viewer is signed in as a manager of the club: PATCH
+     * …/clock/display (the layer over the clock, the TV's sound and edge margin) takes their changes.
+     * A screen holding only the clock key runs the clock, and is shown those settings, not changing them.
+     */
+    canChangeDisplay: boolean;
     /**
      * For a manager of the club: when the TV's clock key now in force was issued and when it stops
      * working (ISO), or both null for none. A key is in force until it expires, is revoked or replaced,
@@ -107,7 +129,7 @@ export interface ClockConflictDetails {
  */
 export interface PublicSeasonLeaderboardDto {
   season: { id: string; name: string; startDate: string; endDate: string | null; isActive: boolean };
-  club: { id: string; name: string; slug: string; imageUrl: string | null };
+  club: { id: string; name: string; slug: string; imageUrl: string | null; theme: ClubTheme | null };
   entries: LeaderboardEntryDto[];
   /** The season's tournaments that are completed, and all of them (cancelled ones left out). */
   tournaments: { completed: number; total: number };

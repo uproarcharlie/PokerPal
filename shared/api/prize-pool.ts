@@ -6,10 +6,12 @@
  * (409 TOURNAMENT_CLOSED). Every change is logged to the activity feed and the audit log.
  */
 import { z } from "zod";
-import type { Cents } from "../domain/money";
+import { toCents, type Cents } from "../domain/money";
+import { PAYOUT_PLACE_LIMITS, PAYOUT_STRUCTURE_KEYS, payoutPlacesProblems, type PayoutPlace } from "../domain/payouts";
+import { PRIZE_DIFFERENCE_CHOICES, type CarriedIn } from "../domain/prize-difference";
 import type { PayoutDisplaySource, PrizePoolBreakdown } from "../domain/prize-pool";
 import { RAKE_RATE_KEYS } from "../domain/rake-rates";
-import { moneySchema, rakeTypeSchema } from "./common";
+import { idSchema, moneySchema, rakeTypeSchema } from "./common";
 import type { TournamentDetailDto, TournamentStatus } from "./tournaments";
 
 const reasonSchema = z
@@ -20,17 +22,26 @@ const reasonSchema = z
   .transform((value) => (value ? value : undefined));
 
 /**
+ * Where a difference between the prizes as set and the money available for prizes goes (round 5,
+ * item 16; tournaments.prize_difference, shared/domain/prize-difference): the club keeps it (the
+ * default), it is added to 1st, shared across the paid places, or carried over. Sent with a manual
+ * prize pool or custom places; left out, the stored choice stays as it is.
+ */
+export const prizeDifferenceSchema = z.enum(PRIZE_DIFFERENCE_CHOICES);
+
+/**
  * PUT /api/tournaments/:id/prize-pool/adjustment
  * - calculated: clear both overrides.
  * - ap_override: a fixed AP total replacing buy-in, re-buy and add-on rake (high-hand rake is
  *   separate). It does not grow with later entries. Over the current gross: 400 AP_EXCEEDS_GROSS
  *   (details: { grossCents }).
- * - manual_pool: a fixed prize pool, which may exceed gross (the club adds the difference).
+ * - manual_pool: a fixed prize pool, which may exceed gross (the club adds the difference), with
+ *   where any difference below what is available goes (`prizeDifference`).
  */
 export const prizePoolAdjustmentSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("calculated"), reason: reasonSchema }),
   z.object({ mode: z.literal("ap_override"), amount: moneySchema, reason: reasonSchema }),
-  z.object({ mode: z.literal("manual_pool"), amount: moneySchema, reason: reasonSchema }),
+  z.object({ mode: z.literal("manual_pool"), amount: moneySchema, prizeDifference: prizeDifferenceSchema.optional(), reason: reasonSchema }),
 ]);
 export type PrizePoolAdjustmentInput = z.infer<typeof prizePoolAdjustmentSchema>;
 
@@ -58,6 +69,64 @@ export const rakeRatesSchema = z
   })
   .refine((input) => RAKE_RATE_KEYS.some((key) => input[key] !== undefined), "Nothing to update");
 export type RakeRatesInput = z.infer<typeof rakeRatesSchema>;
+
+/** One place of a custom structure as the payout editor sends it: a percentage of the pool (at most 2 decimal places) or an amount. */
+export const payoutPlaceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("percent"), percent: z.number().gt(0, "Above 0%").max(100, "At most 100%") }),
+  z.object({ kind: z.literal("amount"), amount: moneySchema }),
+]);
+export type PayoutPlaceInput = z.infer<typeof payoutPlaceSchema>;
+
+/**
+ * The domain's form of the places sent: percentages in basis points (one with more than 2 decimal
+ * places stays a fraction of a basis point, which payoutPlacesProblems refuses), amounts in cents.
+ */
+export function toPayoutPlaces(places: readonly PayoutPlaceInput[]): PayoutPlace[] {
+  return places.map((place): PayoutPlace => {
+    if (place.kind === "amount") return { kind: "amount", amountCents: toCents(place.amount) };
+    const basisPoints = Math.round(place.percent * 100);
+    return { kind: "percent", basisPoints: Math.abs(place.percent * 100 - basisPoints) > 1e-6 ? place.percent * 100 : basisPoints };
+  });
+}
+
+/**
+ * PUT /api/tournaments/:id/prize-pool/payouts (round 5, the payout editor; staff, mid-game too): the
+ * payout structure, and for "custom" its places (required, 1 to 50, each a percentage of the pool or a
+ * fixed amount, checked by shared/domain/payouts payoutPlacesProblems: 400 VALIDATION with each issue
+ * at `places[i]`). Stored in tournaments.custom_payouts by serializeCustomPayouts (the classic array
+ * when every place is a percentage adding up to 100%). A standard structure leaves the stored custom
+ * places as they are, so going back to Custom brings them back.
+ * The places are paid as set (round 5, item 16): when they add up to less than the money available,
+ * `prizeDifference` says where the rest goes (left out: the stored choice, else the club keeps it);
+ * when they add up to more, the club adds the difference ("Added by the club"). Allowed while the pool
+ * is locked (the published payouts change: the editor says so), until the tournament is completed or
+ * cancelled (409 TOURNAMENT_CLOSED). A change (of the structure, the places or the choice) is logged to
+ * the activity feed ("payouts_changed", public, with the reason and where the difference goes) and
+ * audited ("tournament.payouts"); sending what is stored changes and logs nothing. Answers
+ * ApUpdateResponse.
+ */
+const payoutPlacesSchema = z.array(payoutPlaceSchema).min(1, "Pay at least one place").max(PAYOUT_PLACE_LIMITS.maxPlaces);
+
+export const payoutsUpdateSchema = z
+  .object({
+    payoutStructure: z.enum(PAYOUT_STRUCTURE_KEYS),
+    places: payoutPlacesSchema.optional(),
+    prizeDifference: prizeDifferenceSchema.optional(),
+    reason: reasonSchema,
+  })
+  .superRefine((input, ctx) => {
+    if (input.payoutStructure !== "custom") return;
+    if (!input.places) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["places"], message: "Set up the places a custom structure pays" });
+      return;
+    }
+    // Places their own rules already refused (a blank amount, 150%, none at all) are not judged again as a whole.
+    if (!payoutPlacesSchema.safeParse(input.places).success) return;
+    for (const problem of payoutPlacesProblems(toPayoutPlaces(input.places))) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: problem.place === null ? ["places"] : ["places", problem.place - 1], message: problem.message });
+    }
+  });
+export type PayoutsUpdateInput = z.infer<typeof payoutsUpdateSchema>;
 
 /** One paid place as the screens show it. */
 export interface PayoutDisplayRowDto {
@@ -102,7 +171,47 @@ export interface PrizePoolDto {
   display: PayoutDisplayDto;
   /** The last manual adjustment, if any (the reason is public, like the activity feed). */
   adjustment: { reason: string | null; adjustedAt: string } | null;
+  /**
+   * Where money carried over from this tournament goes, as the screens name it (carryTargetName): its
+   * season ("Winter League"), else "the next tournament" (round 5, item 16).
+   */
+  carryTarget: string;
 }
+
+/**
+ * Money another tournament of the club carried over (round 5, item 16; a prize_carry_overs row) that
+ * this tournament may add to its pool: from a completed tournament of the same season, or of the
+ * club when it had no season.
+ */
+export interface CarryOverDto {
+  id: string;
+  fromTournamentId: string;
+  /** The tournament's name when it was finalized. */
+  fromName: string;
+  /** When that tournament was finalized (ISO). */
+  carriedAt: string;
+  amountCents: Cents;
+  /** The season it was carried over to, or null for the club's next tournament. */
+  seasonName: string | null;
+}
+
+/**
+ * GET /api/tournaments/:id/prize-pool/carry-overs (the club's staff): what this tournament may add to
+ * its pool, and what it already has (tournaments.carried_in).
+ */
+export interface CarryOversDto {
+  available: CarryOverDto[];
+  carriedIn: CarriedIn[];
+}
+
+/**
+ * POST /api/tournaments/:id/prize-pool/carry-overs/:carryOverId adds that money to this pool;
+ * DELETE takes it out again (it is then free for another tournament). Both while the tournament is
+ * open (409 TOURNAMENT_CLOSED), logged publicly ("prize_pool_adjusted"); 404 for a carry-over this
+ * tournament cannot take, 409 CONFLICT when another tournament took it first. Answers
+ * ApUpdateResponse.
+ */
+export const carryOverParamsSchema = z.object({ id: idSchema, carryOverId: idSchema });
 
 /** PUT /api/tournaments/:id/prize-pool/adjustment and /rates (200). */
 export interface ApUpdateResponse {

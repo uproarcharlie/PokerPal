@@ -14,13 +14,14 @@ import { lateTopUpText, notOfferedRefusal, requestRefusal } from "@shared/domain
 import type { PendingAction, Tournament, TournamentRegistration } from "@shared/schema";
 import { db, type Transaction } from "../db";
 import { badRequest, conflict, notFound } from "../http/errors";
+import { clockElapsedMsNow } from "../repositories/clock";
 import { getPlayer } from "../repositories/players";
 import * as pendingActionsRepo from "../repositories/pending-actions";
 import { lockPlayerRegistration, lockTournamentForRegistrationWrite } from "../repositories/registrations";
 import { getTournament } from "../repositories/tournaments";
 import { toPublicPlayer } from "./players";
 import { recordAudit } from "./audit";
-import { applyCountChange, clockElapsedMsNow, creditKnockout, eliminate, toManagedRegistration } from "./registrations";
+import { applyCountChange, creditKnockout, eliminate, toManagedRegistration } from "./registrations";
 import { assertOpen } from "./tournament-views";
 
 const notRegistered = () => conflict("PLAYER_NOT_REGISTERED", "That player is not registered for this tournament");

@@ -19,7 +19,7 @@ import {
   removeRegistration,
   updateRegistration,
 } from "../services/registrations";
-import { isValidSignUpToken } from "../services/sign-up-tokens";
+import { signUpTokenScope } from "../services/sign-up-tokens";
 import { requireTournament } from "../services/tournaments";
 import type { RouteDeps } from "./index";
 
@@ -40,8 +40,9 @@ export function registrationsRoutes({ env, limiters }: RouteDeps): Router {
 
   /**
    * Public sign-up (QR page) with the narrow body (SEC-06), for the club's own players or the one the
-   * caller just typed in (signUpToken); staff of the club may also set the opening counts and payment,
-   * register anyone, and are not held to maxPlayers.
+   * caller just typed in (signUpToken); staff of the club may also set the opening counts and payment
+   * and register anyone. Sign-ups past Max players join the waiting list; accepting past it is refused
+   * (round 5, item 15).
    */
   router.post(
     "/api/tournaments/:id/registrations",
@@ -51,8 +52,8 @@ export function registrationsRoutes({ env, limiters }: RouteDeps): Router {
       const tournament = await requireTournament(req.params.id);
       const staff = await canManageClub(req.user, tournament.clubId);
       const input = parseOrThrow(staff ? staffRegistrationSchema : publicRegistrationSchema, req.body ?? {}, INVALID);
-      const vouched = isValidSignUpToken(env, input.playerId, input.signUpToken);
-      res.status(201).json(await registerPlayer(tournament.id, input, { staff, vouched }));
+      const token = signUpTokenScope(env, input.playerId, input.signUpToken);
+      res.status(201).json(await registerPlayer(tournament.id, input, { staff, vouched: token !== null, vouchedAt: token?.clubId ?? null }));
     }),
   );
 

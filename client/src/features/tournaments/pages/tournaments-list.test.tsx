@@ -53,6 +53,18 @@ describe("TournamentsListPage", () => {
     expect(screen.getByRole("link", { name: "Dashboard" })).toHaveAttribute("href", "/dashboard");
   });
 
+  it("counts the field against Max players and the waiting list behind it apart (round 5, item 15)", async () => {
+    // The club's staff see who has paid; anyone else the field: never "19/18".
+    const full = listItemDto({ id: "t1", name: "Friday Freezeout", maxPlayers: 18, confirmedPlayerCount: 18, registeredCount: 20, waitingListCount: 2 });
+    const elsewhere = listItemDto({ id: "t2", name: "Visitors Cup", clubId: "c2", maxPlayers: 18, confirmedPlayerCount: null, registeredCount: 19, waitingListCount: 1 });
+    mockList(() => HttpResponse.json([full, elsewhere]));
+    renderList();
+
+    expect(await screen.findByTestId("tournament-row-t1")).toHaveTextContent("18/18 · 2 waiting");
+    expect(screen.getByTestId("tournament-row-t2")).toHaveTextContent("18/18 · 1 waiting");
+    expect(screen.getByTestId("tournament-row-t2")).not.toHaveTextContent("19/18");
+  });
+
   it("shows each row once on a phone, as a card", async () => {
     phoneLayout();
     mockList();

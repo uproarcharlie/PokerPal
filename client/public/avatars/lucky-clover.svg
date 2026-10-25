@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">
+<title>Lucky clover</title>
+<defs><radialGradient id="glow" cx=".32" cy=".26" r=".85"><stop offset="0" stop-color="#fff" stop-opacity=".26"/><stop offset=".65" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>
+<rect width="96" height="96" fill="#A3E635"/>
+<rect width="96" height="96" fill="url(#glow)"/>
+<path d="M48 46Q50 72 64 84" fill="none" stroke="#14532D" stroke-width="6" stroke-linecap="round"/>
+<g fill="#000" fill-opacity=".18" transform="translate(0 2.5)"><path d="M48 46C40 40 32 34 32 26C32 20 36 16 41 16C44 16 47 18 48 21C49 18 52 16 55 16C60 16 64 20 64 26C64 34 56 40 48 46Z" transform="rotate(0 48 46)"/><path d="M48 46C40 40 32 34 32 26C32 20 36 16 41 16C44 16 47 18 48 21C49 18 52 16 55 16C60 16 64 20 64 26C64 34 56 40 48 46Z" transform="rotate(90 48 46)"/><path d="M48 46C40 40 32 34 32 26C32 20 36 16 41 16C44 16 47 18 48 21C49 18 52 16 55 16C60 16 64 20 64 26C64 34 56 40 48 46Z" transform="rotate(180 48 46)"/><path d="M48 46C40 40 32 34 32 26C32 20 36 16 41 16C44 16 47 18 48 21C49 18 52 16 55 16C60 16 64 20 64 26C64 34 56 40 48 46Z" transform="rotate(270 48 46)"/></g>
+<g fill="#15803D"><path d="M48 46C40 40 32 34 32 26C32 20 36 16 41 16C44 16 47 18 48 21C49 18 52 16 55 16C60 16 64 20 64 26C64 34 56 40 48 46Z" transform="rotate(0 48 46)"/><path d="M48 46C40 40 32 34 32 26C32 20 36 16 41 16C44 16 47 18 48 21C49 18 52 16 55 16C60 16 64 20 64 26C64 34 56 40 48 46Z" transform="rotate(90 48 46)"/><path d="M48 46C40 40 32 34 32 26C32 20 36 16 41 16C44 16 47 18 48 21C49 18 52 16 55 16C60 16 64 20 64 26C64 34 56 40 48 46Z" transform="rotate(180 48 46)"/><path d="M48 46C40 40 32 34 32 26C32 20 36 16 41 16C44 16 47 18 48 21C49 18 52 16 55 16C60 16 64 20 64 26C64 34 56 40 48 46Z" transform="rotate(270 48 46)"/></g>
+<g stroke="#4ADE80" stroke-opacity=".55" stroke-width="2" stroke-linecap="round"><path d="M48 44V24M50 46H70M48 48V68M46 46H26"/></g>
+<circle cx="48" cy="46" r="3" fill="#BEF264"/>
+</svg>

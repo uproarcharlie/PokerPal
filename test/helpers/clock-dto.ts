@@ -134,7 +134,7 @@ export function liveDisplayDto(overrides: DisplayOverrides = {}): LiveDisplayDto
       offersAddons: false,
       ...overrides.tournament,
     },
-    club: { id: "c1", name: "Central Stars", slug: "central-stars", imageUrl: null, rakeLabel: "AP", ...overrides.club },
+    club: { id: "c1", name: "Central Stars", slug: "central-stars", imageUrl: null, rakeLabel: "AP", theme: null, ...overrides.club },
     season: overrides.season === undefined ? { id: "s1", name: "Winter 2026" } : overrides.season,
     clock: overrides.clock === undefined ? clockDto() : overrides.clock,
     stats: {
@@ -149,9 +149,10 @@ export function liveDisplayDto(overrides: DisplayOverrides = {}): LiveDisplayDto
       averageStack: 88_889,
       ...overrides.stats,
     },
-    money: { show: false, estimated: true, rakeLabel: "AP", netCents: null, netSource: null, apCents: null, clubAddedCents: null, payouts: null, ...overrides.money },
+    money: { show: false, estimated: true, rakeLabel: "AP", netCents: null, netSource: null, apCents: null, clubAddedCents: null, payouts: null, lines: null, ...overrides.money },
     qr: overrides.qr === undefined ? { target: "season", path: "/season/s1" } : overrides.qr,
-    viewer: { canControl: false, clockKeyIssuedAt: null, clockKeyExpiresAt: null, ...overrides.viewer },
+    // The club's staff, signed in, may change the display too (a screen on the clock key alone overrides it).
+    viewer: { canControl: false, clockKeyIssuedAt: null, clockKeyExpiresAt: null, canChangeDisplay: overrides.viewer?.canControl ?? false, ...overrides.viewer },
   };
 }
 

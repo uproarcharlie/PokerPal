@@ -37,7 +37,8 @@ interface StructureRowProps {
   actions: RowActions;
 }
 
-const BOX = "h-9 px-2 tabular-nums";
+/** A row's box: a thumb's 44 px on a phone, where the structure is edited in a full-screen sheet; denser from `md`. */
+const BOX = "h-11 px-2 tabular-nums md:h-9";
 
 /** One level or break of the structure editor: its boxes, its problems, and a menu to insert, move or delete. */
 export function StructureRow({ index, kind, title, anteMode, register, errors, current, actions }: StructureRowProps) {
@@ -60,12 +61,12 @@ export function StructureRow({ index, kind, title, anteMode, register, errors, c
   return (
     <li className={cn("rounded-md border border-transparent px-1 py-1.5", current && "border-primary bg-primary/5", kind === "break" && "bg-muted/60")} data-testid={`level-row-${String(index)}`}>
       <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:gap-2">
-        <div className={cn("flex h-9 items-center justify-between gap-2", NAME_COLUMN)}>
+        <div className={cn("flex h-11 items-center justify-between gap-2 md:h-9", NAME_COLUMN)}>
           <span className="text-sm font-semibold text-foreground">{title}</span>
           {current ? <span className="mr-auto text-xs font-medium text-primary">now</span> : null}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button type="button" variant="ghost" size="icon" className="h-9 w-10" aria-label={`More for ${title}`}>
+              <Button type="button" variant="ghost" size="icon" className="h-11 w-11 md:h-9 md:w-10" aria-label={`More for ${title}`}>
                 <MoreVertical aria-hidden="true" />
               </Button>
             </DropdownMenuTrigger>

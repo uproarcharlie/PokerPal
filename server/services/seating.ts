@@ -14,9 +14,11 @@
  * TD can see them again ("Show last moves") and undo the change while the seats are still as it left
  * them (P4REV0-BREAK-NO-RECOVERY).
  *
- * The registrations service calls the two hooks at the end of this file from inside its own
- * transaction, which already holds the tournament lock: a bust releases the seat, and an undone bust
- * (or a re-buy re-entry) puts the player back in the seat they were busted from when it is still free.
+ * The registrations service calls the hooks at the end of this file from inside its own transaction,
+ * which already holds the tournament lock: a bust releases the seat; an undone bust (or a re-buy
+ * re-entry) puts the player back in the seat they were busted from when it is still free; and (round
+ * 5) auto-seat sits new registrations, players whose payment is confirmed and returning players down
+ * as they come into play, so two sign-ups at once never take one seat.
  */
 import { randomInt } from "node:crypto";
 import type { Request } from "express";
@@ -27,13 +29,16 @@ import {
   type BreakTableInput,
   type CreateTablesInput,
   type DrawSeatsInput,
+  type AutoSeatResultDto,
   type FinalTableInput,
+  type OpenTableInput,
   type PublicSeatingDto,
   type SeatingChangeEvent,
   type SeatingDto,
   type SeatingMutationDto,
   type SeatingSetupInput,
   type SeatMoveDto,
+  type SeatRefDto,
   type UndoSeatingInput,
   type UnseatInput,
   type UpdateTableInput,
@@ -53,7 +58,6 @@ import {
   RELEASE_REASON,
   SEATING_LIMITS,
   seatingVersion,
-  suggestTables,
   type ReleaseReason,
   type SeatingPlan,
   type SeatMove,
@@ -61,21 +65,35 @@ import {
   waitingPlayers,
   waitingText,
 } from "@shared/domain/seating";
+import {
+  autoSeatDecision,
+  nextTableNumber,
+  openTableRng,
+  planAutoSeat,
+  planOpenTable,
+  resolveSeatingSettings,
+  setupTableCount,
+  type SeatingSettings,
+} from "@shared/domain/table-advisor";
+import { resolveTableShape, type TableShape } from "@shared/domain/table-layout";
 import type { InsertTournamentTable, Tournament, TournamentTable } from "@shared/schema";
 import { db, readSnapshot, type Executor, type Transaction } from "../db";
 import { actingUserId } from "../http/authz";
 import { badRequest, conflict, HttpError, notFound } from "../http/errors";
 import { insertActivity, latestActivityOf } from "../repositories/activity";
 import { getClub } from "../repositories/clubs";
+import { clockElapsedMsNow } from "../repositories/clock";
 import { lockTournamentForRegistrationWrite } from "../repositories/registrations";
 import * as seatingRepo from "../repositories/seating";
-import { getTournament } from "../repositories/tournaments";
+import { getTournament, setTournamentColumns } from "../repositories/tournaments";
 import {
   seatingChangeOf,
+  seatingSettingsOf,
   seatingState,
   tableName,
   toMoveDtos,
   toPublicSeatingDto,
+  toSeatRef,
   toSeatingDto,
   type SeatingState,
   type StaffSeatingState,
@@ -87,23 +105,34 @@ const cryptoRng: Rng = () => randomInt(0, 2 ** 32) / 2 ** 32;
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
+/** "Table 2, Seat 7" (a named table by its name). */
+const seatText = (seat: Pick<SeatRefDto, "tableName" | "seatNumber">) => `${seat.tableName}, Seat ${seat.seatNumber}`;
+
+type SeatingTournament = Pick<Tournament, "id" | "maxPlayers">;
+
 /** The tables, entries and seats, read side by side (a transaction runs them one after another on its connection). */
-async function loadState(ex: Executor, tournamentId: string): Promise<SeatingState> {
-  const [tables, entries, seats] = await Promise.all([
-    seatingRepo.tablesOf(ex, tournamentId),
-    seatingRepo.seatingEntriesOf(ex, tournamentId),
-    seatingRepo.activeSeatsOf(ex, tournamentId),
+async function loadState(ex: Executor, tournament: SeatingTournament): Promise<SeatingState> {
+  const [tables, entries, seats, club] = await Promise.all([
+    seatingRepo.tablesOf(ex, tournament.id),
+    seatingRepo.seatingEntriesOf(ex, tournament.id),
+    seatingRepo.activeSeatsOf(ex, tournament.id),
+    seatingRepo.clubSeatingDefaultsOf(ex, tournament.id),
   ]);
-  return seatingState(tables, entries, seats);
+  return seatingState(tables, entries, seats, club, tournament.maxPlayers);
 }
 
 /**
- * loadState with the last seating change, which only the TD's SeatingDto and Undo use: the public seat
- * finder's poll and the bust hooks never read it (R2-CQ-04).
+ * loadState with the last seating change and the clock's time, which only the TD's SeatingDto (the
+ * advisor: is late registration over?) and Undo use: the public seat finder's poll and the bust hooks
+ * never read them (R2-CQ-04).
  */
-async function loadStaffState(ex: Executor, tournamentId: string): Promise<StaffSeatingState> {
-  const [state, lastChange] = await Promise.all([loadState(ex, tournamentId), latestActivityOf(ex, tournamentId, SEATING_CHANGE_EVENTS)]);
-  return { ...state, lastChange: lastChange ?? null };
+async function loadStaffState(ex: Executor, tournament: SeatingTournament): Promise<StaffSeatingState> {
+  const [state, lastChange, clockElapsedMs] = await Promise.all([
+    loadState(ex, tournament),
+    latestActivityOf(ex, tournament.id, SEATING_CHANGE_EVENTS),
+    clockElapsedMsNow(ex, tournament.id),
+  ]);
+  return { ...state, lastChange: lastChange ?? null, clockElapsedMs };
 }
 
 async function requireTournament(ex: Executor, id: string): Promise<Tournament> {
@@ -121,16 +150,16 @@ async function requireTournament(ex: Executor, id: string): Promise<Tournament> 
 /** GET /api/tournaments/:id/seating (staff). */
 export async function getSeating(tournamentId: string): Promise<SeatingDto> {
   return readSnapshot(async (tx) => {
-    const [tournament, state] = await Promise.all([requireTournament(tx, tournamentId), loadStaffState(tx, tournamentId)]);
-    return toSeatingDto(tournament, state);
+    const tournament = await requireTournament(tx, tournamentId);
+    return toSeatingDto(tournament, await loadStaffState(tx, tournament));
   });
 }
 
 /** GET /api/public/tournaments/:id/seating: anyone; PublicPlayer only, players still in, active tables. */
 export async function getPublicSeating(tournamentId: string): Promise<PublicSeatingDto> {
   return readSnapshot(async (tx) => {
-    const [tournament, state] = await Promise.all([requireTournament(tx, tournamentId), loadState(tx, tournamentId)]);
-    const club = await getClub(tx, tournament.clubId);
+    const tournament = await requireTournament(tx, tournamentId);
+    const [state, club] = await Promise.all([loadState(tx, tournament), getClub(tx, tournament.clubId)]);
     if (!club) throw notFound("Tournament not found");
     return toPublicSeatingDto(tournament, club, state);
   });
@@ -155,7 +184,7 @@ async function seatingWrite(tournamentId: string, write: (locked: Locked) => Pro
     if (!tournament) throw notFound("Tournament not found");
     assertOpen(tournament);
     await seatingRepo.healSeats(tx, tournamentId);
-    return write({ tx, tournament, state: await loadStaffState(tx, tournamentId) });
+    return write({ tx, tournament, state: await loadStaffState(tx, tournament) });
   });
   return { seating: await getSeating(tournamentId), ...result };
 }
@@ -188,7 +217,7 @@ function assertVersion({ tournament, state }: Locked, expectedVersion: string | 
 }
 
 function releaseReasonOf(reason: SeatReason): ReleaseReason {
-  if (reason === "draw" || reason === "restored") throw new Error(`INVARIANT: a ${reason} move vacates no seat`);
+  if (reason === "draw" || reason === "restored" || reason === "auto_seat") throw new Error(`INVARIANT: a ${reason} move vacates no seat`);
   return RELEASE_REASON[reason];
 }
 
@@ -220,7 +249,7 @@ async function persist(
     ),
   );
   await seatingRepo.archiveTables(tx, tournament.id, archiveTableIds);
-  return seatingVersion({ tables, seats });
+  return seatingVersion({ tables, seats, eligible: state.snapshot.eligible });
 }
 
 /**
@@ -268,28 +297,49 @@ function drawable(state: SeatingState, ids: readonly string[], includeUnconfirme
 
 const unseatedIds = ({ snapshot }: SeatingState): string[] => waitingPlayers(snapshot).map((player) => player.registrationId);
 
-/** Adds `count` tables numbered after the highest the tournament has had (archived ones included). */
-async function addTablesTo({ tx, tournament, state }: Locked, count: number, seatCount: number): Promise<TournamentTable[]> {
+/** A table's shape as the activity feed says it: "Table 3 is now a rectangle". */
+const SHAPE_TEXT: Readonly<Record<TableShape, string>> = { oval: "an oval", rectangle: "a rectangle", round: "a round table" };
+
+/** Adds `count` tables of `seatCount` seats and `shape`, numbered after the highest the tournament has had (archived ones included). */
+async function addTablesTo({ tx, tournament, state }: Locked, count: number, seatCount: number, shape: TableShape): Promise<TournamentTable[]> {
   if (state.snapshot.tables.filter((table) => table.status === "active").length + count > SEATING_LIMITS.maxActiveTables) throw tableLimit();
-  const first = Math.max(0, ...state.tables.map((table) => table.tableNumber)) + 1;
+  const first = nextTableNumber(state.tables);
   if (first + count - 1 > SEATING_LIMITS.maxTableNumber) {
     throw conflict("TABLE_LIMIT", `Table numbers go up to ${SEATING_LIMITS.maxTableNumber}: renumber or remove a table first`);
   }
   return seatingRepo.insertTables(
     tx,
-    Array.from({ length: count }, (_, i) => ({ tournamentId: tournament.id, tableNumber: first + i, seatCount })),
+    Array.from({ length: count }, (_, i) => ({ tournamentId: tournament.id, tableNumber: first + i, seatCount, shape })),
   );
 }
 
 // ---------------------------------------------------------------------------------------------------
 // Tables
 
-/** POST /api/tournaments/:id/tables. */
+/**
+ * The tables a room opens with become the tournament's starting tables (R5REV1-ADV-01): the advisor
+ * never breaks those while players are still arriving, so a TD who starts with 3 is not told to
+ * break one straight away. Stored only when it differs from the settings in force.
+ */
+async function keepStartingTables({ tx, tournament }: Locked, settings: SeatingSettings, tableCount: number): Promise<void> {
+  if (tableCount !== settings.startingTables) await setTournamentColumns(tx, tournament.id, { startingTables: tableCount });
+}
+
+/**
+ * POST /api/tournaments/:id/tables: seats and shape default to the tournament's seating settings.
+ * Tables added before anyone sits down (nobody seated, none broken) are the room's starting tables.
+ */
 export async function addTables(tournamentId: string, input: CreateTablesInput): Promise<SeatingMutationDto> {
   return seatingWrite(tournamentId, async (locked) => {
-    const created = await addTablesTo(locked, input.count, input.seatCount);
-    await logSeating(locked.tx, tournamentId, "tables_added", `Added ${plural(input.count, "table")} (${input.seatCount} seats)`, {
-      data: { tableNumbers: created.map((table) => table.tableNumber), seatCount: input.seatCount },
+    const { state } = locked;
+    const settings = seatingSettingsOf(locked.tournament, state);
+    const seatCount = input.seatCount ?? settings.seatsPerTable;
+    const shape = input.shape ?? settings.tableShape;
+    const created = await addTablesTo(locked, input.count, seatCount, shape);
+    const unplayed = state.snapshot.seats.length === 0 && state.snapshot.tables.every((table) => table.status === "active");
+    if (unplayed) await keepStartingTables(locked, settings, state.snapshot.tables.length + created.length);
+    await logSeating(locked.tx, tournamentId, "tables_added", `Added ${plural(input.count, "table")} (${seatCount} seats)`, {
+      data: { tableNumbers: created.map((table) => table.tableNumber), seatCount, shape },
     });
     return { moves: [] };
   });
@@ -333,6 +383,11 @@ export async function updateTable(tournamentId: string, tableId: string, input: 
       changes.status = "active";
       changes.brokenAt = null;
       descriptions.push(`${label} reopened`);
+    }
+    // Compared with how it is drawn now, so choosing the shape it already has (from the tournament or club) changes nothing.
+    if (input.shape !== undefined && input.shape !== resolveTableShape(table.shape, seatingSettingsOf(locked.tournament, state).tableShape)) {
+      changes.shape = input.shape;
+      descriptions.push(`${label} is now ${SHAPE_TEXT[input.shape]}`);
     }
 
     if (descriptions.length > 0) {
@@ -383,30 +438,62 @@ export async function breakTable(req: Request, tournamentId: string, tableId: st
 // Seating
 
 /**
- * POST /api/tournaments/:id/seating/setup: tables for everyone still in (suggestTables, unless
- * `tableCount`), then everyone drawn. All or nothing: 409 TABLES_EXIST when a table is in play,
- * TABLE_LIMIT, INSUFFICIENT_SEATS for a `tableCount` too small.
+ * Who of `ids` setup seats when its tables cannot take everyone: those who have paid first, then in
+ * sign-up order (the order `ids` come in), as many as there are seats; the rest wait for the
+ * advisor's "Open Table N".
+ */
+function firstToSit(state: SeatingState, ids: readonly string[], seats: number): string[] {
+  if (ids.length <= seats) return [...ids];
+  const paid = new Set(state.snapshot.eligible.filter((player) => player.paymentConfirmed).map((player) => player.registrationId));
+  return [...ids.filter((id) => paid.has(id)), ...ids.filter((id) => !paid.has(id))].slice(0, seats);
+}
+
+/**
+ * POST /api/tournaments/:id/seating/setup (round 5): the starting tables (setupTableCount from the
+ * seating settings, unless `tableCount`), of the settings' seats and shape (unless sent), then
+ * everyone still in drawn; when the tables cannot take everyone, those who have paid sit first and the
+ * rest wait (the advisor then says to open a table). Seats or a shape sent become the tournament's
+ * own settings, so tables opened later match, and the number of tables its starting tables, which the
+ * advisor never breaks while players are still arriving (R5REV1-ADV-01). 409 TABLES_EXIST when a table is in play, TABLE_LIMIT.
  */
 export async function setUpSeating(req: Request, tournamentId: string, input: SeatingSetupInput): Promise<SeatingMutationDto> {
   return seatingWrite(tournamentId, async (locked) => {
-    const { tx, state } = locked;
+    const { tx, tournament, state } = locked;
     if (state.snapshot.tables.some((table) => table.status === "active")) {
       throw conflict("TABLES_EXIST", "Tables are already set up: add tables or draw seats instead");
     }
+    const settings = seatingSettingsOf(tournament, state);
     const { ids, excludedUnconfirmed } = drawable(state, unseatedIds(state), input.includeUnconfirmed);
-    const tableCount = input.tableCount ?? suggestTables(ids.length, input.seatCount).tableCount;
-    const created = await addTablesTo(locked, tableCount, input.seatCount);
-    const withTables = { ...seatingState([...state.tables, ...created], state.entries, state.snapshot.seats), lastChange: state.lastChange };
-    const plan = planOrThrow(planDraw(withTables.snapshot, ids, cryptoRng));
+    const seatCount = input.seatCount ?? settings.seatsPerTable;
+    const shape = input.shape ?? settings.tableShape;
+    // The starting tables as they would be at the seats chosen (a 6-handed setup needs more tables than 9-handed).
+    const atSeats = resolveSeatingSettings({ tournament: { ...tournament, seatsPerTable: seatCount }, club: state.club });
+    const tableCount = input.tableCount ?? setupTableCount(atSeats, ids.length);
+    const ownSettings = {
+      ...(input.seatCount !== undefined && input.seatCount !== settings.seatsPerTable ? { seatsPerTable: input.seatCount } : {}),
+      ...(input.shape !== undefined && input.shape !== settings.tableShape ? { tableShape: input.shape } : {}),
+      // The tables the room opens with are its starting tables (R5REV1-ADV-01).
+      ...(tableCount !== settings.startingTables ? { startingTables: tableCount } : {}),
+    };
+    if (Object.keys(ownSettings).length > 0) await setTournamentColumns(tx, tournament.id, ownSettings);
+    const created = await addTablesTo(locked, tableCount, seatCount, shape);
+    const withTables = { ...state, ...seatingState([...state.tables, ...created], state.entries, state.snapshot.seats, state.club, state.maxPlayers) };
+    const seating = firstToSit(state, ids, tableCount * seatCount);
+    const plan = planOrThrow(planDraw(withTables.snapshot, seating, cryptoRng));
     const versionAfter = await persist(req, { ...locked, state: withTables }, plan);
     const moves = toMoveDtos(withTables, plan.moves);
-    await logSeating(tx, tournamentId, "tables_added", `Added ${plural(tableCount, "table")} (${input.seatCount} seats)`, {
-      data: { tableNumbers: created.map((table) => table.tableNumber), seatCount: input.seatCount },
+    await logSeating(tx, tournamentId, "tables_added", `Added ${plural(tableCount, "table")} (${seatCount} seats)`, {
+      data: { tableNumbers: created.map((table) => table.tableNumber), seatCount, shape },
     });
     if (plan.moves.length > 0) {
-      await logSeating(tx, tournamentId, "seating_drawn", `Seats drawn for ${plural(plan.moves.length, "player")}`, {
-        data: { scope: "unseated", players: plan.moves.length, ...changeData(moves, versionAfter) },
-      });
+      const left = ids.length - seating.length;
+      await logSeating(
+        tx,
+        tournamentId,
+        "seating_drawn",
+        `Seats drawn for ${plural(plan.moves.length, "player")}${left > 0 ? `; ${plural(left, "player")} waiting for a seat` : ""}`,
+        { data: { scope: "unseated", players: plan.moves.length, ...(left > 0 ? { waiting: left } : {}), ...changeData(moves, versionAfter) } },
+      );
     }
     return { moves, excludedUnconfirmed };
   });
@@ -544,6 +631,39 @@ export async function drawFinalTable(req: Request, tournamentId: string, input: 
 }
 
 /**
+ * POST /api/tournaments/:id/seating/open-table (round 5, the advisor's "Open Table N"): one more table
+ * (the next number; the settings' seats and shape unless sent), the waiting players seated and the
+ * tables evened out to within one player (planOpenTable), all in one transaction. The plan is the one
+ * the advice showed: the same snapshot and the same seeded draw (openTableRng), so with the
+ * `expectedVersion` the advice came with Apply does exactly what was shown, and a seating changed
+ * since (a seat, or who is waiting for one: seatingVersion) is 409 STALE_PLAN. Logged as table_opened with its moves, so Undo can put them back
+ * (the table then stays, empty, for the TD to remove).
+ */
+export async function openTable(req: Request, tournamentId: string, input: OpenTableInput): Promise<SeatingMutationDto> {
+  return seatingWrite(tournamentId, async (locked) => {
+    const { tx, tournament, state } = locked;
+    assertVersion(locked, input.expectedVersion);
+    const settings = seatingSettingsOf(tournament, state);
+    const seatCount = input.seatCount ?? settings.seatsPerTable;
+    const shape = input.shape ?? settings.tableShape;
+    const before = state.snapshot;
+    const rng = openTableRng(before);
+    const [table] = await addTablesTo(locked, 1, seatCount, shape);
+    const plan = planOpenTable(before, settings, { id: table.id, tableNumber: table.tableNumber, seatCount: table.seatCount, status: "active" }, rng);
+    const withTable = { ...state, ...seatingState([...state.tables, table], state.entries, state.snapshot.seats, state.club, state.maxPlayers) };
+    const versionAfter = await persist(req, { ...locked, state: withTable }, plan);
+    const moves = toMoveDtos(withTable, plan.moves);
+    const seated = moves.filter((move) => move.from === null).length;
+    const moved = moves.length - seated;
+    const parts = [...(seated > 0 ? [`${plural(seated, "player")} seated`] : []), ...(moved > 0 ? [`${moved} moved`] : [])];
+    await logSeating(tx, tournamentId, "table_opened", `Opened ${tableName(table)}${parts.length > 0 ? `: ${parts.join(", ")}` : ""}`, {
+      data: { tableNumber: table.tableNumber, seatCount, shape, seated, moved, sizes: plan.sizes, ...changeData(moves, versionAfter) },
+    });
+    return { moves };
+  });
+}
+
+/**
  * POST /api/tournaments/:id/seating/undo: everyone the last table break, draw, balance or final table
  * moved goes back to the seat they had before it (players it seated are unseated again), and the
  * tables it archived reopen. Only the last such change, and only while the seats are exactly as it
@@ -568,12 +688,14 @@ export async function undoSeatingChange(req: Request, tournamentId: string, inpu
     const reopen = state.tables.filter((table) => table.status === "broken" && undo.archivedTableIds.includes(table.id));
     await seatingRepo.reopenTables(tx, tournamentId, reopen.map((table) => table.id));
     const reopened = {
+      ...state,
       ...seatingState(
         state.tables.map((table) => (reopen.includes(table) ? { ...table, status: "active" as const, brokenAt: null } : table)),
         state.entries,
         state.snapshot.seats,
+        state.club,
+        state.maxPlayers,
       ),
-      lastChange: entry,
     };
     // Back the way each player came: from where the change put them to where it found them.
     const spot = (ref: SeatMoveDto["from"]) => (ref ? { tableId: ref.tableId, seatNumber: ref.seatNumber } : null);
@@ -600,20 +722,99 @@ export async function releaseSeatOnElimination(tx: Executor, registrationId: str
   await seatingRepo.releaseSeats(tx, [registrationId], "eliminated");
 }
 
+/** The seating as a hook plans from it: seats held by players who are out released first, so they never look taken. */
+async function loadHealed(tx: Executor, tournament: SeatingTournament): Promise<SeatingState> {
+  await seatingRepo.healSeats(tx, tournament.id);
+  return loadState(tx, tournament);
+}
+
+/**
+ * Auto-seat (round 5, item 9): sits a player who has just come into play down at the open table
+ * with the fewest players, in a random empty seat (planAutoSeat), when the tournament's setting
+ * allows it now (autoSeatDecision) and they are not on the waiting list (round 5, item 15: seated
+ * once they are accepted, autoSeatOnPayment). The seat row is the app's (assigned_by null), logged as "Alice seated at Table 2, Seat 7"
+ * with `auto: true`. With every seat taken the player waits; `logWaiting` then tells the TD so
+ * ("seat_waiting", staff-only), and the advisor says to open a table.
+ */
+async function seatAutomatically(
+  tx: Executor,
+  tournament: Tournament,
+  state: SeatingState,
+  registrationId: string,
+  { logWaiting, returning = false }: { logWaiting: boolean; returning?: boolean },
+): Promise<AutoSeatResultDto> {
+  const entry = state.entries.find((candidate) => candidate.registrationId === registrationId);
+  if (!entry || entry.isEliminated) return { status: "waiting", reason: "not_eligible" };
+  const settings = seatingSettingsOf(tournament, state);
+  const decision = autoSeatDecision(settings.autoSeat, entry.paymentConfirmed);
+  if (decision !== "seat") return { status: "waiting", reason: decision };
+  // On the waiting list: seated once accepted at the desk (autoSeatOnPayment).
+  if (state.waitingList.has(registrationId)) return { status: "waiting", reason: "awaiting_payment" };
+  const plan = planAutoSeat(state.snapshot, registrationId, cryptoRng);
+  if (!plan.ok) {
+    if (plan.skip === "tables_full" && logWaiting) {
+      await logSeating(tx, tournament.id, "seat_waiting", `${entry.player.name} is waiting for a seat: every table is full`, {
+        playerId: entry.player.id,
+        data: { registrationId },
+      });
+    }
+    return { status: "waiting", reason: plan.skip };
+  }
+  const { to } = plan.move;
+  await seatingRepo.insertSeats(tx, [{ tournamentId: tournament.id, tableId: to.tableId, registrationId, seatNumber: to.seatNumber, assignedBy: null }]);
+  const seat = toSeatRef(state.tables, to);
+  await logSeating(tx, tournament.id, "seat_assigned", `${entry.player.name} ${returning ? "is back in, seated at" : "seated at"} ${seatText(seat)}`, {
+    playerId: entry.player.id,
+    data: { registrationId, from: null, to: { tableNumber: seat.tableNumber, seatNumber: seat.seatNumber }, tableNumber: seat.tableNumber, seatNumber: seat.seatNumber, auto: true },
+  });
+  return { status: "seated", seat };
+}
+
+/**
+ * A new registration (POST /api/tournaments/:id/registrations), inside its transaction: seated by
+ * auto-seat when the setting allows it now ("when they register", or "once they've paid" with the
+ * payment ticked at the desk), else waiting and why (no tables yet: setup seats them; off; not paid;
+ * every table full, which tells the TD).
+ */
+export async function autoSeatNewRegistration(tx: Executor, tournament: Tournament, registrationId: string): Promise<AutoSeatResultDto> {
+  return seatAutomatically(tx, tournament, await loadHealed(tx, tournament), registrationId, { logWaiting: true });
+}
+
+/**
+ * A payment just confirmed (PATCH /api/registrations/:id/confirm-payment), inside its transaction: a
+ * player still in who has no seat is seated by auto-seat, unless it is off: "once they've paid" seats
+ * them now, and "when they register" seats a player held back until then (accepted off the waiting
+ * list, or left out of a paid-players-only draw). Null when auto-seat had nothing to do (off, seated, out, or no
+ * table in play yet: setup seats them).
+ */
+export async function autoSeatOnPayment(tx: Executor, tournament: Tournament, registrationId: string): Promise<AutoSeatResultDto | null> {
+  const state = await loadHealed(tx, tournament);
+  const settings = seatingSettingsOf(tournament, state);
+  const inPlay = state.snapshot.eligible.some((player) => player.registrationId === registrationId);
+  const seated = state.snapshot.seats.some((seat) => seat.registrationId === registrationId);
+  const tablesInPlay = state.snapshot.tables.some((table) => table.status === "active");
+  if (settings.autoSeat === "off" || !inPlay || seated || !tablesInPlay) return null;
+  // "When they register" told the TD already if the tables were full then.
+  return seatAutomatically(tx, tournament, state, registrationId, { logWaiting: settings.autoSeat === "once_paid" });
+}
+
 /**
  * An undone bust, or a re-buy that brings a busted player back: they get back the seat they were
  * busted from, when their last seat was released by that bust, its table is still in play, the seat
- * still exists and nobody sits in it (planRestore). Otherwise nothing: they wait as unseated.
- * Logged as "Alice is back at Table 2, Seat 4".
+ * still exists and nobody sits in it (planRestore), logged as "Alice is back at Table 2, Seat 4".
+ * Otherwise auto-seat seats them as it would a new arrival when the setting allows (round 5: "Alice
+ * is back in, seated at Table 1, Seat 3"), else they wait as unseated.
  */
-export async function restoreSeatAfterReturn(tx: Executor, tournamentId: string, registrationId: string): Promise<void> {
+export async function restoreSeatAfterReturn(tx: Executor, tournament: Tournament, registrationId: string): Promise<void> {
   const last = await seatingRepo.latestSeatOf(tx, registrationId);
-  if (last?.releaseReason !== "eliminated") return;
-  // Seats held by other players who are out must not make the old seat look taken.
-  await seatingRepo.healSeats(tx, tournamentId);
-  const state = await loadState(tx, tournamentId);
-  const move = planRestore(state.snapshot, registrationId, { tableId: last.tableId, seatNumber: last.seatNumber });
-  if (!move) return;
+  const state = await loadHealed(tx, tournament);
+  if (state.snapshot.tables.every((table) => table.status !== "active")) return;
+  const move = last?.releaseReason === "eliminated" ? planRestore(state.snapshot, registrationId, { tableId: last.tableId, seatNumber: last.seatNumber }) : null;
+  if (!last || !move) {
+    await seatAutomatically(tx, tournament, state, registrationId, { logWaiting: true, returning: true });
+    return;
+  }
+  const tournamentId = tournament.id;
   await seatingRepo.insertSeats(tx, [{ tournamentId, tableId: last.tableId, registrationId, seatNumber: last.seatNumber, assignedBy: null }]);
   const table = findTable(state, last.tableId);
   const [restored] = toMoveDtos(state, [move]);

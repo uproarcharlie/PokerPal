@@ -30,9 +30,37 @@ describe("Toaster", () => {
     expect(saved.parentElement).toHaveAttribute("aria-live", "polite");
 
     act(() => void toast({ title: "Error", description: "Could not save", variant: "destructive" }));
-    const failed = notifications().getByRole("listitem");
-    expect(failed).toHaveTextContent("Could not save");
-    expect(failed.parentElement).toHaveAttribute("aria-live", "assertive");
+    const failed = notifications().getByText("Could not save").closest("li");
+    expect(failed?.parentElement).toHaveAttribute("aria-live", "assertive");
+  });
+
+  it("stacks up to three, and never lets news push out a toast that offers a next step (R5REV-HOST-08)", () => {
+    render(<Toaster />);
+    const undo = vi.fn();
+    act(() => void toast({ title: "Player busted", description: "Ann is out.", action: { label: "Undo", onClick: undo } }));
+    act(() => void toast({ title: "Player seated", description: "Bob seated at Table 1, Seat 2." }));
+    act(() => void toast({ title: "Player seated", description: "Cat seated at Table 2, Seat 4." }));
+    expect(notifications().getAllByRole("listitem")).toHaveLength(3);
+
+    // A fourth: the oldest news goes, not the older Undo.
+    act(() => void toast({ title: "Player seated", description: "Dan seated at Table 1, Seat 5." }));
+    const shown = notifications().getAllByRole("listitem");
+    expect(shown.map((item) => item.textContent)).toEqual([
+      expect.stringContaining("Dan"),
+      expect.stringContaining("Cat"),
+      expect.stringContaining("Ann is out."),
+    ]);
+    expect(notifications().getByRole("button", { name: "Undo" })).toBeInTheDocument();
+
+    // With every toast offering a step, news waits its turn rather than push one out...
+    act(() => void toast({ title: "Re-buy recorded", action: { label: "Seat now", onClick: vi.fn() } }));
+    act(() => void toast({ title: "Elimination undone", action: { label: "Seat now", onClick: vi.fn() } }));
+    act(() => void toast({ title: "Player seated", description: "Eve seated at Table 2, Seat 1." }));
+    const titles = () => notifications().getAllByRole("listitem").map((item) => item.querySelector("p")?.textContent);
+    expect(titles()).toEqual(["Elimination undone", "Re-buy recorded", "Player busted"]);
+    // ...and only another next step replaces the oldest of them.
+    act(() => void toast({ title: "Add-on recorded", action: { label: "Seat now", onClick: vi.fn() } }));
+    expect(titles()).toEqual(["Add-on recorded", "Elimination undone", "Re-buy recorded"]);
   });
 
   it("offers the next step a toast names, and closes once it is taken", async () => {

@@ -9,6 +9,7 @@ import { MoneyText } from "@/components/shared/money-text";
 import { CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { clubTimeZone, formatDay } from "@/lib/format";
 import { QueryState } from "@/components/shared/query-state";
+import { ClubThemeScope } from "@/features/branding/components/public/club-theme-scope";
 import { useClub } from "@/features/clubs/hooks";
 import { useTournament } from "@/features/tournaments/hooks";
 import { CenteredCard, TOURNAMENT_PAGE_STATES } from "../components/page-shell";
@@ -82,9 +83,12 @@ export default function TournamentQrPage() {
   const tournament = useTournament(tournamentId);
   usePageMeta({ title: tournament.data ? `QR code: ${tournament.data.name}` : "QR code", noindex: true });
 
+  // The poster wears the club's own colours (round 5, item 13).
   return (
-    <QueryState query={tournament} {...TOURNAMENT_PAGE_STATES}>
-      {(loaded) => <QrPoster tournament={loaded} />}
-    </QueryState>
+    <ClubThemeScope clubId={tournament.data?.clubId} scheme="light">
+      <QueryState query={tournament} {...TOURNAMENT_PAGE_STATES}>
+        {(loaded) => <QrPoster tournament={loaded} />}
+      </QueryState>
+    </ClubThemeScope>
   );
 }

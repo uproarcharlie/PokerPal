@@ -10,18 +10,28 @@
  * together, or none of them. Player requests still waiting are cleared with them (none could be
  * applied to a completed tournament): the preview warns about each one and the plan hash covers them,
  * so nothing is discarded that the TD was not shown. A correction scores season points with the rules
- * the first finalize froze, not the points settings as they are now.
+ * the first finalize froze, not the points settings as they are now. A deal (round 5) pays the players
+ * still in the amounts they agreed, sharing exactly what their places pay together (409 DEAL_INVALID
+ * otherwise); it is frozen in the snapshot, logged publicly with its reason and audited. Finalize pays
+ * exactly the prizes set (round 5, item 16): where a difference from the money available went (kept by
+ * the club, added to the places, carried over, or added by the club) is frozen in the snapshot, logged
+ * publicly and audited, and money carried over is recorded for the next tournament (carry-overs).
  */
 import { createHash } from "node:crypto";
 import type { Request } from "express";
-import type {
-  FinalizeInput,
-  FinalizePreviewDto,
-  FinalizePreviewInput,
-  FinalizeRefusal,
-  FinalizeResultDto,
+import type { AuditData } from "@shared/api/admin";
+import {
+  toDealInput,
+  type DealRequest,
+  type FinalizeInput,
+  type FinalizePreviewDto,
+  type FinalizePreviewInput,
+  type FinalizeRefusal,
+  type FinalizeResultDto,
 } from "@shared/api/finalize";
-import { buildFinalizePlan, planHashInput, type FinalizePlan, type PendingRequestInput } from "@shared/domain/finalize";
+import { describeDeal, type SnapshotDeal } from "@shared/domain/deal";
+import { buildFinalizePlan, planHashInput, type FinalizePlan, type PendingRequestInput, type SnapshotDifference } from "@shared/domain/finalize";
+import { carryTargetName, differenceSentence } from "@shared/domain/prize-difference";
 import { rakeLabel } from "@shared/domain/prize-pool";
 import type { PointsAllocation, PointsSystem, Tournament } from "@shared/schema";
 import { db, type Executor } from "../db";
@@ -29,6 +39,7 @@ import { actingUserId } from "../http/authz";
 import { badRequest, conflict, notFound } from "../http/errors";
 import { insertActivity } from "../repositories/activity";
 import { getClub } from "../repositories/clubs";
+import { carryOverOfSource } from "../repositories/carry-overs";
 import { writeFinalResults } from "../repositories/finalize";
 import { deletePendingActionsOfTournament, listPendingActionsWithPlayers } from "../repositories/pending-actions";
 import { playerNames } from "../repositories/players";
@@ -36,8 +47,9 @@ import { pointsRules } from "../repositories/points";
 import { registrationsOf } from "../repositories/registrations";
 import { getTournament, lockTournamentForUpdate, setTournamentColumns } from "../repositories/tournaments";
 import { recordAudit } from "./audit";
+import { carryOverChangeProblem, recordCarryOver } from "./carry-overs";
 import { finishClock } from "./clock";
-import { displayWithNames, toPrizePoolDto, type PrizePoolContext } from "./prize-pool";
+import { carryTargetOf, displayWithNames, toPrizePoolDto, type PrizePoolContext } from "./prize-pool";
 
 interface PlanContext extends PrizePoolContext {
   pointsSystem: PointsSystem | null;
@@ -60,10 +72,11 @@ async function loadPlanContext(ex: Executor, tournament: Tournament, { lock }: {
     playerName: player?.name ?? "Unknown player",
     targetPlayerName: targetPlayer?.name ?? null,
   }));
-  return { tournament, registrations, club, playerNames: names, ...rules, pendingRequests };
+  return { tournament, registrations, club, playerNames: names, carryTarget: await carryTargetOf(ex, tournament), ...rules, pendingRequests };
 }
 
-function makePlan(context: PlanContext, finishOrder: readonly string[] | undefined, finalizedAt: Date): FinalizePlan {
+/** The plan for `finishOrder`, paying the players still in `deal`'s amounts when one is sent. */
+function makePlan(context: PlanContext, finishOrder: readonly string[] | undefined, finalizedAt: Date, deal?: DealRequest): FinalizePlan {
   return buildFinalizePlan({
     tournament: context.tournament,
     registrations: context.registrations,
@@ -74,14 +87,17 @@ function makePlan(context: PlanContext, finishOrder: readonly string[] | undefin
     finalizedAt: finalizedAt.toISOString(),
     rakeLabel: rakeLabel(context.club),
     pendingRequests: context.pendingRequests,
+    deal: deal ? toDealInput(deal) : undefined,
+    carryTarget: context.carryTarget,
   });
 }
 
 type ReadyPlan = Extract<FinalizePlan, { ok: true }>;
 
-/** sha256 of what the plan would pay, store and discard, first 32 hex characters. */
+/** sha256 of what the plan would pay, store, carry over and discard, first 32 hex characters. */
 export function planHash(plan: ReadyPlan): string {
-  return createHash("sha256").update(planHashInput(plan.prizePool.net, plan.rows, plan.pendingRequestIds)).digest("hex").slice(0, 32);
+  const input = planHashInput(plan.prizePool.net, plan.rows, plan.pendingRequestIds, plan.prizePool.difference);
+  return createHash("sha256").update(input).digest("hex").slice(0, 32);
 }
 
 const REFUSALS: Readonly<Record<FinalizeRefusal, string>> = {
@@ -89,6 +105,7 @@ const REFUSALS: Readonly<Record<FinalizeRefusal, string>> = {
   INVALID_FINISH_ORDER: "Give the finishing order of every player still in, or of every player, each once",
   ALREADY_FINALIZED: "This tournament has already been finalized",
   TOURNAMENT_CANCELLED: "A cancelled tournament cannot be finalized",
+  DEAL_INVALID: "The deal must share exactly what the players still in would be paid",
 };
 
 function refusalOf(tournament: Tournament, plan: FinalizePlan, force: boolean): FinalizeRefusal | undefined {
@@ -136,7 +153,17 @@ function overwrittenResults({ tournament, registrations }: PlanContext) {
   };
 }
 
-function toPreviewDto(context: PlanContext, plan: FinalizePlan, force: boolean): FinalizePreviewDto {
+/**
+ * `toPreviewDto`'s warnings beyond the plan's: a correction that would change money this tournament
+ * carried over that another tournament has already added to its pool (finalize refuses it).
+ */
+async function carryOverWarnings(ex: Executor, context: PlanContext, plan: FinalizePlan): Promise<string[]> {
+  if (context.tournament.status !== "completed") return [];
+  const problem = await carryOverChangeProblem(ex, await carryOverOfSource(ex, context.tournament.id), plan.prizePool.difference.carriedOverCents);
+  return problem ? [problem] : [];
+}
+
+function toPreviewDto(context: PlanContext, plan: FinalizePlan, force: boolean, extraWarnings: readonly string[] = []): FinalizePreviewDto {
   const code = refusalOf(context.tournament, plan, force);
   return {
     ok: code === undefined,
@@ -146,7 +173,9 @@ function toPreviewDto(context: PlanContext, plan: FinalizePlan, force: boolean):
     prizePool: toPrizePoolDto(context),
     rows: plan.ok ? plan.rows : [],
     activePlayers: plan.activePlayers,
-    warnings: plan.warnings,
+    dealable: plan.dealable,
+    dealProblems: plan.ok ? [] : (plan.dealProblems ?? []),
+    warnings: [...plan.warnings, ...extraWarnings],
     pendingRequests: context.pendingRequests.map((request) => ({ ...request, targetPlayerName: request.targetPlayerName ?? null })),
     previous: previousResults(context),
   };
@@ -157,11 +186,22 @@ export async function previewFinalize(id: string, input: FinalizePreviewInput): 
   const tournament = await getTournament(db, id);
   if (!tournament) throw notFound("Tournament not found");
   const context = await loadPlanContext(db, tournament, { lock: false });
-  return toPreviewDto(context, makePlan(context, input.finishOrder, new Date()), input.force === true);
+  const plan = makePlan(context, input.finishOrder, new Date(), input.deal);
+  return toPreviewDto(context, plan, input.force === true, await carryOverWarnings(db, context, plan));
 }
 
 const FINALIZED = "Tournament finalized - positions, prizes, and points assigned";
 const REFINALIZED = "Tournament finalized again - positions, prizes, and points corrected";
+
+/** The public feed's line for a deal: "Deal: Alice $450, Bob $350 (Chip chop at 2 handed)". */
+const dealDescription = (deal: SnapshotDeal) => `Deal: ${describeDeal(deal)} (${deal.reason})`;
+
+/**
+ * The public feed's line for where a difference went: "The prizes add up to $950, $50 less than the
+ * $1,000 available for prizes: it is carried over to Winter League".
+ */
+const differenceDescription = (difference: SnapshotDifference) =>
+  (differenceSentence(difference, difference.carryTarget ?? carryTargetName(null)) ?? "").replace(/\.$/, "");
 
 /** POST /api/tournaments/:id/finalize */
 export async function finalizeTournament(req: Request, id: string, input: FinalizeInput): Promise<FinalizeResultDto> {
@@ -178,7 +218,11 @@ export async function finalizeTournament(req: Request, id: string, input: Finali
 
     const context = await loadPlanContext(tx, tournament, { lock: true });
     const now = new Date();
-    const plan = makePlan(context, input.finishOrder, now);
+    const plan = makePlan(context, input.finishOrder, now, input.deal);
+    if (!plan.ok && plan.problem === "DEAL_INVALID") {
+      const dealProblems = plan.dealProblems ?? [];
+      throw conflict("DEAL_INVALID", dealProblems[0]?.message ?? REFUSALS.DEAL_INVALID, { dealProblems, dealable: plan.dealable });
+    }
     if (!plan.ok) throw conflict(plan.problem, REFUSALS[plan.problem], { activePlayers: plan.activePlayers });
     const hash = planHash(plan);
     if (input.expectedPlanHash && input.expectedPlanHash !== hash) {
@@ -187,6 +231,8 @@ export async function finalizeTournament(req: Request, id: string, input: Finali
       });
     }
 
+    const { difference } = plan.snapshot.pool;
+    await recordCarryOver(tx, req, tournament, difference);
     await writeFinalResults(tx, plan.rows);
     await setTournamentColumns(tx, id, {
       status: "completed",
@@ -200,9 +246,28 @@ export async function finalizeTournament(req: Request, id: string, input: Finali
       eventType: again ? "tournament_refinalized" : "status_change",
       description: again ? REFINALIZED : FINALIZED,
     });
+    const { deal } = plan.snapshot;
+    if (deal) {
+      await insertActivity(tx, { tournamentId: id, eventType: "deal", description: dealDescription(deal), eventData: JSON.stringify(deal) });
+    }
+    if (difference) {
+      await insertActivity(tx, {
+        tournamentId: id,
+        eventType: "prize_pool_adjusted",
+        description: differenceDescription(difference),
+        eventData: JSON.stringify({ mode: "finalized", difference }),
+      });
+    }
     // A request still waiting can never be applied to a completed tournament (TN2-02); the preview listed each one.
     const requestsCleared = await deletePendingActionsOfTournament(tx, id);
-    const pool = { netCents: plan.prizePool.net, netSource: plan.prizePool.netSource, planHash: hash, requestsCleared };
+    const pool: AuditData["tournament.finalize"] = {
+      netCents: plan.prizePool.net,
+      netSource: plan.prizePool.netSource,
+      planHash: hash,
+      requestsCleared,
+      ...(deal ? { deal } : {}),
+      ...(difference ? { difference } : {}),
+    };
     await recordAudit(
       req,
       again

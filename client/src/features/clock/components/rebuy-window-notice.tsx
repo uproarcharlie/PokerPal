@@ -43,7 +43,7 @@ export function RebuyWindowNotice({ tournament, structure }: RebuyWindowNoticePr
         <p>
           The structure&apos;s &ldquo;Last re-buys / add-ons&rdquo; break ends {durationText(closesAt)} into the game, but the TV {countdown}.
         </p>
-        <Button size="sm" variant="outline" busy={update.isPending} onClick={align}>
+        <Button size="sm" variant="outline" className="h-auto min-h-11 whitespace-normal text-left" busy={update.isPending} onClick={align}>
           Close them with the break ({durationText(closesAt)})
         </Button>
       </AlertDescription>

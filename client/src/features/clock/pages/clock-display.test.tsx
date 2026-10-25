@@ -1,15 +1,19 @@
-import { act, screen, within } from "@testing-library/react";
+import { act, fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { delay, http, HttpResponse } from "msw";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { clockDto, liveDisplayDto, mockDisplay, pausedClock, recordClockActions, resetServerTime, runningClock, serveDisplay } from "@test/helpers/clock-dto";
 import { server } from "@test/msw/server";
 import { apiError, mockSignedOut, renderWithApp } from "@test/helpers/web";
+import { recordRequests } from "@test/helpers/requests";
 import type { PublicSeatingDto } from "@shared/api/seating";
 import type { LiveDisplayDto } from "@shared/api/live-display";
+import { CENTRAL_STARS_THEME, themeVariables } from "@shared/domain/theme";
 import { DISPLAY_REFRESH_MS, HANDHELD_QUERY } from "../api";
 import { noPayoutsNote } from "../components/public/display-overlays";
-import { SOUND_PREFERENCE_KEY } from "../components/public/use-clock-sound";
+import { VOLUME_SAVE_MS } from "../components/public/screen-settings";
+import { cueFrequencies, SOUND_PREFERENCE_KEY, type ClockCue } from "../components/public/use-clock-sound";
+import { ThemeScope } from "@/app/theme";
 import ClockDisplayPage from "./clock-display";
 
 /** A browser's audio, recording every beep scheduled. */
@@ -30,16 +34,37 @@ class FakeAudioContext {
     return Promise.resolve();
   }
   createOscillator() {
-    const oscillator = { type: "sine", frequency: { value: 0 }, connect: vi.fn(), start: vi.fn(), stop: vi.fn() };
+    const oscillator = {
+      type: "sine",
+      frequency: { value: 0, setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+      connect: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+    };
     queueMicrotask(() => this.beeps.push(oscillator.frequency.value));
     return oscillator;
   }
   createGain() {
-    return { gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() }, connect: vi.fn() };
+    return { gain: { value: 1, setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() }, connect: vi.fn() };
+  }
+  createDynamicsCompressor() {
+    const param = () => ({ value: 0 });
+    return { threshold: param(), knee: param(), ratio: param(), attack: param(), release: param(), connect: vi.fn() };
   }
 }
 
 const beeps = () => FakeAudioContext.instances.flatMap((context) => context.beeps);
+
+/**
+ * Lets `ms` pass a step at a time, each drawn: a screen draws every second it shows, but one act()
+ * over many seconds would let React draw only the last of them.
+ */
+async function pass(ms: number, step = 250) {
+  for (let left = ms; left > 0; left -= step) await act(() => vi.advanceTimersByTimeAsync(Math.min(step, left)));
+}
+
+/** What the room hears for these sounds, one after another. */
+const heard = (...cues: ClockCue[]) => cues.flatMap(cueFrequencies);
 
 function showPage() {
   return renderWithApp(<ClockDisplayPage />, { path: "/clock/t1", route: "/clock/:tournamentId" });
@@ -60,6 +85,7 @@ beforeEach(() => {
   FakeAudioContext.startState = "running";
   vi.stubGlobal("AudioContext", FakeAudioContext);
   window.localStorage.clear();
+  window.sessionStorage.clear();
 });
 
 afterEach(() => {
@@ -75,51 +101,118 @@ describe("the TV clock", () => {
     });
     showPage();
     expect(screen.getByRole("status")).toHaveTextContent("Loading the clock");
-    expect(await screen.findByTestId("clock-face")).toBeInTheDocument();
+    expect(await screen.findByTestId("clock-centrepiece")).toBeInTheDocument();
   });
 
-  it("shows the level, the time left, the blinds with the ante, what comes next and the time to the break", async () => {
+  it("shows the time left, the blinds with the ante as its headline, what comes next and the time to the break, and no level number (round 5, item 21)", async () => {
     const now = Date.now();
     serveDisplay({ clock: runningClock(now, { levelIndex: 2, remainingMs: 12 * 60_000 + 5_000 }) });
     showPage();
 
-    expect(await screen.findByRole("heading", { name: "Level 3" })).toBeInTheDocument();
+    expect(await screen.findByTestId("clock-face")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1, name: "Friday Freezeout" })).toBeInTheDocument();
+    // The tournament's name is the only heading: no "LEVEL 3" over the countdown.
+    expect(screen.getAllByRole("heading").map((heading) => heading.textContent)).toEqual(["Friday Freezeout"]);
+    expect(screen.getByTestId("clock-face")).not.toHaveTextContent(/Level/);
     expect(screen.getByRole("timer", { name: "Time left" })).toHaveTextContent("12:05");
     expect(screen.getByText("400/800")).toBeInTheDocument();
     expect(screen.getByText("BB ante 800")).toBeInTheDocument();
     expect(screen.getByText("Break (10 min)")).toBeInTheDocument();
-    expect(screen.getByText("Break in").nextSibling).toHaveTextContent("12:05");
+    expect(screen.getByTestId("break-line")).toHaveTextContent("Break in 12:05");
     expect(screen.getByText("Level 3: blinds 400/800, BB ante 800")).toHaveAttribute("aria-live", "polite");
+    // No total of levels anywhere (round 5, item 21).
+    expect(screen.getByTestId("clock-face")).not.toHaveTextContent(/of \d/);
 
     await act(() => vi.advanceTimersByTimeAsync(5000));
     expect(screen.getByRole("timer", { name: "Time left" })).toHaveTextContent("12:00");
   });
 
-  it("shows the room's figures: players left, entries, the average stack in big blinds", async () => {
+  it("heads the level with its number where the TD shows it", async () => {
     const now = Date.now();
-    serveDisplay({ clock: runningClock(now, { levelIndex: 1 }), stats: { earlyBirds: 4 } });
+    serveDisplay({ clock: runningClock(now, { levelIndex: 2, displaySettings: { ...clockDto().displaySettings, showLevel: true } }) });
+    showPage();
+    expect(await screen.findByRole("heading", { name: "Level 3" })).toBeInTheDocument();
+    expect(screen.getByText("400/800")).toBeInTheDocument();
+  });
+
+  it("shows only the core figures by default: players left of those who entered and the average stack in big blinds (round 5, items 25 and 26)", async () => {
+    const now = Date.now();
+    serveDisplay({
+      clock: runningClock(now, { levelIndex: 1 }),
+      stats: { earlyBirds: 4, addons: 6, rebuys: 3, activeTables: 2 },
+      tournament: { offersRebuys: true, offersAddons: true, rebuyPeriodMinutes: 135 },
+    });
     showPage();
 
     const stats = await screen.findByTestId("display-stats");
+    expect(within(stats).getAllByRole("term").map((term) => term.textContent)).toEqual(["Players", "Average stack"]);
     expect(within(stats).getByText("Players").nextSibling).toHaveTextContent("18 / 20");
-    expect(within(stats).getByText("Early birds").nextSibling).toHaveTextContent("4");
     expect(within(stats).getByText("Average stack").nextSibling).toHaveTextContent("88,889 148.1 BB");
   });
 
-  it("heads a break Break, with its note under it, and shows the blinds play resumes at (TDN2-BREAK-WORD-MISSING)", async () => {
+  it("adds each figure the TD switched on: early birds, add-ons, re-buys, entries, chips in play, tables, the re-buy window", async () => {
     const now = Date.now();
-    serveDisplay({ clock: runningClock(now, { levelIndex: 3, remainingMs: 4 * 60_000 }) });
+    const settings = {
+      ...clockDto().displaySettings,
+      showEarlyBirds: true,
+      showAddons: true,
+      showRebuys: true,
+      showEntries: true,
+      showChipsInPlay: true,
+      showTables: true,
+      showRebuyWindow: true,
+    };
+    serveDisplay({
+      clock: runningClock(now, { levelIndex: 1, displaySettings: settings }),
+      stats: { earlyBirds: 4, addons: 6, rebuys: 3, activeTables: 2 },
+      tournament: { offersRebuys: true, offersAddons: true, rebuyPeriodMinutes: 135 },
+    });
     showPage();
 
-    expect(await screen.findByRole("heading", { name: "Break" })).toBeInTheDocument();
-    expect(within(screen.getByTestId("clock-face")).getByText("Colour up")).toBeInTheDocument();
-    expect(screen.getByText("500/1,000 · BB ante 1,000")).toBeInTheDocument();
-    expect(screen.queryByText("Break in")).not.toBeInTheDocument();
+    const stats = await screen.findByTestId("display-stats");
+    // As many as a 1024 × 768 test screen has room for, in their order.
+    const shown = within(stats).getAllByRole("term").map((term) => term.textContent);
+    expect(shown.slice(0, 4)).toEqual(["Players", "Average stack", "Re-buys & add-ons close in", "Entries"]);
+    expect(["Re-buys", "Add-ons", "Early birds", "Chips in play", "Tables"].slice(0, shown.length - 4)).toEqual(shown.slice(4));
+  });
+
+  it("makes the logo the centrepiece on a break: Break — back in over its countdown, its note, the blinds play resumes at (TDN2-BREAK-WORD-MISSING, round 5, item 24)", async () => {
+    const now = Date.now();
+    serveDisplay({ clock: runningClock(now, { levelIndex: 3, remainingMs: 4 * 60_000 }), club: { imageUrl: "/uploads/central-stars.png" } });
+    showPage();
+
+    const centre = await screen.findByTestId("clock-centrepiece");
+    expect(within(centre).getByRole("heading", { name: "Break — back in" })).toHaveAttribute("data-testid", "break-line");
+    expect(within(centre).getByRole("timer", { name: "Time left" })).toHaveTextContent("4:00");
+    expect(within(centre).getByText("Colour up")).toBeInTheDocument();
+    expect(within(centre).getByText("Next: 500/1,000 · BB ante 1,000")).toBeInTheDocument();
+    // The logo is in the middle, not over the event's name.
+    expect(within(centre).getByRole("img", { name: "Central Stars logo" })).toBeInTheDocument();
+    expect(screen.getAllByTestId("display-logo")).toHaveLength(1);
+    expect(screen.queryByTestId("clock-face")).not.toBeInTheDocument();
+  });
+
+  it("makes the logo the centrepiece before the start, with Starting soon and the first blinds, and puts it back over the name once the clock runs (round 5, item 24)", async () => {
+    let clock = clockDto();
+    mockDisplay(() => liveDisplayDto({ serverNow: Date.now(), clock, club: { imageUrl: "/uploads/central-stars.png" } }));
+    const { queryClient } = showPage();
+
+    const centre = await screen.findByTestId("clock-centrepiece");
+    expect(within(centre).getByRole("heading", { name: "Starting soon" })).toBeInTheDocument();
+    expect(within(centre).getByText("First blinds: 200/400")).toBeInTheDocument();
+    expect(within(centre).getByRole("img", { name: "Central Stars logo" })).toBeInTheDocument();
+    // The room's figures and the QR code are there while the players arrive.
+    expect(screen.getByTestId("display-qr")).toBeInTheDocument();
+
+    clock = runningClock(Date.now());
+    await act(() => queryClient.invalidateQueries());
+    expect(await screen.findByTestId("clock-face")).toBeInTheDocument();
+    expect(screen.queryByTestId("clock-centrepiece")).not.toBeInTheDocument();
+    expect(screen.getByRole("banner")).toContainElement(screen.getByRole("img", { name: "Central Stars logo" }));
   });
 
   it("says PAUSED and marks the time paused, and so does the strip over the seats (TDN2-TV-STATE-TOO-SMALL)", async () => {
-    server.use(http.get("/api/public/tournaments/t1/seating", () => HttpResponse.json({ tournament: { id: "t1", name: "Friday Freezeout", status: "in_progress" }, club: { id: "c1", name: "Central Stars", slug: "central-stars", imageUrl: null }, tables: [], players: [], unseatedCount: 0 })));
+    server.use(http.get("/api/public/tournaments/t1/seating", () => HttpResponse.json({ tournament: { id: "t1", name: "Friday Freezeout", status: "in_progress" }, club: { id: "c1", name: "Central Stars", slug: "central-stars", imageUrl: null, theme: null }, tables: [], players: [], unseatedCount: 0 })));
     serveDisplay({ clock: pausedClock({ levelIndex: 1, remainingMs: 8 * 60_000 }) });
     const { unmount } = showPage();
     const paused = await screen.findByTestId("clock-paused");
@@ -131,7 +224,7 @@ describe("the TV clock", () => {
     serveDisplay({ clock: pausedClock({ levelIndex: 1, remainingMs: 8 * 60_000, displaySettings: { ...clockDto().displaySettings, overlay: "seating" } }) });
     showPage();
     const overlay = await screen.findByRole("region", { name: "Seats" });
-    expect(within(overlay).getByTestId("overlay-strip")).toHaveTextContent(/^Paused · Level 2 · 8:00 · 300\/600$/);
+    expect(within(overlay).getByTestId("overlay-strip")).toHaveTextContent(/^Paused · 8:00 · 300\/600$/);
     expect(within(overlay).getByText("Paused ·")).toHaveAttribute("data-tone", "paused");
   });
 
@@ -154,7 +247,7 @@ describe("the TV clock", () => {
 
     serveDisplay({ qr: null });
     showPage();
-    await screen.findByTestId("clock-face");
+    await screen.findByTestId("clock-centrepiece");
     expect(screen.queryByTestId("display-qr")).not.toBeInTheDocument();
   });
 
@@ -203,6 +296,34 @@ describe("the TV clock", () => {
     expect(within(money).queryByText("AP")).not.toBeInTheDocument();
   });
 
+  it("says beside the pool where the difference went: kept by the club, carried in and over (round 5, item 16)", async () => {
+    serveDisplay({
+      money: {
+        show: true,
+        estimated: false,
+        netCents: 60_000,
+        apCents: 8_000,
+        payouts: [{ position: 1, amountCents: 60_000 }],
+        lines: [
+          { kind: "carried_in", label: "Carried over from Test Wednesday", cents: 5_000 },
+          { kind: "carried_over", label: "Carried over to Winter League", cents: 12_000 },
+        ],
+      },
+    });
+    showPage();
+    const money = await screen.findByTestId("display-money");
+    const lines = within(money).getByRole("list", { name: "Prize pool breakdown" });
+    expect(within(lines).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["Carried over from Test Wednesday$50", "Carried over to Winter League$120"]);
+    expect(within(money).getByTestId("display-ap")).toHaveTextContent("AP$80");
+  });
+
+  it("says nothing more beside the pool when the prizes are what is available", async () => {
+    serveDisplay({ money: { show: true, estimated: false, netCents: 60_000, payouts: [{ position: 1, amountCents: 60_000 }], lines: [] } });
+    showPage();
+    const money = await screen.findByTestId("display-money");
+    expect(within(money).queryByTestId("display-pool-lines")).not.toBeInTheDocument();
+  });
+
   it("says the pool is shown once it is locked, while it is not", async () => {
     serveDisplay();
     showPage();
@@ -244,7 +365,7 @@ describe("the TV clock", () => {
     expect(await screen.findByRole("heading", { name: "The clock could not be loaded" })).toBeInTheDocument();
     fail = false;
     await userEvent.setup({ advanceTimers: vi.advanceTimersByTime }).click(screen.getByRole("button", { name: "Try again" }));
-    expect(await screen.findByTestId("clock-face")).toBeInTheDocument();
+    expect(await screen.findByTestId("clock-centrepiece")).toBeInTheDocument();
   });
 
   it("says it is offline after 30 s without an answer, and keeps counting down", async () => {
@@ -305,29 +426,124 @@ describe("the TV clock", () => {
     expect(screen.queryByText("Offline · reconnecting")).not.toBeInTheDocument();
   });
 
-  it("chimes when the level changes while running, never on the first draw", async () => {
-    serveDisplay({ clock: runningClock(Date.now(), { remainingMs: 1500 }) });
+  it("beeps the last second and sounds blinds up when the level changes while running, never on the first draw", async () => {
+    serveDisplay({ clock: runningClock(Date.now(), { remainingMs: 2500 }) });
     showPage();
     await screen.findByTestId("clock-face");
-    await act(() => vi.advanceTimersByTimeAsync(500));
     expect(beeps()).toEqual([]);
 
-    await act(() => vi.advanceTimersByTimeAsync(1500));
-    expect(screen.getByRole("heading", { name: "Level 2" })).toBeInTheDocument();
-    expect(beeps()).toEqual([880, 880, 880]);
+    await pass(3000);
+    expect(screen.getByText("300/600")).toBeInTheDocument();
+    expect(beeps()).toEqual(heard("final_count", "final_count", "level"));
   });
 
-  it("chimes once a minute is left, and when a break starts", async () => {
+  it("sounds the alarm at a minute left, a beep for each of the last ten seconds, then the break's chime (round 5, item 20)", async () => {
     const now = Date.now();
     serveDisplay({ clock: runningClock(now, { levelIndex: 2, remainingMs: 61_500 }) });
     showPage();
     await screen.findByTestId("clock-face");
 
-    await act(() => vi.advanceTimersByTimeAsync(2000));
-    expect(beeps()).toEqual([660]);
-    await act(() => vi.advanceTimersByTimeAsync(60_000));
-    expect(screen.getByRole("heading", { name: "Break" })).toBeInTheDocument();
-    expect(beeps()).toEqual([660, 520, 520]);
+    await pass(2000);
+    expect(beeps()).toEqual(heard("minute"));
+    await act(() => vi.advanceTimersByTimeAsync(45_000));
+    await pass(15_000);
+    expect(screen.getByRole("heading", { name: "Break — back in" })).toBeInTheDocument();
+    expect(beeps()).toEqual(heard("minute", ...Array<ClockCue>(7).fill("count"), "final_count", "final_count", "final_count", "break_start"));
+  });
+
+  it("sounds each threshold once: time added back past it, or a refresh, never plays it again", async () => {
+    const now = Date.now();
+    serveDisplay({ clock: runningClock(now, { levelIndex: 1, remainingMs: 60_800 }) });
+    const { unmount } = showPage();
+    await screen.findByTestId("clock-face");
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(beeps()).toEqual(heard("minute"));
+    unmount();
+
+    // The TD added a minute; the screen was reloaded meanwhile: the clock crosses 1:00 again, silently.
+    serveDisplay({ clock: runningClock(Date.now(), { levelIndex: 1, remainingMs: 60_800 }) });
+    showPage();
+    await screen.findByTestId("clock-face");
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(beeps()).toEqual(heard("minute"));
+  });
+
+  it("plays only the sounds the TD switched on for the tournament, at its volume, and shows the settings to a visitor without letting them change them (round 5, items 20 and 22)", async () => {
+    const settings = { ...clockDto().displaySettings, soundVolume: 0.5, soundMinute: false, edgeMargin: 0 as const };
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    serveDisplay({ clock: runningClock(Date.now(), { levelIndex: 1, remainingMs: 60_800, displaySettings: settings }) });
+    showPage();
+    await screen.findByTestId("clock-face");
+    expect(screen.getByTestId("clock-screen")).toHaveAttribute("data-edge-margin", "0");
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(beeps()).toEqual([]);
+
+    await user.pointer({ target: screen.getByTestId("clock-screen"), coords: { x: 10, y: 10 } });
+    await user.click(screen.getByRole("button", { name: "Screen settings: sound and edge margin" }));
+    const dialog = await screen.findByRole("dialog", { name: "Sound and edge margin" });
+    expect(dialog).toHaveTextContent("Set for this tournament by the club's staff");
+    expect(within(dialog).getByRole("slider", { name: "Volume" })).toHaveValue("50");
+    expect(within(dialog).getByRole("slider", { name: "Volume" })).toBeDisabled();
+    expect(within(dialog).getByRole("switch", { name: "One minute left (alarm)" })).not.toBeChecked();
+    expect(within(dialog).getByRole("switch", { name: "One minute left (alarm)" })).toBeDisabled();
+    expect(within(dialog).getByRole("radio", { name: "None" })).toBeChecked();
+    expect(within(dialog).getByRole("radio", { name: "5%" })).toBeDisabled();
+    // Muting and a test of the sounds are this screen's own.
+    expect(within(dialog).getByRole("switch", { name: "Sounds on this screen" })).toBeEnabled();
+    await user.click(within(dialog).getByRole("button", { name: "Test sounds" }));
+    await act(() => vi.advanceTimersByTimeAsync(10));
+    expect(beeps()).toEqual(heard("minute", "count", "final_count", "level"));
+  });
+
+  it("lets the club's staff at the TV change the tournament's volume, sounds and edge margin, saved for every screen (round 5, items 20 and 22)", async () => {
+    let settings = { ...clockDto().displaySettings };
+    const now = Date.now();
+    mockDisplay(() => liveDisplayDto({ serverNow: Date.now(), clock: runningClock(now, { levelIndex: 1, displaySettings: settings }), viewer: { canControl: true } }));
+    const sent = recordRequests(
+      [["patch", "/api/tournaments/t1/clock/display"]],
+      (request) => {
+        settings = { ...settings, ...(request.body as object) };
+        return HttpResponse.json(liveDisplayDto({ serverNow: Date.now(), clock: runningClock(now, { levelIndex: 1, displaySettings: settings }), viewer: { canControl: true } }));
+      },
+      (request) => request.body,
+    );
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    showPage();
+    await screen.findByRole("toolbar", { name: "Clock controls" });
+
+    await user.click(screen.getByRole("button", { name: "Screen settings: sound and edge margin" }));
+    const dialog = await screen.findByRole("dialog", { name: "Sound and edge margin" });
+    await vi.waitFor(() => expect(within(dialog).getByRole("slider", { name: "Volume" })).toBeEnabled());
+    expect(dialog).toHaveTextContent("Saved for this tournament");
+
+    await user.click(within(dialog).getByRole("switch", { name: "The last 10 seconds (beeps)" }));
+    await vi.waitFor(() => expect(within(dialog).getByRole("switch", { name: "The last 10 seconds (beeps)" })).not.toBeChecked());
+    await user.click(within(dialog).getByRole("radio", { name: "5%" }));
+    await vi.waitFor(() => expect(screen.getByTestId("clock-screen")).toHaveAttribute("data-edge-margin", "5"));
+
+    // A drag sends one change once the slider rests, not one per step.
+    const slider = within(dialog).getByRole("slider", { name: "Volume" });
+    fireEvent.change(slider, { target: { value: "60" } });
+    fireEvent.change(slider, { target: { value: "45" } });
+    expect(slider).toHaveValue("45");
+    await act(() => vi.advanceTimersByTimeAsync(VOLUME_SAVE_MS + 50));
+    await vi.waitFor(() => expect(sent).toEqual([{ soundCountdown: false }, { edgeMargin: 5 }, { soundVolume: 0.45 }]));
+    expect(within(dialog).getByRole("slider", { name: "Volume" })).toHaveValue("45");
+  });
+
+  it("keeps a TV's edge margin of 2.5% by default, and none on a phone", async () => {
+    serveDisplay();
+    const { unmount } = showPage();
+    expect(await screen.findByTestId("clock-screen")).toHaveAttribute("data-edge-margin", "2.5");
+    unmount();
+    window.localStorage.clear();
+
+    const matchMedia = window.matchMedia;
+    const handheld = vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ ...matchMedia(query), matches: query === HANDHELD_QUERY }));
+    onTestFinished(() => handheld.mockRestore());
+    serveDisplay();
+    showPage();
+    expect(await screen.findByTestId("clock-screen")).toHaveAttribute("data-edge-margin", "0");
   });
 
   it("stays silent once muted, and remembers it on this screen", async () => {
@@ -361,7 +577,7 @@ describe("the TV clock", () => {
     let display: LiveDisplayDto = liveDisplayDto({ tournament: { status: "registration" }, clock: clockDto() });
     mockDisplay(() => ({ ...display, serverNow: Date.now() }));
     const { queryClient } = showPage();
-    await screen.findByTestId("clock-face");
+    await screen.findByTestId("clock-centrepiece");
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith("screen"));
 
     // A paused dispute, then a clock removed: still awake, on the one lock.
@@ -381,7 +597,7 @@ describe("the TV clock", () => {
   it("offers full screen only where the browser can do it", async () => {
     serveDisplay();
     const { unmount } = showPage();
-    await screen.findByTestId("clock-face");
+    await screen.findByTestId("clock-centrepiece");
     expect(screen.queryByRole("button", { name: "Full screen" })).not.toBeInTheDocument();
     unmount();
 
@@ -397,13 +613,18 @@ describe("the TV clock", () => {
   });
 
   it("puts everyone's seat over the clock when the TD chooses it, asking for the seats only then", async () => {
+    const alice = { id: "p1", name: "Alice Smith", imageUrl: null };
+    const bob = { id: "p2", name: "Bob Jones", imageUrl: null };
     const seating: PublicSeatingDto = {
       tournament: { id: "t1", name: "Friday Freezeout", status: "in_progress" },
-      club: { id: "c1", name: "Central Stars", slug: "central-stars", imageUrl: null },
-      tables: [],
+      club: { id: "c1", name: "Central Stars", slug: "central-stars", imageUrl: null, theme: null },
+      tables: [
+        { tableNumber: 1, displayName: "Table 1", seatCount: 9, shape: "rectangle", seats: [{ seatNumber: 7, player: bob }] },
+        { tableNumber: 2, displayName: "Table 2", seatCount: 9, shape: "rectangle", seats: [{ seatNumber: 4, player: alice }] },
+      ],
       players: [
-        { player: { id: "p1", name: "Alice Smith", imageUrl: null }, tableNumber: 2, tableName: "Table 2", seatNumber: 4 },
-        { player: { id: "p2", name: "Bob Jones", imageUrl: null }, tableNumber: 1, tableName: "Table 1", seatNumber: 7 },
+        { player: alice, tableNumber: 2, tableName: "Table 2", seatNumber: 4 },
+        { player: bob, tableNumber: 1, tableName: "Table 1", seatNumber: 7 },
       ],
       unseatedCount: 0,
     };
@@ -420,8 +641,11 @@ describe("the TV clock", () => {
 
     const overlay = await screen.findByRole("region", { name: "Seats" });
     expect(await within(overlay).findByText("Alice Smith")).toBeInTheDocument();
-    expect(within(overlay).getByText("Alice Smith").nextSibling).toHaveTextContent("T2 · S4");
-    expect(within(overlay).getByText(/^Level 1 · 1[12]:\d\d · 200\/400$/)).toBeInTheDocument();
+    expect(within(overlay).getByText("Alice Smith").nextSibling).toHaveTextContent("Table 2, Seat 4");
+    // Drawn as the tables, each player at their seat.
+    expect(within(overlay).getAllByTestId("tv-table")).toHaveLength(2);
+    expect(within(overlay).getByText("Alice S.")).toBeInTheDocument();
+    expect(within(overlay).getByText(/^1[12]:\d\d · 200\/400$/)).toBeInTheDocument();
     expect(asked).toBe(1);
   });
 
@@ -460,8 +684,8 @@ describe("the TV clock", () => {
           ? HttpResponse.json({ error: "Server error" }, { status: 500 })
           : HttpResponse.json({
               tournament: { id: "t1", name: "Friday Freezeout", status: "in_progress" },
-              club: { id: "c1", name: "Central Stars", slug: "central-stars", imageUrl: null },
-              tables: [],
+              club: { id: "c1", name: "Central Stars", slug: "central-stars", imageUrl: null, theme: null },
+              tables: [{ tableNumber: 2, displayName: "Table 2", seatCount: 9, shape: "oval", seats: [{ seatNumber: 4, player: { id: "p1", name: "Alice Smith", imageUrl: null } }] }],
               players: [{ player: { id: "p1", name: "Alice Smith", imageUrl: null }, tableNumber: 2, tableName: "Table 2", seatNumber: 4 }],
               unseatedCount: 0,
             } satisfies PublicSeatingDto);
@@ -514,7 +738,7 @@ describe("the TV clock", () => {
   it("gives the club's staff its controls, and nobody else", async () => {
     serveDisplay();
     const { unmount } = showPage();
-    await screen.findByTestId("clock-face");
+    await screen.findByTestId("clock-centrepiece");
     expect(screen.queryByRole("toolbar", { name: "Clock controls" })).not.toBeInTheDocument();
     unmount();
 
@@ -527,5 +751,33 @@ describe("the TV clock", () => {
     await userEvent.setup({ advanceTimers: vi.advanceTimersByTime }).keyboard(" ");
     await vi.waitFor(() => expect(sent).toEqual([{ action: "toggle", alsoStartTournament: false, expectedStatus: "running" }]));
     expect(await screen.findByText("Paused")).toBeInTheDocument();
+  });
+});
+
+describe("the TV clock in the club's colours (round 5, item 13)", () => {
+  // <html> outlives each test's app: start every test from no colours set on it.
+  beforeEach(() => document.documentElement.removeAttribute("style"));
+
+  it("wears the club's theme, worked out for the TV's dark screen", async () => {
+    mockDisplay(() => liveDisplayDto({ serverNow: Date.now(), club: { theme: CENTRAL_STARS_THEME } }));
+    // Inside the TV's layout, as the router mounts it: a dark display screen.
+    renderWithApp(
+      <ThemeScope layer={{ colorScheme: "dark", surface: "display" }}>
+        <ClockDisplayPage />
+      </ThemeScope>,
+      { path: "/clock/t1", route: "/clock/:tournamentId" },
+    );
+
+    expect(await screen.findByTestId("clock-centrepiece")).toBeInTheDocument();
+    expect(document.documentElement).toHaveClass("dark");
+    expect(document.documentElement.style.getPropertyValue("--primary")).toBe(themeVariables(CENTRAL_STARS_THEME, "dark")["--primary"]);
+  });
+
+  it("keeps the LovePoker look for a club without a theme", async () => {
+    mockDisplay(() => liveDisplayDto({ serverNow: Date.now() }));
+    showPage();
+
+    expect(await screen.findByTestId("clock-centrepiece")).toBeInTheDocument();
+    expect(document.documentElement.style.getPropertyValue("--primary")).toBe("");
   });
 });

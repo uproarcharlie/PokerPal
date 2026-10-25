@@ -174,6 +174,7 @@ describe("GET /api/public/tournaments/:id/seating", () => {
           tableNumber: 1,
           displayName: "Feature table",
           seatCount: 3,
+          shape: "oval",
           seats: [
             { seatNumber: 1, player: null },
             { seatNumber: 2, player: null },
@@ -184,6 +185,7 @@ describe("GET /api/public/tournaments/:id/seating", () => {
           tableNumber: 2,
           displayName: "Table 2",
           seatCount: 2,
+          shape: "oval",
           seats: [
             { seatNumber: 1, player: { id: registrations[1].playerId, name: "alice", imageUrl: null } },
             { seatNumber: 2, player: { id: registrations[2].playerId, name: "Bob", imageUrl: null } },
@@ -224,7 +226,7 @@ describe("POST /api/tournaments/:id/tables", () => {
       [3, 9, "broken", 0],
     ]);
     expect(await activity(tournament.id)).toEqual([
-      { eventType: "tables_added", description: "Added 2 tables (6 seats)", playerId: null, data: { tableNumbers: [4, 5], seatCount: 6 } },
+      { eventType: "tables_added", description: "Added 2 tables (6 seats)", playerId: null, data: { tableNumbers: [4, 5], seatCount: 6, shape: "oval" } },
     ]);
   });
 

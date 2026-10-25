@@ -4,7 +4,7 @@ import { HttpResponse } from "msw";
 import { beforeEach, describe, expect, it } from "vitest";
 import { MANAGER_VIEW, tournamentDto } from "@test/helpers/dto";
 import { apiError, mockSignedIn, renderWithApp } from "@test/helpers/web";
-import { mockSeating, recordWrite, seatingDto, seatingMutation, seatMove, seatRef, type SeatingSpec } from "@test/helpers/seating-dto";
+import { mockSeating, recordWrite, seatingDto, seatingMutation, seatMove, seatRef, tableAdvice, type SeatingSpec } from "@test/helpers/seating-dto";
 import { SeatingPanel } from "./seating-panel";
 
 const tournament = tournamentDto({ status: "in_progress", viewer: MANAGER_VIEW });
@@ -41,10 +41,10 @@ describe("SeatingPanel: a table's menu", () => {
     renderWithApp(<SeatingPanel tournament={tournament} registrations={[]} />);
 
     await user.click(await screen.findByRole("button", { name: "Table 1 options" }));
-    expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(["Rename or resize…", "Final table here…", "Break table…"]);
+    expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(["Table settings…", "Final table here…", "Break table…"]);
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "Table 3 options" }));
-    expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(["Rename or resize…", "Final table here…", "Remove table…"]);
+    expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(["Table settings…", "Final table here…", "Remove table…"]);
   });
 
   it("renames a table, sending only the name", async () => {
@@ -52,7 +52,7 @@ describe("SeatingPanel: a table's menu", () => {
     const user = userEvent.setup();
     renderWithApp(<SeatingPanel tournament={tournament} registrations={[]} />);
 
-    await openMenu(user, "Table 2", "Rename or resize…");
+    await openMenu(user, "Table 2", "Table settings…");
     const dialog = await screen.findByRole("dialog", { name: "Table 2 settings" });
     await user.type(within(dialog).getByLabelText("Name"), "Feature table");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
@@ -67,7 +67,7 @@ describe("SeatingPanel: a table's menu", () => {
     const user = userEvent.setup();
     renderWithApp(<SeatingPanel tournament={tournament} registrations={[]} />);
 
-    await openMenu(user, "Table 1", "Rename or resize…");
+    await openMenu(user, "Table 1", "Table settings…");
     const dialog = await screen.findByRole("dialog", { name: "Table 1 settings" });
     await user.click(within(dialog).getByRole("button", { name: "8 seats" }));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
@@ -82,7 +82,7 @@ describe("SeatingPanel: a table's menu", () => {
     const user = userEvent.setup();
     renderWithApp(<SeatingPanel tournament={tournament} registrations={[]} />);
 
-    await openMenu(user, "Table 2", "Rename or resize…");
+    await openMenu(user, "Table 2", "Table settings…");
     await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -151,7 +151,7 @@ describe("SeatingPanel: a table's menu", () => {
         { id: "w1", name: "Wiremu", paid: false },
         { id: "w2", name: "Xena", paid: false },
       ],
-      suggestions: { finalTable: { tableId: "tA", tableNumber: 1 } },
+      advisor: { phase: "shrinking", advice: [tableAdvice("final_table", "8 players fit at one table: draw the final table at Table 1", { tableId: "tA", tableNumber: 1, players: 8 })] },
     };
 
     it("offers the final table here by the players seated, as the server counts them, and says who stays waiting", async () => {
@@ -162,7 +162,7 @@ describe("SeatingPanel: a table's menu", () => {
       renderWithApp(<SeatingPanel tournament={tournament} registrations={[]} />);
 
       const advice = await screen.findByTestId("seating-advice");
-      expect(advice).toHaveTextContent("Everyone seated (8 players) fits at Table 1.");
+      expect(advice).toHaveTextContent("8 players fit at one table: draw the final table at Table 1");
       expect(advice).toHaveTextContent("2 players are waiting for a seat (2 unpaid): they keep waiting.");
       // 8 seated fit at Table 2's 9 seats, though 10 are still in: the server would draw it, so the menu offers it.
       await user.click(screen.getByRole("button", { name: "Table 2 options" }));
@@ -201,12 +201,13 @@ describe("SeatingPanel: a table's menu", () => {
     });
 
     it("says who a break leaves waiting", async () => {
-      mockSeating(seatingDto({ ...crowded, suggestions: { breakTable: { tableId: "tB", tableNumber: 2, playersToMove: 4 } } }));
+      mockSeating(seatingDto({ ...crowded, advisor: { phase: "shrinking", advice: [tableAdvice("break_table", "8 players fit on 1 table of 9: break Table 2", { tableId: "tB", tableNumber: 2, players: 4 })] } }));
       const user = userEvent.setup();
       renderWithApp(<SeatingPanel tournament={tournament} registrations={[]} />);
 
       const advice = await screen.findByTestId("seating-advice");
-      expect(advice).toHaveTextContent("Its 4 players fit at the other tables.2 players are waiting for a seat (2 unpaid): they keep waiting.");
+      expect(advice).toHaveTextContent("8 players fit on 1 table of 9: break Table 2");
+      expect(advice).toHaveTextContent("2 players are waiting for a seat (2 unpaid): they keep waiting.");
       await user.click(within(advice).getByRole("button", { name: "Break Table 2" }));
       expect(await screen.findByRole("alertdialog", { name: "Break Table 2?" })).toHaveTextContent("Table 2 is archived (it can be reopened). 2 players are waiting for a seat (2 unpaid): they keep waiting.");
     });

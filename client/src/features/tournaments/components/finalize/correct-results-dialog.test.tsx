@@ -1,11 +1,16 @@
 import { screen } from "@testing-library/react";
+import { http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { server } from "@test/msw/server";
+import { prizePoolSnapshotDto } from "@test/helpers/dto";
 import { mockSignedOut, renderWithApp } from "@test/helpers/web";
-import { alice, bob, carl, HASH_A, mockPreview, planRow as row, previewOf as preview } from "@test/helpers/f1-tournaments";
+import { alice, bob, carl, HASH_A, mockPreview, planRow as row, previewOf as preview, tournamentDto } from "@test/helpers/f1-tournaments";
 import { CorrectResultsDialog } from "./correct-results-dialog";
 
 beforeEach(() => {
   mockSignedOut();
+  // The tournament as finalized, without a deal (finalize-deal.test.tsx has the corrections with one).
+  server.use(http.get("/api/tournaments/t1", () => HttpResponse.json(tournamentDto({ status: "completed", prizePoolSnapshot: prizePoolSnapshotDto() }))));
 });
 
 describe("CorrectResultsDialog (P2REV1-01)", () => {

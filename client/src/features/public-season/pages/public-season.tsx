@@ -5,6 +5,7 @@ import { PageSpinner } from "@/components/shared/page-spinner";
 import { PublicFooter } from "@/components/shared/public-footer";
 import { EmptyState, QueryState } from "@/components/shared/query-state";
 import { qk } from "@/lib/api/query-keys";
+import { ClubThemeScope } from "@/features/branding/components/public/club-theme-scope";
 import type { PublicSeasonLeaderboardDto } from "@shared/api/live-display";
 import { PUBLIC_SEASON_REFRESH_MS } from "../api";
 import { SeasonHeader } from "../components/public/season-header";
@@ -34,15 +35,18 @@ export default function PublicSeasonPage() {
   // Names players: kept out of search engines like the other player pages.
   usePageMeta({ title: leaderboard.data ? `${leaderboard.data.season.name} leaderboard` : "Season leaderboard", noindex: true });
 
+  // In the club's own colours (round 5, item 13), which the leaderboard's answer carries.
   return (
-    <QueryState
-      query={leaderboard}
-      loading={<PageSpinner label="Loading the leaderboard" className="min-h-dvh" />}
-      notFound={<EmptyState title="Season not found" description="This season's leaderboard has moved or no longer exists." />}
-      errorTitle="The leaderboard could not be loaded"
-      stateClassName="mx-auto min-h-dvh max-w-md bg-background px-4 py-12"
-    >
-      {(data) => <SeasonPage data={data} />}
-    </QueryState>
+    <ClubThemeScope theme={leaderboard.data?.club.theme ?? null} scheme="light">
+      <QueryState
+        query={leaderboard}
+        loading={<PageSpinner label="Loading the leaderboard" className="min-h-dvh" />}
+        notFound={<EmptyState title="Season not found" description="This season's leaderboard has moved or no longer exists." />}
+        errorTitle="The leaderboard could not be loaded"
+        stateClassName="mx-auto min-h-dvh max-w-md bg-background px-4 py-12"
+      >
+        {(data) => <SeasonPage data={data} />}
+      </QueryState>
+    </ClubThemeScope>
   );
 }

@@ -84,6 +84,26 @@ describe("showServerFieldErrors", () => {
     ]);
   });
 
+  it("renames a field the server names otherwise before testing it against the form (R5REV3-CQ-08)", () => {
+    const setError = vi.fn();
+    const error = new ApiError({
+      status: 400,
+      code: "VALIDATION",
+      error: "Invalid payouts",
+      details: [
+        { path: ["places", 2], message: "3rd cannot pay more than 2nd" },
+        { path: ["reason"], message: "Keep the reason under 200 characters" },
+      ],
+    });
+
+    const placeBox = (name: string) => (/^places\.\d+$/.test(name) ? `${name}.value` : name);
+    expect(showServerFieldErrors(setError, error, { fields: (name) => /^places\.\d+\.value$/.test(name) || name === "reason", rename: placeBox })).toBe(true);
+    expect(setError.mock.calls).toEqual([
+      ["places.2.value", { type: "server", message: "3rd cannot pay more than 2nd" }, { shouldFocus: true }],
+      ["reason", { type: "server", message: "Keep the reason under 200 characters" }, { shouldFocus: false }],
+    ]);
+  });
+
   it("puts a refusal on the field its code is about, listing the password rules a WEAK_PASSWORD broke", () => {
     const setError = vi.fn();
     const weak = new ApiError({ status: 400, code: "WEAK_PASSWORD", error: "Weak password", details: ["Use 8 or more characters", "Add a number"] });

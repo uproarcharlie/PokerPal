@@ -12,12 +12,10 @@ const TOO_MANY = "Too many requests from this network just now. Please wait a fe
 
 export const REGISTRATION_CLOSED_MESSAGE = "Registration for this tournament has closed.";
 export const POOL_LOCKED_REGISTRATION_MESSAGE = `Registration has closed: the prize pool is locked. ${SPEAK_TO_TD}`;
-export const TOURNAMENT_FULL_MESSAGE = "Sorry, this tournament is full. Please speak to the tournament director, who can seat extra players.";
 
-/** POST /api/tournaments/:id/registrations */
+/** POST /api/tournaments/:id/registrations. A sign-up past Max players is never refused: it joins the waiting list (round 5, item 15). */
 const REGISTRATION_PROBLEMS: Messages = {
   ALREADY_REGISTERED: "You're already registered for this tournament. See you at the table!",
-  TOURNAMENT_FULL: TOURNAMENT_FULL_MESSAGE,
   HIGH_HAND_AWARDED: 'Every high-hand prize has already been won tonight. Choose "No thanks" and try again.',
   TOURNAMENT_CLOSED: REGISTRATION_CLOSED_MESSAGE,
   PRIZE_POOL_LOCKED: POOL_LOCKED_REGISTRATION_MESSAGE,

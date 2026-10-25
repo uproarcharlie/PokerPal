@@ -9,7 +9,7 @@
  */
 import { z } from "zod";
 import type { Player } from "../schema";
-import { idSchema, imageUrlSchema, requiredText, type Json } from "./common";
+import { idSchema, playerImageUrlSchema, requiredText, type Json } from "./common";
 import { phoneSchema } from "./auth";
 import type { PublicPlayer } from "./public";
 
@@ -51,12 +51,21 @@ const optionalEmail = z
  * learning anything they did not type; of several such legacy duplicates, the one with the history
  * (P2REV3-PROD-01). Otherwise 409 PHONE_TAKEN, naming nobody unless the caller may manage that player
  * (an admin, or staff of their home club), who gets `details: { player: PublicPlayer }`.
+ *
+ * Round 5: `imageUrl` may be an uploaded photo or a built-in avatar (playerImageUrlSchema). A sign-up
+ * from a tournament's QR page (`tournamentId`, not staff) whose club requires a photo
+ * (clubs.require_signup_photo) must send one: 400 PHOTO_REQUIRED otherwise, before the phone number
+ * is looked at, so the answer never tells whether a number is stored (R5REV-SEC-02). A returning
+ * player finds themselves with the QR page's search instead; one who sends a photo and is matched by
+ * phone and name keeps the picture they have. The `signUpToken` names the tournament's club, which
+ * its registration checks (POST /api/tournaments/:id/registrations: PHOTO_REQUIRED for a player
+ * without a picture vouched for at no club or another one, R5REV-SEC-01).
  */
 export const createPlayerSchema = z.object({
   name: requiredText(100),
   phone: phoneSchema,
   email: optionalEmail,
-  imageUrl: imageUrlSchema,
+  imageUrl: playerImageUrlSchema,
   clubId: idSchema.optional(),
   tournamentId: idSchema.optional(),
 });
@@ -68,7 +77,7 @@ export const updatePlayerSchema = z
     name: requiredText(100).optional(),
     phone: phoneSchema,
     email: optionalEmail,
-    imageUrl: imageUrlSchema,
+    imageUrl: playerImageUrlSchema,
   })
   .refine((input) => Object.values(input).some((value) => value !== undefined), "Nothing to update");
 export type UpdatePlayerInput = z.infer<typeof updatePlayerSchema>;

@@ -79,6 +79,11 @@ export const PUBLIC_CLUB_FIELDS = [
   "instagramUrl",
   "websiteUrl",
   "rakeLabel",
+  // Round 5: the tables' defaults, whether the QR sign-up asks for a photo, and the colours every page of the club wears.
+  "defaultSeatsPerTable",
+  "defaultTableShape",
+  "requireSignupPhoto",
+  "theme",
   "createdAt",
 ] as const satisfies readonly (keyof Club)[];
 export type PublicClub = Json<Pick<Club, (typeof PUBLIC_CLUB_FIELDS)[number]>>;
@@ -140,7 +145,17 @@ export const PUBLIC_TOURNAMENT_FIELDS = [
   "finalizedAt",
   "useClubAddress",
   "address",
+  // Round 5 seating settings (stored values; null takes the club's or the app's default: resolveSeatingSettings).
+  "seatsPerTable",
+  "startingTables",
+  "openTableAt",
+  "autoSeat",
+  "tableShape",
   "createdAt",
+  // Round 5 item 16: where a difference between the prizes as set and the money available goes, and the
+  // money carried into the pool (shared/domain/prize-difference), so every screen pays as finalize does.
+  "prizeDifference",
+  "carriedIn",
 ] as const satisfies readonly (keyof Tournament)[];
 export type PublicTournament = Json<Pick<Tournament, (typeof PUBLIC_TOURNAMENT_FIELDS)[number]>>;
 
@@ -170,8 +185,19 @@ export const PUBLIC_REGISTRATION_FIELDS = [
   "earlyBird",
 ] as const satisfies readonly (keyof TournamentRegistration)[];
 export type PublicRegistrationRow = Json<Pick<TournamentRegistration, (typeof PUBLIC_REGISTRATION_FIELDS)[number]>>;
+
+/**
+ * Round 5 (item 15): an entry's place on the waiting list behind a full field (1 = next in, sign-up
+ * order: shared/domain/waiting-list), or null when it is in the field. Public, like the standings it
+ * is shown in. Every registration list, sign-up, payment confirmation and update answers with it;
+ * optional only because count changes and player requests do not work it out.
+ */
+export interface WaitingListPlace {
+  waitingListPosition?: number | null;
+}
+
 /** GET /api/tournaments/:id/registrations */
-export type PublicRegistration = PublicRegistrationRow & { player: PublicPlayer | null };
+export type PublicRegistration = PublicRegistrationRow & WaitingListPlace & { player: PublicPlayer | null };
 
 export const PUBLIC_POINTS_SYSTEM_FIELDS = [
   "id",

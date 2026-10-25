@@ -6,6 +6,7 @@
  * form-only fields such as `enableRebuys`, and a stripped field can never be written.
  */
 import { z } from "zod";
+import { isBuiltInAvatarUrl } from "../domain/avatars";
 import { URL_MAX } from "../domain/urls";
 
 /** A value as `res.json` sends it: Dates become ISO strings, recursively. */
@@ -81,6 +82,9 @@ export const httpUrlSchema = z
   )
   .optional();
 
+const UPLOADED_HTTPS = /^https:\/\/[^\s/]+\/[^\r\n]*$/i;
+const UPLOADED_PATH = /^\/uploads\/[^\s?#]+$/;
+
 /**
  * An image reference as the upload endpoints return it: an https URL or a path under /uploads/.
  * Blank or null clears the image. The server also checks that a changed URL points at our own
@@ -94,10 +98,31 @@ export const imageUrlSchema = z
       .trim()
       .max(URL_MAX)
       .refine(
-        (value) => /^https:\/\/[^\s/]+\/[^\r\n]*$/i.test(value) || /^\/uploads\/[^\s?#]+$/.test(value),
+        (value) => UPLOADED_HTTPS.test(value) || UPLOADED_PATH.test(value),
         "Must be an uploaded image",
       )
       .refine((value) => !value.split("/").includes(".."), "Must be an uploaded image")
+      .nullable(),
+  )
+  .optional();
+
+/**
+ * A player's photo (round 5, item 8): an uploaded image as imageUrlSchema takes it, or one of the
+ * app's built-in avatars exactly as shared/domain/avatars avatarUrl gives it ("/avatars/shark.svg").
+ * The server accepts an avatar path without the own-storage check uploads get.
+ */
+export const playerImageUrlSchema = z
+  .preprocess(
+    blankToNull,
+    z
+      .string()
+      .trim()
+      .max(URL_MAX)
+      .refine(
+        (value) =>
+          isBuiltInAvatarUrl(value) || ((UPLOADED_HTTPS.test(value) || UPLOADED_PATH.test(value)) && !value.split("/").includes("..")),
+        "Must be an uploaded image or one of the avatars",
+      )
       .nullable(),
   )
   .optional();

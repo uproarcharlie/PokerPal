@@ -11,7 +11,7 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import type { FinalizeInput, FinalizePreviewInput } from "@shared/api/finalize";
 import type { ConfirmPendingActionInput, PendingActionDto } from "@shared/api/pending-actions";
-import type { PendingRegistrationDto, StaffRegistrationInput, UpdateRegistrationInput } from "@shared/api/registrations";
+import type { AdjustCountsInput, PendingRegistrationDto, StaffRegistrationInput, UpdateRegistrationInput } from "@shared/api/registrations";
 import type { PublicRegistration } from "@shared/api/public";
 import type { UpdateTournamentInput } from "@shared/api/tournaments";
 import { hasErrorCode } from "@/lib/api/http";
@@ -19,6 +19,7 @@ import { invalidateResults, invalidateTournament, invalidateTournamentLists } fr
 import { qk } from "@/lib/api/query-keys";
 import { unlessRefused } from "@/lib/live-refresh";
 import {
+  adjustCounts,
   confirmPayment,
   confirmPendingAction,
   createTournament,
@@ -53,9 +54,14 @@ const deskInterval = ({ state }: { state: { error: unknown } }) => unlessRefused
 
 /** The payment desk's lists (staff only: the server answers 403 to anyone else). */
 export function usePaymentDesk(id: string) {
-  const pending = useQuery({ ...tournamentDeskQueries.pendingRegistrations(id), refetchInterval: deskInterval });
+  const pending = usePendingPayments(id);
   const confirmed = useQuery({ ...tournamentDeskQueries.confirmedRegistrations(id), refetchInterval: deskInterval });
   return { pending, confirmed };
+}
+
+/** The sign-ups still to pay at the desk, followed while shown (the payment desk, the phone's "Take payment"). */
+export function usePendingPayments(id: string) {
+  return useQuery({ ...tournamentDeskQueries.pendingRegistrations(id), refetchInterval: deskInterval });
 }
 
 /** The registrations with their payment status, for a staff screen that needs it (staff only; read once, like useRegistrations without `follow`). */
@@ -142,6 +148,13 @@ function dropFromList<T extends { id: string }>(queryClient: QueryClient, queryK
   queryClient.setQueryData<T[]>(queryKey, (rows) => rows?.filter((row) => row.id !== id));
 }
 
+/** Puts a registration as the server now has it in place of its row in the cached standings. */
+function replaceRow(queryClient: QueryClient, tournamentId: string, registration: PublicRegistration) {
+  queryClient.setQueryData<PublicRegistration[]>(qk.tournaments.registrations(tournamentId), (rows) =>
+    rows?.map((row) => (row.id === registration.id ? registration : row)),
+  );
+}
+
 /**
  * Eliminate, restore or award a high hand: one PUT, the server applies the rules under its lock. Its
  * answer is the registration as it now stands, which replaces that player's row at once: the standings
@@ -155,9 +168,22 @@ export function useUpdateRegistration(tournamentId: string) {
     mutationFn: ({ registrationId, input }: { registrationId: string; input: UpdateRegistrationInput }) =>
       updateRegistration(registrationId, input),
     onSuccess: (registration) => {
-      queryClient.setQueryData<PublicRegistration[]>(qk.tournaments.registrations(tournamentId), (rows) =>
-        rows?.map((row) => (row.id === registration.id ? registration : row)),
-      );
+      replaceRow(queryClient, tournamentId, registration);
+      void invalidateTournament(queryClient, tournamentId);
+    },
+  });
+}
+
+/**
+ * A re-buy or add-on sold at the desk (POST /api/registrations/:id/counts): like an elimination, the
+ * answer replaces the player's row at once (a re-entry is back in), then the pool and the rest refresh.
+ */
+export function useAdjustCounts(tournamentId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ registrationId, input }: { registrationId: string; input: AdjustCountsInput }) => adjustCounts(registrationId, input),
+    onSuccess: (registration) => {
+      replaceRow(queryClient, tournamentId, registration);
       void invalidateTournament(queryClient, tournamentId);
     },
   });

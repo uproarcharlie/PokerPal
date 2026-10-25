@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,8 +7,10 @@ import { apiError, mockSignedIn, renderWithApp } from "@test/helpers/web";
 import { LIVE_REFRESH_MS } from "@/lib/live-refresh";
 import { clubDto, finalizeResultDto, HASH_A, HASH_B, mockDeskLiveReads, previewOf, registrationDto, tournamentDto } from "@test/helpers/f1-tournaments";
 import type { PublicRegistration } from "@shared/api/public";
-import type { ManagedRegistration } from "@shared/api/registrations";
+import type { RegistrationCreatedDto } from "@shared/api/registrations";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
+import { CENTRAL_STARS_THEME, themeVariables } from "@shared/domain/theme";
+import { qk } from "@/lib/api/query-keys";
 import { seatingDto, seatingMutation, seatMove, seatRef } from "@test/helpers/seating-dto";
 import TournamentDetails from "./tournament-details";
 
@@ -133,7 +135,13 @@ describe("TournamentDetails", () => {
       http.post("/api/tournaments/t1/registrations", async ({ request }) => {
         registered = await request.json();
         return HttpResponse.json(
-          { ...registrationDto("r9", "Dee Visitor"), playerId: "p-dee", player: { id: "p-dee", name: "Dee Visitor", imageUrl: null }, paymentConfirmed: false } satisfies ManagedRegistration,
+          {
+            ...registrationDto("r9", "Dee Visitor"),
+            playerId: "p-dee",
+            player: { id: "p-dee", name: "Dee Visitor", imageUrl: null },
+            paymentConfirmed: false,
+            seating: { status: "waiting", reason: "no_tables" },
+          } satisfies RegistrationCreatedDto,
           { status: 201 },
         );
       }),
@@ -159,9 +167,16 @@ describe("TournamentDetails", () => {
     const draws: unknown[] = [];
     server.use(
       http.get("/api/public/tournaments/t1/players", () => HttpResponse.json([{ id: "p-dee", name: "Dee Visitor", imageUrl: null }])),
+      // Seating new players automatically is off for this game, so the TD seats them.
       http.post("/api/tournaments/t1/registrations", () =>
         HttpResponse.json(
-          { ...registrationDto("r9", "Dee Visitor"), playerId: "p-dee", player: { id: "p-dee", name: "Dee Visitor", imageUrl: null }, paymentConfirmed: false } satisfies ManagedRegistration,
+          {
+            ...registrationDto("r9", "Dee Visitor"),
+            playerId: "p-dee",
+            player: { id: "p-dee", name: "Dee Visitor", imageUrl: null },
+            paymentConfirmed: false,
+            seating: { status: "waiting", reason: "off" },
+          } satisfies RegistrationCreatedDto,
           { status: 201 },
         ),
       ),
@@ -416,5 +431,39 @@ describe("TournamentDetails", () => {
 
       expect(registrationRequests).toBe(before);
     });
+  });
+});
+
+describe("TournamentDetails: round 5 wiring", () => {
+  it("wears the club's colours on its tournament pages for staff (item 13)", async () => {
+    document.documentElement.removeAttribute("style");
+    mockPage(true);
+    server.use(http.get("/api/clubs/c1", () => HttpResponse.json(clubDto({ theme: CENTRAL_STARS_THEME }))));
+    renderDetails();
+
+    expect(await screen.findByTestId("prize-pool")).toBeInTheDocument();
+    await waitFor(() => expect(document.documentElement.style.getPropertyValue("--primary")).toBe(themeVariables(CENTRAL_STARS_THEME, "light")["--primary"]));
+  });
+
+  it("toasts a sign-up that automatic seating sat down on another device (item 9)", async () => {
+    let registrations = field;
+    let seating = seatingDto({
+      tables: [{ id: "tA", number: 1, seats: 9, seated: { 1: { id: "r1", name: "Ann" }, 2: { id: "r2", name: "Bob" }, 3: { id: "r3", name: "Cat" } } }],
+    });
+    mockPage(true);
+    server.use(
+      http.get("/api/tournaments/t1/seating", () => HttpResponse.json(seating)),
+      http.get("/api/tournaments/t1/registrations", () => HttpResponse.json(registrations)),
+    );
+    const { queryClient } = renderDetails();
+    await waitFor(() => expect(queryClient.getQueryData(qk.tournaments.seating("t1"))).toBeDefined());
+
+    seating = seatingDto({
+      tables: [{ id: "tA", number: 1, seats: 9, seated: { 1: { id: "r1", name: "Ann" }, 2: { id: "r2", name: "Bob" }, 3: { id: "r3", name: "Cat" }, 4: { id: "r4", name: "Dee" } } }],
+    });
+    registrations = [...field, registrationDto("r4", "Dee", 1)];
+    await act(() => queryClient.invalidateQueries({ queryKey: qk.tournaments.registrations("t1") }));
+
+    expect(await screen.findByText("Dee seated at Table 1, Seat 4.")).toBeInTheDocument();
   });
 });

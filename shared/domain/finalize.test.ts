@@ -168,6 +168,37 @@ describe("buildFinalizePlan: positions and prizes", () => {
     expect(result.warnings).toContain("2 payments not confirmed");
   });
 
+  it("never ranks, pays, scores or counts the waiting list (round 5, item 15)", () => {
+    // 4 played; 2 more signed up beyond Max players 4 and were never accepted.
+    const registrations = [
+      ...field(4),
+      ...["r05", "r06"].map((id, i) => ({ id, playerId: `p0${5 + i}`, buyIns: 1, paymentConfirmed: false, isEliminated: false, registrationTime: new Date(Date.UTC(2026, 2, 1, 18, i)) })),
+    ];
+    const result = okPlan({ tournament: tournament({ maxPlayers: 4 }), registrations });
+
+    expect(table(result).map(([id]) => id)).toEqual(["r04", "r03", "r02", "r01"]);
+    expect(result.prizePool.net).toBe(20_000);
+    expect(result.snapshot.entrants).toBe(4);
+    expect(result.warnings).toContain("2 sign-ups on the waiting list are not ranked, paid or counted in the pool");
+    expect(result.warnings).not.toContain("2 payments not confirmed");
+  });
+
+  it("warns when a % place and a $ place pay out of order at this pool (R5REV1-PAY-01)", () => {
+    const customPayouts = '{"v":2,"places":[{"percent":30},{"amountCents":20000}]}';
+    const result = okPlan({ tournament: tournament({ payoutStructure: "custom", customPayouts, prizeDifference: "first" }) });
+
+    expect(result.rows.slice(0, 2).map((row) => row.prizeAmount)).toEqual(["200.00", "200.00"]);
+    const swapped = '{"v":2,"places":[{"percent":30},{"amountCents":25000}]}';
+    expect(okPlan({ tournament: tournament({ payoutStructure: "custom", customPayouts: swapped, prizeDifference: "first" }) }).warnings).toContain(
+      "From the $400 prize pool 2nd pays $250, more than 1st ($150)",
+    );
+    // Left with the club, the $80 leftover is not 1st's: 30% of $400 is $120, below 2nd's $200.
+    expect(okPlan({ tournament: tournament({ payoutStructure: "custom", customPayouts }) }).warnings).toContain(
+      "From the $320 prize pool 2nd pays $200, more than 1st ($120)",
+    );
+    expect(result.warnings.some((warning) => warning.startsWith("From the"))).toBe(false);
+  });
+
   it("names a player it cannot find", () => {
     const result = okPlan({ registrations: field(2), playerNames: new Map() });
 
@@ -313,7 +344,10 @@ describe("buildFinalizePlan: warnings", () => {
   it("says when the pool is set manually", () => {
     const result = okPlan({ tournament: tournament({ manualPrizePool: "300.00", rakeOverride: "5.00" }) });
 
-    expect(result.warnings).toEqual(["The prize pool is set manually to $300 (calculated $395)"]);
+    expect(result.warnings).toEqual([
+      "The prize pool is set manually to $300 (calculated $395)",
+      "The prizes add up to $300, $95 less than the $395 available for prizes: the club keeps it",
+    ]);
   });
 
   it("lists the player requests finalizing would discard, with what each re-buy or add-on costs (P2REV1-02)", () => {
@@ -440,5 +474,230 @@ describe("input types", () => {
   it("accepts database rows as they are", () => {
     expectTypeOf<Tournament>().toExtend<FinalizeTournamentInput>();
     expectTypeOf<TournamentRegistration>().toExtend<FinalizeRegistrationInput>();
+  });
+});
+
+describe("buildFinalizePlan: a deal (round 5)", () => {
+  // 8 × $50 = $400, Standard 50/30/20: $200 / $120 / $80. Three still in: r06, r07, r08.
+  const stillIn = () => field(8, 3);
+  const order = ["r08", "r07", "r06"];
+  const chop = (r08: number, r07: number, r06: number, reason = "Chip chop at 3 handed") => ({
+    reason,
+    amounts: [
+      { registrationId: "r08", amountCents: r08 },
+      { registrationId: "r07", amountCents: r07 },
+      { registrationId: "r06", amountCents: r06 },
+    ],
+  });
+
+  it("says what a deal shares: the players still in and what their places pay together", () => {
+    const result = okPlan({ registrations: stillIn(), finishOrder: order });
+    expect(result.dealable).toEqual({
+      totalCents: 40_000,
+      players: [
+        { registrationId: "r08", playerId: "p08", playerName: "Player 08", position: 1, plannedCents: 20_000 },
+        { registrationId: "r07", playerId: "p07", playerName: "Player 07", position: 2, plannedCents: 12_000 },
+        { registrationId: "r06", playerId: "p06", playerName: "Player 06", position: 3, plannedCents: 8_000 },
+      ],
+    });
+    expect(result.snapshot.deal).toBeUndefined();
+    expect(okPlan().dealable).toBeNull();
+  });
+
+  it("knows the total before the finish order is given", () => {
+    const result = plan({ registrations: stillIn() });
+    expect(result.ok).toBe(false);
+    expect(result.dealable).toEqual({
+      totalCents: 40_000,
+      players: ["r06", "r07", "r08"].map((id) => ({ registrationId: id, playerId: `p${id.slice(1)}`, playerName: `Player ${id.slice(1)}`, position: null, plannedCents: null })),
+    });
+  });
+
+  it("pays the deal's amounts, keeps positions and points, and freezes the deal in the snapshot", () => {
+    const without = okPlan({ registrations: stillIn(), finishOrder: order });
+    const result = okPlan({ registrations: stillIn(), finishOrder: order, deal: chop(15_000, 13_000, 12_000) });
+    expect(table(result).slice(0, 4)).toEqual([
+      ["r08", 1, "150.00", without.rows[0].pointsAwarded],
+      ["r07", 2, "130.00", without.rows[1].pointsAwarded],
+      ["r06", 3, "120.00", without.rows[2].pointsAwarded],
+      ["r05", 4, null, without.rows[3].pointsAwarded],
+    ]);
+    expect(result.snapshot.deal).toEqual({
+      reason: "Chip chop at 3 handed",
+      totalCents: 40_000,
+      players: [
+        { registrationId: "r08", playerId: "p08", playerName: "Player 08", position: 1, plannedCents: 20_000, amountCents: 15_000 },
+        { registrationId: "r07", playerId: "p07", playerName: "Player 07", position: 2, plannedCents: 12_000, amountCents: 13_000 },
+        { registrationId: "r06", playerId: "p06", playerName: "Player 06", position: 3, plannedCents: 8_000, amountCents: 12_000 },
+      ],
+    });
+    expect(result.snapshot.paid.map((place) => [place.position, place.amountCents, place.basisPoints])).toEqual([
+      [1, 15_000, 5000],
+      [2, 13_000, 3000],
+      [3, 12_000, 2000],
+    ]);
+    expect(result.snapshot.pool.netCents).toBe(40_000);
+    expect(result.warnings).toContain("Deal: the 3 players still in share $400 as agreed (Chip chop at 3 handed)");
+    expect(planHashInput(result.prizePool.net, result.rows)).not.toBe(planHashInput(without.prizePool.net, without.rows));
+  });
+
+  it("can pay a player who finishes below the paid places, who is then in the snapshot's paid places", () => {
+    const four = field(8, 4);
+    const result = okPlan({
+      registrations: four,
+      finishOrder: ["r08", "r07", "r06", "r05"],
+      deal: {
+        reason: "Bubble save",
+        amounts: [
+          { registrationId: "r08", amountCents: 18_000 },
+          { registrationId: "r07", amountCents: 11_000 },
+          { registrationId: "r06", amountCents: 7_000 },
+          { registrationId: "r05", amountCents: 4_000 },
+        ],
+      },
+    });
+    expect(result.snapshot.paid.map((place) => [place.registrationId, place.position, place.amountCents, place.basisPoints])).toEqual([
+      ["r08", 1, 18_000, 5000],
+      ["r07", 2, 11_000, 3000],
+      ["r06", 3, 7_000, 2000],
+      ["r05", 4, 4_000, 0],
+    ]);
+  });
+
+  it("refuses a deal that does not share exactly what the players still in would be paid", () => {
+    const result = plan({ registrations: stillIn(), finishOrder: order, deal: chop(15_000, 13_000, 11_000) });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.problem).toBe("DEAL_INVALID");
+    expect(result.dealProblems).toEqual([{ code: "DEAL_TOTAL", message: "The deal must share $400 (it is $10 short)" }]);
+    expect(result.dealable?.totalCents).toBe(40_000);
+  });
+
+  it("asks for the finish order first", () => {
+    const result = plan({ registrations: stillIn(), deal: chop(15_000, 13_000, 12_000) });
+    expect(result.ok === false && result.problem).toBe("ACTIVE_PLAYERS_NEED_ORDER");
+  });
+
+  it("warns a correction made without the deal the tournament was finalized with", () => {
+    const first = okPlan({ registrations: stillIn(), finishOrder: order, deal: chop(15_000, 13_000, 12_000) });
+    const correction = okPlan({
+      tournament: tournament({ status: "completed", prizePoolSnapshot: first.snapshot }),
+      registrations: stillIn(),
+      finishOrder: order,
+    });
+    expect(correction.warnings).toContain("It was finalized with a deal (Chip chop at 3 handed): without one, the players still in are paid their places' payouts");
+    const again = okPlan({
+      tournament: tournament({ status: "completed", prizePoolSnapshot: first.snapshot }),
+      registrations: stillIn(),
+      finishOrder: order,
+      deal: chop(15_000, 13_000, 12_000),
+    });
+    expect(again.warnings.some((warning) => warning.startsWith("It was finalized with a deal"))).toBe(false);
+  });
+
+  it("freezes a custom structure's fixed places with the shares they paid", () => {
+    const customPayouts = '{"v":2,"places":[{"percent":50},{"amountCents":10000}]}';
+    const result = okPlan({ tournament: tournament({ payoutStructure: "custom", customPayouts, prizeDifference: "first" }), registrations: stillIn(), finishOrder: order });
+    expect(result.snapshot.pool.structure).toEqual({
+      requested: "custom",
+      used: "custom",
+      basisPoints: [7500, 2500],
+      places: [
+        { kind: "percent", basisPoints: 5000 },
+        { kind: "amount", amountCents: 10_000 },
+      ],
+    });
+    expect(result.snapshot.paid.map((place) => place.amountCents)).toEqual([30_000, 10_000]);
+  });
+});
+
+describe("buildFinalizePlan: where a difference goes (round 5, item 16)", () => {
+  // Eight $50 buy-ins: $400 available. Custom places 1st $150, 2nd $100, 3rd $50 leave $100.
+  const fixed = '{"v":2,"places":[{"amountCents":15000},{"amountCents":10000},{"amountCents":5000}]}';
+  const custom = (overrides: Partial<FinalizeTournamentInput> = {}) => tournament({ payoutStructure: "custom", customPayouts: fixed, ...overrides });
+  const prizes = (result: ReturnType<typeof okPlan>) => result.rows.slice(0, 3).map((row) => row.amountCents);
+
+  it("pays exactly the prizes set, and freezes what the club kept", () => {
+    const result = okPlan({ tournament: custom() });
+    expect(prizes(result)).toEqual([15_000, 10_000, 5_000]);
+    expect(result.snapshot.pool).toMatchObject({ netCents: 30_000, impliedRakeCents: 10_000 });
+    expect(result.snapshot.pool.difference).toEqual({
+      choice: "club",
+      availableCents: 40_000,
+      setCents: 30_000,
+      cents: 10_000,
+      keptByClubCents: 10_000,
+      addedToPrizesCents: 0,
+      carriedOverCents: 0,
+      addedByClubCents: 0,
+    });
+    expect(result.warnings).toContain("The prizes add up to $300, $100 less than the $400 available for prizes: the club keeps it");
+  });
+
+  it("freezes a carry-over with where it goes, and says so", () => {
+    const result = okPlan({ tournament: custom({ prizeDifference: "carry" }), carryTarget: "Winter League" });
+    expect(prizes(result)).toEqual([15_000, 10_000, 5_000]);
+    expect(result.snapshot.pool.difference).toMatchObject({ choice: "carry", carriedOverCents: 10_000, carryTarget: "Winter League" });
+    expect(result.snapshot.pool.impliedRakeCents).toBe(0);
+    expect(result.warnings).toContain("The prizes add up to $300, $100 less than the $400 available for prizes: it is carried over to Winter League");
+    expect(okPlan({ tournament: custom({ prizeDifference: "carry" }) }).snapshot.pool.difference?.carryTarget).toBe("the next tournament");
+    expect(okPlan({ tournament: custom() }).snapshot.pool.difference).not.toHaveProperty("carryTarget");
+  });
+
+  it("pays the leftover to 1st, or shares it, when chosen", () => {
+    expect(prizes(okPlan({ tournament: custom({ prizeDifference: "first" }) }))).toEqual([25_000, 10_000, 5_000]);
+    expect(prizes(okPlan({ tournament: custom({ prizeDifference: "pro_rata" }) }))).toEqual([20_100, 13_300, 6_600]);
+  });
+
+  it("pays prizes above what came in as set: the club adds the rest", () => {
+    const result = okPlan({ tournament: tournament({ manualPrizePool: "500.00" }) });
+    expect(result.rows.slice(0, 3).map((row) => row.amountCents)).toEqual([25_000, 15_000, 10_000]);
+    expect(result.snapshot.pool.difference).toMatchObject({ cents: -10_000, addedByClubCents: 10_000 });
+    expect(result.warnings).toContain("The prizes add up to $500, $100 more than the $400 available for prizes: the club adds $100");
+  });
+
+  it("freezes money carried in from an earlier tournament, and names it", () => {
+    const carriedIn = [{ carryOverId: "c1", fromTournamentId: "t0", fromName: "Test Wednesday", amountCents: 5_000 }];
+    const result = okPlan({ tournament: tournament({ carriedIn }) });
+    expect(result.snapshot.pool.netCents).toBe(45_000);
+    expect(result.snapshot.pool.carriedIn).toEqual(carriedIn);
+    expect(result.snapshot.pool).not.toHaveProperty("difference");
+    expect(result.warnings).toContain("$50 carried over from Test Wednesday is in the prize pool");
+  });
+
+  it("records nothing new for a tournament with no difference and nothing carried in", () => {
+    const result = okPlan();
+    expect(result.snapshot.pool).not.toHaveProperty("difference");
+    expect(result.snapshot.pool).not.toHaveProperty("carriedIn");
+  });
+
+  it("lets a deal share what the places pay once the leftover is settled", () => {
+    const registrations = field(8, 3);
+    const finishOrder = ["r08", "r07", "r06"];
+    const deal = (amounts: number[]) => ({
+      reason: "Even chop",
+      amounts: finishOrder.map((registrationId, i) => ({ registrationId, amountCents: amounts[i] })),
+    });
+    // Kept by the club, the $100 is not the players' to share: the deal shares $300.
+    expect(okPlan({ tournament: custom(), registrations, finishOrder }).dealable?.totalCents).toBe(30_000);
+    expect(plan({ tournament: custom(), registrations, finishOrder, deal: deal([13_400, 13_300, 13_300]) })).toMatchObject({ ok: false, problem: "DEAL_INVALID" });
+    // Added to 1st, it is: the deal shares $400, and finalize pays it exactly.
+    const dealt = okPlan({ tournament: custom({ prizeDifference: "first" }), registrations, finishOrder, deal: deal([13_400, 13_300, 13_300]) });
+    expect(dealt.snapshot.deal?.totalCents).toBe(40_000);
+    expect(dealt.rows.slice(0, 3).map((row) => row.amountCents)).toEqual([13_400, 13_300, 13_300]);
+    expect(dealt.snapshot.pool.difference).toMatchObject({ addedToPrizesCents: 10_000 });
+  });
+
+  it("hashes where the difference goes, so a change of choice after the preview is a changed plan", () => {
+    const kept = okPlan({ tournament: custom() });
+    const carried = okPlan({ tournament: custom({ prizeDifference: "carry" }) });
+    expect(kept.rows).toEqual(carried.rows);
+    const hashOf = (result: ReturnType<typeof okPlan>) => planHashInput(result.prizePool.net, result.rows, result.pendingRequestIds, result.snapshot.pool.difference);
+    expect(hashOf(kept)).not.toBe(hashOf(carried));
+    // With no difference the hash is what it always was.
+    const plain = okPlan();
+    expect(planHashInput(plain.prizePool.net, plain.rows, plain.pendingRequestIds, plain.prizePool.difference)).toBe(
+      planHashInput(plain.prizePool.net, plain.rows, plain.pendingRequestIds),
+    );
   });
 });

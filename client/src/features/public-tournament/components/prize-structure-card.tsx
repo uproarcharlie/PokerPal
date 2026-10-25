@@ -1,5 +1,6 @@
 import { Lock, Trophy } from "lucide-react";
 import type { PublicRegistration } from "@shared/api/public";
+import { describeDeal, type SnapshotDeal } from "@shared/domain/deal";
 import type { PointsRules } from "@shared/domain/points";
 import { PlayerAvatar } from "@/components/image/player-avatar";
 import { MoneyText } from "@/components/shared/money-text";
@@ -13,6 +14,7 @@ import type { TournamentMoney } from "@/lib/prize-pool";
 import { prizeTable } from "../standings";
 import { PlaceName } from "@/components/shared/podium";
 import { undistributedNote } from "@/lib/prize-pool";
+import { PoolSummary, type PoolSummaryFigures } from "@/features/prize-pool/components/public/pool-summary";
 
 /** The points rules once known, or where their requests stand. */
 export type PointsRulesFigure = PointsRules | "loading" | "failed";
@@ -29,10 +31,17 @@ interface PrizeStructureCardProps {
   onRetryPoints: () => void;
   /** The TD has locked the pool: the amounts are final enough to show. */
   locked: boolean;
+  /** The deal the players still in made at the end (the finalize snapshot's), if they made one. */
+  deal?: SnapshotDeal | null;
+  /**
+   * The pool's honest breakdown (round 5, item 16: "Prize pool $600 · AP $80 · Kept by the club $50"),
+   * shown with the pool once it is revealed; it says nothing unless something was kept, carried or added.
+   */
+  summary?: PoolSummaryFigures | null;
 }
 
 /** What each place pays (and scores), from the same shared functions finalize pays with. */
-export function PrizeStructureCard({ money, registrations, trackPoints, pointsRules, onRetryPoints, locked }: PrizeStructureCardProps) {
+export function PrizeStructureCard({ money, registrations, trackPoints, pointsRules, onRetryPoints, locked, deal, summary }: PrizeStructureCardProps) {
   const { display, poolCents } = money;
   // Shown once the pool is locked, and always once the prizes have been paid.
   const revealed = locked || display.source !== "live";
@@ -41,6 +50,9 @@ export function PrizeStructureCard({ money, registrations, trackPoints, pointsRu
   const known = typeof pointsRules === "object";
   const table = prizeTable(display.rows, known ? pointsRules : NO_RULES);
   const showPoints = trackPoints;
+  // A deal is shown with the prizes it paid (round 5, item 2): each dealt player's prize is what they agreed.
+  const paidDeal = display.source === "snapshot" ? (deal ?? null) : null;
+  const dealt = new Set(paidDeal?.players.map((player) => player.registrationId) ?? []);
 
   return (
     <Card>
@@ -71,6 +83,12 @@ export function PrizeStructureCard({ money, registrations, trackPoints, pointsRu
             </span>
           )}
         </p>
+        {revealed && !cancelled && summary ? <PoolSummary figures={summary} className="mt-1" testId="public-pool-summary" /> : null}
+        {paidDeal ? (
+          <p className="mt-1 text-sm text-foreground" data-testid="prizes-deal">
+            <span className="font-semibold">Deal:</span> {describeDeal(paidDeal)} ({paidDeal.reason})
+          </p>
+        ) : null}
       </CardHeader>
       <CardContent className="p-0 sm:p-6">
         <ScrollRegion label="Prize structure" className="overflow-x-auto">
@@ -105,6 +123,9 @@ export function PrizeStructureCard({ money, registrations, trackPoints, pointsRu
                     </td>
                     <td className="px-3 py-3 text-right font-bold text-foreground">
                       {!payout ? <span className="font-normal text-muted-foreground">-</span> : revealed ? <MoneyText cents={payout.amountCents} /> : "TBD"}
+                      {payout?.registrationId && dealt.has(payout.registrationId) ? (
+                        <span className="block text-xs font-normal text-muted-foreground">Deal</span>
+                      ) : null}
                     </td>
                     {showPoints ? (
                       <td className="px-3 py-3 text-right">

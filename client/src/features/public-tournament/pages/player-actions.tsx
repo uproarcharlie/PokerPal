@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Link, useParams } from "wouter";
 import { ArrowLeft, Lock, RefreshCw, ShoppingCart, Skull } from "lucide-react";
-import type { PublicPlayer } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import type { PlayerActionType } from "@shared/domain/player-actions";
 import { routes } from "@/app/routes";
@@ -13,12 +12,14 @@ import { CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { formatAmount } from "@/lib/format";
 import { useFocusOnChange } from "@/hooks/use-focus-on-change";
 import { ActionMenu } from "../components/action-menu";
-import { ActionRequestForm } from "../components/action-request-form";
+import { ActionRequestForm, type SubmittedRequest } from "../components/action-request-form";
 import { ActionSubmitted } from "../components/action-submitted";
 import { useClub } from "@/features/clubs/hooks";
+import { ClubThemeScope } from "@/features/branding/components/public/club-theme-scope";
 import { useRegistrations, useTournament } from "@/features/tournaments/hooks";
 import { isClosedStatus } from "@shared/domain/tournaments";
 import { CenteredCard, TOURNAMENT_PAGE_STATES } from "../components/page-shell";
+import { lineupOf } from "../waiting-list";
 
 const ACTION_ICONS: Readonly<Record<PlayerActionType, typeof RefreshCw>> = { rebuy: RefreshCw, addon: ShoppingCart, knockout: Skull };
 const ACTION_TITLES: Readonly<Record<PlayerActionType, string>> = { rebuy: "Re-buy", addon: "Add-on", knockout: "Register Knockout" };
@@ -51,7 +52,7 @@ function PlayerRequests({ tournament }: { tournament: TournamentDetailDto }) {
   const { data: club } = useClub(tournament.clubId);
   const registrations = useRegistrations(tournament.id);
   const [actionType, setActionType] = useState<PlayerActionType | null>(null);
-  const [submitted, setSubmitted] = useState<{ player: PublicPlayer | null } | null>(null);
+  const [submitted, setSubmitted] = useState<SubmittedRequest | null>(null);
   // Choosing an action, going back and sending one each replace what was on screen: focus follows.
   const shown = useFocusOnChange<HTMLDivElement>(submitted ? "submitted" : (actionType ?? "menu"));
 
@@ -91,7 +92,7 @@ function PlayerRequests({ tournament }: { tournament: TournamentDetailDto }) {
         <RequestsClosed tournament={tournament} />
       ) : submitted && actionType ? (
         <div ref={shown} tabIndex={-1} className="focus:outline-none" data-testid="player-action-sent">
-          <ActionSubmitted tournament={tournament} actionType={actionType} player={submitted.player} onDone={startOver} />
+          <ActionSubmitted tournament={tournament} actionType={actionType} {...submitted} onDone={startOver} />
         </div>
       ) : actionType ? (
         <CardContent>
@@ -101,8 +102,9 @@ function PlayerRequests({ tournament }: { tournament: TournamentDetailDto }) {
                 key={actionType}
                 tournament={tournament}
                 actionType={actionType}
-                registrations={list}
-                onSubmitted={(player) => setSubmitted({ player })}
+                // The field only: a waiting-list sign-up is not playing yet, so has nothing to ask for, nor can be knocked out (round 5, item 15).
+                registrations={lineupOf(list, tournament.maxPlayers).field}
+                onSubmitted={setSubmitted}
               />
             )}
           </QueryState>
@@ -122,9 +124,12 @@ export default function PlayerActionsPage() {
   const tournament = useTournament(tournamentId);
   usePageMeta({ title: tournament.data ? `Player requests: ${tournament.data.name}` : "Player requests", noindex: true });
 
+  // In the club's own colours (round 5, item 13), around every state so a half-made request is never remounted.
   return (
-    <QueryState query={tournament} {...TOURNAMENT_PAGE_STATES}>
-      {(loaded) => <PlayerRequests tournament={loaded} />}
-    </QueryState>
+    <ClubThemeScope clubId={tournament.data?.clubId} scheme="light">
+      <QueryState query={tournament} {...TOURNAMENT_PAGE_STATES}>
+        {(loaded) => <PlayerRequests tournament={loaded} />}
+      </QueryState>
+    </ClubThemeScope>
   );
 }

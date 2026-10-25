@@ -53,6 +53,8 @@ export interface TournamentWithCounts {
   tournament: Tournament;
   registeredCount: number;
   confirmedPlayerCount: number;
+  /** Registrations in the field by right: paid, or they have played (shared/domain/waiting-list inFieldByRight). */
+  inFieldByRightCount: number;
 }
 
 /**
@@ -74,6 +76,10 @@ export async function listTournamentsWithCounts(ex: Executor, filter: Tournament
       tournament: tournaments,
       registeredCount: sql<number>`count(${tournamentRegistrations.id})`.mapWith(Number),
       confirmedPlayerCount: sql<number>`count(${tournamentRegistrations.id}) filter (where ${tournamentRegistrations.paymentConfirmed})`.mapWith(
+        Number,
+      ),
+      // inFieldByRight in SQL: accepted (paid), or played (busted, placed, re-bought, added on or knocked someone out).
+      inFieldByRightCount: sql<number>`count(${tournamentRegistrations.id}) filter (where ${tournamentRegistrations.paymentConfirmed} or ${tournamentRegistrations.isEliminated} or ${tournamentRegistrations.finalPosition} is not null or coalesce(${tournamentRegistrations.rebuys}, 0) > 0 or coalesce(${tournamentRegistrations.addons}, 0) > 0 or coalesce(${tournamentRegistrations.knockouts}, 0) > 0)`.mapWith(
         Number,
       ),
     })

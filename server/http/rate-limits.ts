@@ -183,7 +183,7 @@ export function isLiveApiRequest(req: Pick<Request, "method" | "baseUrl" | "path
  * clock key) is still counted, per visitor.
  */
 const LIVE_OPS_PATHS: readonly RegExp[] = [
-  /^\/api\/tournaments\/[^/]+\/(?:clock(?:\/(?:actions|display|key))?|seating\/(?:setup|draw|assign|unseat|balance|final-table|undo)|tables(?:\/[^/]+(?:\/break)?)?|early-birds)\/?$/i,
+  /^\/api\/tournaments\/[^/]+\/(?:clock(?:\/(?:actions|display|key))?|seating\/(?:setup|draw|assign|unseat|balance|final-table|undo|open-table)|tables(?:\/[^/]+(?:\/break)?)?|early-birds)\/?$/i,
 ];
 
 export function isLiveOpsRequest(req: Pick<Request, "method" | "baseUrl" | "path">): boolean {

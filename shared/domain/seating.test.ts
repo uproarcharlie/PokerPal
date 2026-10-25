@@ -18,8 +18,6 @@ import {
   seatingProblems,
   seatingVersion,
   shuffle,
-  suggestBreak,
-  suggestFinalTable,
   suggestTables,
   tableStats,
   waitingPlayers,
@@ -90,10 +88,20 @@ describe("seatingVersion", () => {
     const s = drawn([table(1), table(2)], 12);
     const version = seatingVersion(s);
     expect(version).toMatch(/^[0-9a-f]{8}$/);
-    expect(seatingVersion({ tables: [...s.tables].reverse(), seats: [...s.seats].reverse() })).toBe(version);
-    expect(seatingVersion({ tables: s.tables, seats: s.seats.slice(1) })).not.toBe(version);
-    expect(seatingVersion({ tables: [table(1), table(2, 8)], seats: s.seats })).not.toBe(version);
-    expect(seatingVersion({ tables: [...s.tables, table(3, 9, "broken")], seats: s.seats })).toBe(version);
+    expect(seatingVersion({ ...s, tables: [...s.tables].reverse(), seats: [...s.seats].reverse(), eligible: [...s.eligible].reverse() })).toBe(version);
+    expect(seatingVersion({ ...s, seats: s.seats.slice(1) })).not.toBe(version);
+    expect(seatingVersion({ ...s, tables: [table(1), table(2, 8)] })).not.toBe(version);
+    expect(seatingVersion({ ...s, tables: [...s.tables, table(3, 9, "broken")] })).toBe(version);
+  });
+
+  it("changes when a player joins or leaves the players waiting, or pays, so Open Table applies only the plan shown (R5REV-HOST-07)", () => {
+    const s = drawn([table(1, 2)], 2);
+    const waiting = { ...s, eligible: [...s.eligible, { registrationId: "late", paymentConfirmed: false }] };
+    expect(seatingVersion(waiting)).not.toBe(seatingVersion(s));
+    expect(seatingVersion({ ...waiting, eligible: [...s.eligible, { registrationId: "late", paymentConfirmed: true }] })).not.toBe(seatingVersion(waiting));
+    expect(seatingVersion({ ...waiting, eligible: [...s.eligible, { registrationId: "other", paymentConfirmed: false }] })).not.toBe(seatingVersion(waiting));
+    // A seated player's payment is not part of it: only who waits, and whether they have paid.
+    expect(seatingVersion({ ...s, eligible: s.eligible.map((entry) => ({ ...entry, paymentConfirmed: !entry.paymentConfirmed })) })).toBe(seatingVersion(s));
   });
 });
 
@@ -231,13 +239,6 @@ describe("planBalance", () => {
 });
 
 describe("breaking a table", () => {
-  it("is suggested once everyone fits at the other tables: the emptiest, highest-numbered first", () => {
-    const s = drawn([table(1), table(2), table(3)], 18);
-    expect(suggestBreak(s)).toEqual({ tableId: "t3", tableNumber: 3, playersToMove: 6 });
-    expect(suggestBreak(drawn([table(1), table(2), table(3)], 19))).toBeNull();
-    expect(suggestBreak(drawn([table(1)], 4))).toBeNull();
-  });
-
   it("moves its players to the other tables and archives it", () => {
     const tables = [table(1), table(2), table(3)];
     const s = drawn(tables, 16);
@@ -257,12 +258,6 @@ describe("breaking a table", () => {
 });
 
 describe("the final table", () => {
-  it("is suggested once everyone fits at one table: the lowest-numbered big enough", () => {
-    expect(suggestFinalTable(drawn([table(1, 8), table(2, 10), table(3)], 9))).toEqual({ tableId: "t2", tableNumber: 2 });
-    expect(suggestFinalTable(drawn([table(1), table(2)], 11))).toBeNull();
-    expect(suggestFinalTable(drawn([table(1)], 4))).toBeNull();
-  });
-
   it("redraws everyone at one table and archives the rest", () => {
     const tables = [table(1), table(2), table(3)];
     const s = drawn(tables, 9);
@@ -301,11 +296,8 @@ describe("players waiting for a seat (TDN3-FINAL-TABLE-WAITING)", () => {
     expect(tableStats(staged)).toMatchObject({ seated: 3, unseated: 2 });
   });
 
-  it("never keep the final table or a break from being suggested", () => {
+  it("are the players still in with no seat", () => {
     expect(waitingPlayers(waiting).map((player) => player.registrationId)).toEqual(["r9", "r10"]);
-    expect(suggestFinalTable(waiting)).toEqual({ tableId: "t1", tableNumber: 1 });
-    expect(suggestBreak(waiting)).toEqual(suggestBreak(seated));
-    expect(suggestBreak(waiting)).not.toBeNull();
   });
 
   it("stay waiting when the final table is drawn, unless the TD includes them", () => {
@@ -332,10 +324,6 @@ describe("players waiting for a seat (TDN3-FINAL-TABLE-WAITING)", () => {
       details: { needed: 10, available: 9 },
     });
     expect(planFinalTable(full, "t1", mulberry32(1), true)).toMatchObject({ ok: false, message: "Table 1 has 9 seats for 10 players" });
-  });
-
-  it("do not make an empty room look like a final table", () => {
-    expect(suggestFinalTable(snapshot(tables, [], 18))).toBeNull();
   });
 
   it("are said in a sentence", () => {

@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Clock, Users } from "lucide-react";
 import { describe, expect, it } from "vitest";
 import { TabHost, type HostedTab } from "./tab-host";
 
@@ -52,5 +53,35 @@ describe("TabHost (P3REV2-CQ-14)", () => {
     rerender(<TabHost value="season" tabs={tabs([{ value: "season", label: "Summer", content: <p>The season</p> }])} />);
     expect(screen.getByText("The season")).toBeInTheDocument();
   });
-});
 
+  it("puts the tabs in a phone's bottom bar, named, each an icon over its label, at least 56 px tall (round5-contracts §8.1)", async () => {
+    const user = userEvent.setup();
+    const chosen: string[] = [];
+    render(
+      <TabHost
+        variant="bottom-bar"
+        label="Tournament sections"
+        onValueChange={(value) => chosen.push(value)}
+        tabs={[
+          { value: "players", label: "Players", icon: Users, content: <p>The players</p> },
+          { value: "clock", label: "Clock", icon: Clock, keepMounted: true, content: <input aria-label="Minutes" /> },
+        ]}
+      />,
+    );
+
+    const bar = screen.getByRole("tablist", { name: "Tournament sections" });
+    expect(bar).toHaveClass("fixed", "bottom-0", "pb-[env(safe-area-inset-bottom)]");
+    for (const tab of screen.getAllByRole("tab")) {
+      expect(tab).toHaveClass("min-h-14", "flex-1");
+      expect(tab.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    }
+    expect(screen.getByText("The players")).toBeInTheDocument();
+    // A kept tab stays in the page, hidden, in the bar's layout too.
+    expect(screen.getByRole("textbox", { name: "Minutes", hidden: true })).not.toBeVisible();
+
+    await user.click(screen.getByRole("tab", { name: "Clock" }));
+    expect(chosen).toEqual(["clock"]);
+    expect(screen.queryByText("The players")).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Minutes" })).toBeVisible();
+  });
+});

@@ -226,6 +226,10 @@ describe("POST /api/clubs", () => {
       instagramUrl: null,
       websiteUrl: "https://nightowls.example",
       rakeLabel: "AP",
+      defaultSeatsPerTable: null,
+      defaultTableShape: null,
+      requireSignupPhoto: false,
+      theme: null,
       createdAt: expect.any(String),
       viewer: { canManage: true, canOwn: true },
     });

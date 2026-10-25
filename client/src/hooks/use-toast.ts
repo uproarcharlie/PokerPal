@@ -1,7 +1,7 @@
 import { useSyncExternalStore, type ReactNode } from "react";
 
-/** One toast at a time: a new one replaces the last. */
-const TOAST_LIMIT = 1;
+/** How many toasts show at once, newest first. */
+const TOAST_LIMIT = 3;
 
 /** The one thing a toast offers to do next ("Seat now"): pressing it closes the toast. */
 export interface ToastAction {
@@ -30,11 +30,27 @@ function publish(next: readonly ToasterToast[]) {
   listeners.forEach((listener) => listener());
 }
 
+/**
+ * The toasts showing once `next` arrives: newest first, at most TOAST_LIMIT. Over the limit the oldest
+ * one that only informs goes, so a toast offering a next step (a bust's Undo, "Seat now") is never
+ * pushed out by news that came after it, such as a QR sign-up seated by another device a moment after
+ * a one-tap bust (R5REV-HOST-08); only when every toast offers one does the oldest go.
+ */
+function admitToast(shown: readonly ToasterToast[], next: ToasterToast): ToasterToast[] {
+  const stack = [next, ...shown];
+  while (stack.length > TOAST_LIMIT) {
+    let oldestNews = stack.length - 1;
+    while (oldestNews >= 0 && stack[oldestNews].action) oldestNews -= 1;
+    stack.splice(oldestNews >= 0 ? oldestNews : stack.length - 1, 1);
+  }
+  return stack;
+}
+
 /** Shows a toast; returns its id and a way to close it early. */
 export function toast(props: Toast): { id: string; dismiss: () => void } {
   count = (count + 1) % Number.MAX_SAFE_INTEGER;
   const id = String(count);
-  publish([{ ...props, id }, ...toasts].slice(0, TOAST_LIMIT));
+  publish(admitToast(toasts, { ...props, id }));
   return { id, dismiss: () => dismissToast(id) };
 }
 

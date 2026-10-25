@@ -22,6 +22,15 @@ describe("players", () => {
     expect(parsed).toEqual({ name: "Al", phone: "021" });
   });
 
+  it("a photo may be an upload or one of the built-in avatars, nothing else (round 5)", () => {
+    expect(createPlayerSchema.parse({ name: "Al", phone: "021", imageUrl: "/avatars/shark.svg" }).imageUrl).toBe("/avatars/shark.svg");
+    expect(updatePlayerSchema.parse({ imageUrl: "/uploads/players/a-512.webp" })).toEqual({ imageUrl: "/uploads/players/a-512.webp" });
+    expect(updatePlayerSchema.parse({ imageUrl: "https://cdn.example/players/a.webp" })).toEqual({ imageUrl: "https://cdn.example/players/a.webp" });
+    for (const url of ["/avatars/whale.svg", "/avatars/shark.png", "/elsewhere/a.svg", "http://cdn.example/a.webp", "/uploads/../secret", "javascript:alert(1)"]) {
+      expect(updatePlayerSchema.safeParse({ imageUrl: url }).success).toBe(false);
+    }
+  });
+
   it("an update can remove the photo, which today is silently ignored (img-04)", () => {
     expect(updatePlayerSchema.parse({ imageUrl: null })).toEqual({ imageUrl: null });
     expect(updatePlayerSchema.parse({ email: " " })).toEqual({ email: null });

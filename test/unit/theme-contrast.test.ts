@@ -3,11 +3,14 @@
  * against what it sits on (1.4.11, 3:1), a field's example text on the field (1.4.3, 4.5:1), the open
  * tab against its tab list (1.4.11), a switch's off track and knob, an upload's progress fill on its track
  * (1.4.11), and the phone menu's Delete on its own highlight (MA-09, MA-13, MA-14). Read from index.css,
- * so a retuned token that breaks one fails here.
+ * so a retuned token that breaks one fails here. The same pairs hold on a club's own colours (round 5,
+ * item 13): its theme's variables laid over index.css, for the presets and for any colours a club picks.
  */
+import fc from "fast-check";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { INK, SCHEME_SURFACES, THEME_PRESETS, themeVariables, type ClubTheme, type ColorSchemeName } from "@shared/domain/theme";
 
 const css = readFileSync(resolve(__dirname, "../../client/src/index.css"), "utf8");
 const tabs = readFileSync(resolve(__dirname, "../../client/src/components/ui/tabs.tsx"), "utf8");
@@ -104,5 +107,74 @@ describe.each([":root", ".dark"] as const)("the %s theme", (selector) => {
 
   it("keeps a destructive menu item readable on its highlight", () => {
     expect(contrast(token("destructive"), over(token("destructive"), 0.1, token("popover")))).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+describe("a club's own colours on the theme (round 5)", () => {
+  it("are measured against the page, card and text index.css really has", () => {
+    for (const [selector, scheme] of [[":root", "light"], [".dark", "dark"]] as const) {
+      const own = tokens(selector);
+      expect(own.get("background"), selector).toEqual([...SCHEME_SURFACES[scheme].background]);
+      expect(own.get("card"), selector).toEqual([...SCHEME_SURFACES[scheme].card]);
+    }
+    expect(tokens(":root").get("foreground")).toEqual([...INK]);
+  });
+
+  const hex = fc.integer({ min: 0, max: 0xffffff }).map((n) => `#${n.toString(16).padStart(6, "0").toUpperCase()}`);
+  const anyTheme = fc
+    .record({ primary: hex, accent: hex, primaryGlow: fc.option(hex, { nil: undefined }), accentDeep: fc.option(hex, { nil: undefined }) })
+    .map((colors): ClubTheme => ({ v: 1, preset: null, colors: Object.fromEntries(Object.entries(colors).filter(([, value]) => value !== undefined)) as ClubTheme["colors"] }));
+
+  describe.each([[":root", "light"], [".dark", "dark"]] as const)("in the %s theme", (selector, scheme: ColorSchemeName) => {
+    /** index.css's tokens for the scheme with the club's laid over them, as <html> holds them under a ClubThemeScope. */
+    const themed = (theme: ClubTheme) => {
+      const base = new Map([...Array.from(tokens(":root")), ...Array.from(tokens(selector))]);
+      for (const [name, value] of Object.entries(themeVariables(theme, scheme))) base.set(name.slice(2), value.split(" ").map(Number) as Rgb);
+      return (name: string): Rgb => {
+        const value = base.get(name);
+        if (!value) throw new Error(`--${name} is not set`);
+        return value;
+      };
+    };
+
+    /** The pairs the shared controls paint (tabs.tsx, switch.tsx, image-field.tsx, button.tsx), as the index.css checks above. */
+    const expectReadable = (theme: ClubTheme) => {
+      const token = themed(theme);
+      for (const surface of ["card", "background"]) {
+        expect(contrast(token("primary"), token(surface)), `primary text on ${surface}`).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(token("accent-text"), token(surface)), `accent text on ${surface}`).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(token("ring"), token(surface)), `focus ring on ${surface}`).toBeGreaterThanOrEqual(3);
+      }
+      // The open tab, a switch that is on, an upload's progress.
+      expect(contrast(token("primary"), token("muted")), "open tab on its list").toBeGreaterThanOrEqual(3);
+      expect(contrast(token("primary-foreground"), token("primary")), "open tab's words").toBeGreaterThanOrEqual(4.5);
+      expect(contrast(token("muted-foreground"), token("muted")), "the other tabs' words").toBeGreaterThanOrEqual(4.5);
+      expect(contrast(token("background"), token("primary")), "a switch's knob on").toBeGreaterThanOrEqual(3);
+      // An outline or ghost button under the pointer; a secondary button or badge.
+      expect(contrast(token("accent-foreground"), token("accent")), "accent fill").toBeGreaterThanOrEqual(4.5);
+      expect(contrast(token("secondary-foreground"), token("secondary")), "secondary fill").toBeGreaterThanOrEqual(4.5);
+      // An icon or a large initial in the main colour on its own 10% tint (the public stats, the landing page).
+      expect(contrast(token("primary"), over(token("primary"), 0.1, token("card"))), "primary on its tint").toBeGreaterThanOrEqual(3);
+      expect(token("placeholder")).not.toEqual(token("primary"));
+    };
+
+    it.each(THEME_PRESETS.map((preset) => [preset.name, preset.theme] as const))("keeps the shared controls readable in %s", (_, theme) => {
+      expectReadable(theme);
+    });
+
+    it("keeps the shared controls readable in any colours a club picks", () => {
+      fc.assert(
+        fc.property(anyTheme, (theme) => expectReadable(theme)),
+        { numRuns: 500 },
+      );
+    });
+  });
+
+  // The light tab list's tint is rounded to whole channels before its words are measured against it:
+  // measured unrounded, about 1 main colour in 2,500 landed just under 4.5:1 (4.4956 for #319FDB).
+  it("keeps the other tabs' words at 4.5:1 on the light tab list in every colour (rounding of the tint)", () => {
+    const variables = themeVariables({ v: 1, preset: null, colors: { primary: "#319FDB", accent: "#000000" } }, "light");
+    const rgb = (name: `--${string}`) => variables[name].split(" ").map(Number) as Rgb;
+    expect(contrast(rgb("--muted-foreground"), rgb("--muted"))).toBeGreaterThanOrEqual(4.5);
   });
 });

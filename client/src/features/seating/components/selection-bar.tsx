@@ -14,14 +14,15 @@ interface SelectionBarProps {
 
 /**
  * Stays at the bottom of the screen while a player is picked up: who, where they sit, what to tap
- * next, and the ways out (eliminate them, unseat them, or put them down).
+ * next, and the ways out (eliminate them, unseat them, or put them down). On a phone it rides above
+ * the tab bar and the quick-action button, so neither covers it.
  */
 export function SelectionBar({ selected, busy, onUnseat, onEliminate, onCancel }: SelectionBarProps) {
   return (
     <div
       role="region"
       aria-label="Selected player"
-      className="sticky bottom-4 z-20 flex flex-col gap-3 rounded-lg border border-primary bg-card p-3 shadow-lg sm:flex-row sm:items-center sm:justify-between"
+      className="sticky bottom-[calc(8.5rem+env(safe-area-inset-bottom))] z-20 flex flex-col gap-3 rounded-lg border border-primary bg-card p-3 shadow-lg sm:flex-row sm:items-center sm:justify-between md:bottom-4 [&_button]:min-h-11"
       data-testid="selection-bar"
     >
       <p className="text-sm text-foreground" aria-live="polite">

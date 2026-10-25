@@ -73,7 +73,7 @@ describe("ClubSettingsPage: who sees what", () => {
     renderSettings();
 
     expect(await screen.findByRole("heading", { level: 1, name: "Central Stars Settings" })).toBeInTheDocument();
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Profile", "Social links", "Managers"]);
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Profile", "Social links", "Tournaments", "Colours", "Managers"]);
     expect(screen.getByRole("button", { name: /Delete Club/ })).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "Managers" }));
@@ -86,7 +86,7 @@ describe("ClubSettingsPage: who sees what", () => {
     renderSettings();
 
     expect(await screen.findByText("Central Stars Settings")).toBeInTheDocument();
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Profile", "Social links"]);
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Profile", "Social links", "Tournaments", "Colours"]);
     expect(screen.queryByRole("button", { name: /Delete Club/ })).not.toBeInTheDocument();
     expect(staffReads).toBe(0);
   });
@@ -109,6 +109,28 @@ describe("ClubSettingsPage: who sees what", () => {
     renderSettings();
     expect(await screen.findByRole("alert")).toHaveTextContent("The server is busy. Please try again.");
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+});
+
+describe("ClubSettingsPage: tournament defaults and colours (round 5)", () => {
+  it("puts the club's tables and the sign-up photo rule on the Tournaments tab, and saves the rule with one tap", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+
+    await user.click(await screen.findByRole("tab", { name: "Tournaments" }));
+    expect(screen.getByTestId("club-table-defaults")).toBeVisible();
+    await user.click(within(screen.getByTestId("signup-photo-field")).getByRole("switch", { name: "Require a photo to sign up" }));
+
+    await waitFor(() => expect(sent).toEqual({ requireSignupPhoto: true }));
+  });
+
+  it("puts the club's colours, with their presets, on the Colours tab", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+
+    await user.click(await screen.findByRole("tab", { name: "Colours" }));
+    expect(screen.getByText("Club colours")).toBeVisible();
+    expect(screen.getByRole("button", { name: /Central Stars/ })).toBeVisible();
   });
 });
 

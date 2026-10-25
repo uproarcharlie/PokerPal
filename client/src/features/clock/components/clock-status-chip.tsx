@@ -1,5 +1,6 @@
 import type { MouseEvent } from "react";
 import { Pause, Play } from "lucide-react";
+import type { LiveDisplayDto } from "@shared/api/live-display";
 import { formatBlinds, formatClock, type DerivedClock } from "@shared/domain/clock";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -7,20 +8,39 @@ import { DISPLAY_REFRESH_MS } from "../api";
 import { useLiveClock } from "../hooks";
 import { useClockActions } from "../staff-hooks";
 
-type ChipState = "running" | "paused" | "break" | "stopped";
+type ClockState = "running" | "paused" | "break" | "stopped";
 
-function chipState(derived: DerivedClock): ChipState {
+function clockState(derived: DerivedClock): ClockState {
   if (derived.status === "running") return derived.isBreak ? "break" : "running";
   return derived.status === "paused" ? "paused" : "stopped";
 }
 
-const STATE_WORDS: Readonly<Record<ChipState, string>> = { running: "running", paused: "paused", break: "on a break", stopped: "not running" };
-const DOTS: Readonly<Record<ChipState, string>> = {
+const STATE_WORDS: Readonly<Record<ClockState, string>> = { running: "running", paused: "paused", break: "on a break", stopped: "not running" };
+const DOTS: Readonly<Record<ClockState, string>> = {
   running: "bg-status-live-foreground",
   paused: "bg-status-scheduled-foreground",
   break: "bg-status-registration-foreground",
   stopped: "bg-muted-foreground",
 };
+
+/**
+ * The clock's state at a glance, for the header's chip and the phone header's strip: a coloured dot
+ * (pulsing while it runs), and the words for a screen reader ("Clock, paused:"). One copy of the
+ * wording, so the two never drift apart (R5REV3-CQ-01).
+ */
+export function ClockStateMark({ derived }: { derived: DerivedClock }) {
+  const state = clockState(derived);
+  return (
+    <>
+      <span aria-hidden="true" className={cn("h-2.5 w-2.5 shrink-0 rounded-full", DOTS[state], state === "running" && "motion-safe:animate-pulse")} />
+      <span className="sr-only">Clock, {STATE_WORDS[state]}:</span>
+    </>
+  );
+}
+
+/** Whether the viewer gets Pause / Resume beside the clock: the club's staff, for a clock already started. */
+export const offersQuickToggle = (display: Pick<LiveDisplayDto, "viewer">, derived: DerivedClock): boolean =>
+  display.viewer.canControl && (derived.status === "running" || derived.status === "paused");
 
 /** "L6 · 12:34 · 800/1,600", or "Break · 9:59" on a break. */
 export function chipText(derived: DerivedClock): string {
@@ -54,32 +74,38 @@ export function chipTapFocuses(event: Pick<MouseEvent, "detail" | "nativeEvent">
 export function ClockStatusChip({ tournamentId, onOpen }: { tournamentId: string; onOpen: (request: ClockOpenRequest) => void }) {
   const { display, derived } = useLiveClock(tournamentId, { refetchMs: DISPLAY_REFRESH_MS.chip });
   if (!display?.clock || !derived) return null;
-  const state = chipState(derived);
-  const quickToggle = display.viewer.canControl && (derived.status === "running" || derived.status === "paused");
   return (
     <span className="inline-flex items-center gap-1">
       <Button variant="outline" size="sm" className="tabular-nums" onClick={(event) => onOpen({ focus: chipTapFocuses(event) })} data-testid="clock-status-chip">
-        <span aria-hidden="true" className={cn("h-2.5 w-2.5 shrink-0 rounded-full", DOTS[state], state === "running" && "motion-safe:animate-pulse")} />
-        <span className="sr-only">Clock, {STATE_WORDS[state]}:</span>
+        <ClockStateMark derived={derived} />
         <span>{chipText(derived)}</span>
       </Button>
-      {quickToggle ? <QuickToggle tournamentId={tournamentId} derived={derived} /> : null}
+      {offersQuickToggle(display, derived) ? <QuickToggle tournamentId={tournamentId} derived={derived} /> : null}
     </span>
   );
 }
 
+interface QuickToggleProps {
+  tournamentId: string;
+  derived: DerivedClock;
+  /** A phone's: a 44 px thumb target, Resume drawn as the main action. */
+  touch?: boolean;
+  testId?: string;
+}
+
 /** Pause or Resume, sent with the status on screen: a tap on a clock someone else just paused does nothing. */
-function QuickToggle({ tournamentId, derived }: { tournamentId: string; derived: DerivedClock }) {
+export function QuickToggle({ tournamentId, derived, touch = false, testId = "clock-quick-toggle" }: QuickToggleProps) {
   const { send, busy } = useClockActions(tournamentId);
   const running = derived.status === "running";
   return (
     <Button
-      variant="outline"
+      variant={touch && !running ? "default" : "outline"}
       size="icon"
+      className={touch ? "h-11 w-11 shrink-0" : undefined}
       aria-label={running ? "Pause the clock" : "Resume the clock"}
       busy={busy.has("toggle")}
       onClick={() => void send({ action: "toggle", alsoStartTournament: false }, { levelIndex: derived.levelIndex, status: derived.status })}
-      data-testid="clock-quick-toggle"
+      data-testid={testId}
     >
       {running ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
     </Button>

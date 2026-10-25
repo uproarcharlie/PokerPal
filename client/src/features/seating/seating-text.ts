@@ -3,8 +3,8 @@
  * Table 1, Seat 3"), and refusals in the copy phase4-contracts §6 gives them. Branches on error
  * codes, never on the server's sentence.
  */
-import type { SeatingDto, SeatingMutationDto, SeatMoveDto, SeatRefDto } from "@shared/api/seating";
-import { waitingText } from "@shared/domain/seating";
+import type { SeatingChangeDto, SeatingDto, SeatingMutationDto, SeatMoveDto, SeatRefDto } from "@shared/api/seating";
+import { SEATING_LIMITS, waitingText } from "@shared/domain/seating";
 import { playerName } from "@/features/tournaments/player-name";
 import { errorDetails, errorMessage, hasErrorCode } from "@/lib/api/http";
 import { plural } from "@/lib/format";
@@ -71,6 +71,8 @@ export function seatingRefusal(error: unknown, change?: SeatingChange): string {
 export interface AnnouncedMoves {
   title: string;
   moves: readonly SeatMoveDto[];
+  /** The change the moves were (its activity entry), offered as Undo while the seats are as it left them. */
+  undoable?: { activityId: string; version: string };
   /** Draw and setup: players left out because they have not paid. */
   excludedUnconfirmed?: number;
   /**
@@ -102,6 +104,11 @@ function announceTitle(change: SeatingChange, result: SeatingMutationDto): strin
       return `${tableName(result.seating, change.tableId)} broken`;
     case "finalTable":
       return "Final table drawn";
+    case "openTable":
+      // The new table is filled first (planOpenTable), so the first move names it.
+      return `${result.moves[0]?.to?.tableName ?? "Table"} opened`;
+    case "undoChange":
+      return "Change undone";
     default:
       return "Seats drawn";
   }
@@ -141,6 +148,10 @@ function quietToast(change: SeatingChange, result: SeatingMutationDto): ChangeOu
       return { title: "Tables are already balanced" };
     case "finalTable":
       return { title: "Final table drawn", description: "Everyone was already in place." };
+    case "openTable":
+      return { title: "Table opened", description: "Nobody needed to move." };
+    case "undoChange":
+      return { title: "Change undone", description: "Everyone was already back in place." };
   }
 }
 
@@ -160,17 +171,44 @@ function undoOf(change: SeatingChange, result: SeatingMutationDto): SeatingChang
   return { kind: "assign", input: { ...back, swap: result.moves.length > 1 }, undoing: true };
 }
 
-/** Who is still waiting for a seat after a break, a balance or the final table, which leave them out. */
+/** Who is still waiting for a seat after a break, a balance, the final table or an opened table (more arrivals than it holds). */
 function stillWaiting(change: SeatingChange, seating: SeatingDto): AnnouncedMoves["waiting"] {
-  if (change.kind !== "breakTable" && change.kind !== "balance" && change.kind !== "finalTable") return undefined;
+  if (change.kind !== "breakTable" && change.kind !== "balance" && change.kind !== "finalTable" && change.kind !== "openTable") return undefined;
   const text = waitingText(seating.stats.unseated, seating.stats.unconfirmedUnseated);
   return text ? { text, names: seating.unseated.map((entry) => playerName(entry)), openSeats: seating.stats.openSeats } : undefined;
+}
+
+/** The activity entry each change that moves players by the system's choice is logged as (shared/api/seating SEATING_CHANGE_EVENTS). */
+const LOGGED_AS: Partial<Record<SeatingChange["kind"], SeatingChangeDto["eventType"]>> = {
+  setup: "seating_drawn",
+  draw: "seating_drawn",
+  balance: "seating_balanced",
+  breakTable: "table_broken",
+  finalTable: "final_table",
+  openTable: "table_opened",
+};
+
+/**
+ * The change just made, as Undo names it: the seating's last change when it is this one (logged as
+ * this kind of change, with these moves) and can still be undone. Another phone's change made in
+ * between is never offered as this one's Undo.
+ */
+function undoableChange(change: SeatingChange, result: SeatingMutationDto): AnnouncedMoves["undoable"] {
+  const last = result.seating.lastChange;
+  if (!last?.canUndo || LOGGED_AS[change.kind] !== last.eventType || last.moves.length !== result.moves.length) return undefined;
+  return { activityId: last.activityId, version: result.seating.version };
 }
 
 /** After a change: the moves to call out when the system chose them, else a toast saying what happened (or nothing). */
 export function changeOutcome(change: SeatingChange, result: SeatingMutationDto): ChangeOutcome {
   if (result.moves.length > 0 && announcesMoves(change)) {
-    const announce: AnnouncedMoves = { title: announceTitle(change, result), moves: result.moves, excludedUnconfirmed: result.excludedUnconfirmed ?? 0 };
+    const undoable = undoableChange(change, result);
+    const announce: AnnouncedMoves = {
+      title: announceTitle(change, result),
+      moves: result.moves,
+      excludedUnconfirmed: result.excludedUnconfirmed ?? 0,
+      ...(undoable ? { undoable } : {}),
+    };
     const waiting = stillWaiting(change, result.seating);
     return { announce: waiting ? { ...announce, waiting } : announce, toast: null, undo: null };
   }
@@ -195,4 +233,19 @@ export const FAILED: Record<SeatingChange["kind"], string> = {
   unseat: "Could not unseat the player",
   balance: "Could not balance the tables",
   finalTable: "Could not draw the final table",
+  openTable: "Could not open the table",
+  undoChange: "Could not undo",
 };
+
+/**
+ * "Up to 3 tables" for the max players and seats per table typed so far (the club's default, else 9,
+ * when the seats are blank): the most tables the table advisor ever plans for. Null until both are
+ * numbers it could use.
+ */
+export function tablesNeeded(maxPlayersText: string, seatsText: string, clubSeats: number | null | undefined): string | null {
+  const maxPlayers = Number(maxPlayersText.trim());
+  const seats = seatsText.trim() === "" ? (clubSeats ?? SEATING_LIMITS.defaultSeats) : Number(seatsText.trim());
+  if (maxPlayersText.trim() === "" || !Number.isInteger(maxPlayers) || maxPlayers < 2) return null;
+  if (!Number.isInteger(seats) || seats < SEATING_LIMITS.minSeats || seats > SEATING_LIMITS.maxSeats) return null;
+  return `Up to ${plural(Math.min(SEATING_LIMITS.maxActiveTables, Math.ceil(maxPlayers / seats)), "table")} of ${seats}`;
+}

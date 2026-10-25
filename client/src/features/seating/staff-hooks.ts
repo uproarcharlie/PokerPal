@@ -8,6 +8,7 @@
  * TV, the activity feed) is refreshed behind it. A refusal that means the screen was out of date
  * refreshes the seating.
  */
+import { useEffect, useRef } from "react";
 import { useIsMutating, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
   AssignSeatInput,
@@ -16,9 +17,11 @@ import type {
   CreateTablesInput,
   DrawSeatsInput,
   FinalTableInput,
+  OpenTableInput,
   SeatingDto,
   SeatingMutationDto,
   SeatingSetupInput,
+  UndoSeatingInput,
   UnseatInput,
   UpdateTableInput,
 } from "@shared/api/seating";
@@ -33,9 +36,11 @@ import {
   breakTable,
   drawFinalTable,
   drawSeats,
+  openTable,
   removeTable,
   seatingQueries,
   setupSeating,
+  undoSeatingChange,
   unseatPlayer,
   updateTable,
 } from "./staff-api";
@@ -78,6 +83,35 @@ export function useSeating(tournamentId: string, { poll, enabled = true }: { pol
   });
 }
 
+/** Who is still in, in one string: it changes with an entry, a bust, a restore or a removal. */
+const stillIn = (registrations: ReadonlyArray<{ id: string; isEliminated: boolean | null }> | undefined) =>
+  (registrations ?? [])
+    .filter((registration) => !registration.isEliminated)
+    .map((registration) => registration.id)
+    .join(",");
+
+/**
+ * The seating as the TD's page follows it from any tab (the Seats tab's badge, the auto-seat notices):
+ * polled as `poll` says, and asked again whenever the page's registrations show someone coming in or
+ * going out (they follow the door and the floor on every device), alongside any refresh already
+ * running rather than instead of it. One copy for both followers (R5REV3-CQ-11), which share the query.
+ */
+export function useFollowedSeating(
+  tournamentId: string,
+  { registrations, poll, enabled }: { registrations: ReadonlyArray<{ id: string; isEliminated: boolean | null }> | undefined; poll?: SeatingFollower; enabled: boolean },
+) {
+  const seating = useSeating(tournamentId, { poll, enabled });
+  const { refetch } = seating;
+  const players = stillIn(registrations);
+  const seen = useRef(players);
+  useEffect(() => {
+    if (!enabled || seen.current === players) return;
+    seen.current = players;
+    void refetch({ cancelRefetch: false });
+  }, [enabled, players, refetch]);
+  return seating;
+}
+
 /** One change to the seating, as the panel asks for it; `undoing` marks a toast's Undo of a move made by hand. */
 export type SeatingChange =
   | { kind: "setup"; input: SeatingSetupInput }
@@ -89,7 +123,9 @@ export type SeatingChange =
   | { kind: "assign"; input: AssignSeatInput; undoing?: true }
   | { kind: "unseat"; input: UnseatInput; undoing?: true }
   | { kind: "balance"; input: BalanceInput }
-  | { kind: "finalTable"; input: FinalTableInput };
+  | { kind: "finalTable"; input: FinalTableInput }
+  | { kind: "openTable"; input: OpenTableInput }
+  | { kind: "undoChange"; input: UndoSeatingInput };
 
 function send(tournamentId: string, change: SeatingChange): Promise<SeatingMutationDto> {
   switch (change.kind) {
@@ -113,6 +149,10 @@ function send(tournamentId: string, change: SeatingChange): Promise<SeatingMutat
       return balanceTables(tournamentId, change.input);
     case "finalTable":
       return drawFinalTable(tournamentId, change.input);
+    case "openTable":
+      return openTable(tournamentId, change.input);
+    case "undoChange":
+      return undoSeatingChange(tournamentId, change.input);
   }
 }
 
@@ -155,7 +195,7 @@ async function showSeatingChange(queryClient: QueryClient, tournamentId: string,
 const seatingChangeKey = (tournamentId: string) => ["seating-change", tournamentId] as const;
 
 /**
- * Every change to the tournament's seating (phase4-contracts S2–S11), the panel's and a toast's "Seat
+ * Every change to the tournament's seating (phase4-contracts S2–S11, Undo, R5-S13), the panel's and a toast's "Seat
  * now" alike (P4REV4-R3-CQ-08). On success the answer's seating replaces the one on screen and what it
  * touches is refreshed (showSeatingChange). On a refusal: a STALE_PLAN's fresh seating is shown at once;
  * a tournament that closed meanwhile is refreshed (the panel turns read-only); any other conflict or

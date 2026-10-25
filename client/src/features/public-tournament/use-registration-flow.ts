@@ -1,12 +1,14 @@
 /**
- * The QR sign-up's three steps (new or returning player; their details or a name search; the high
- * hands and the total), as state and handlers the page and its steps share. The new player's form
- * lives here, not in its step, so Back from step 3 finds what was typed.
+ * The QR sign-up's three steps (new or returning player; their picture and details, or a name search;
+ * the high hands and the total), as state and handlers the page and its steps share. A new player's
+ * step 2 comes in two parts: their picture first (a selfie, a photo or an avatar, or skipped), then their
+ * name and number. The new player's form lives here, not in its step, so Back finds what was typed.
  */
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import type { PublicPlayer } from "@shared/api/public";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage, hasErrorCode } from "@/lib/api/http";
 import { useCreatePlayer, useRegisterForTournament } from "./hooks";
 import { registrationProblem, signUpProblem } from "./messages";
 import { EMPTY_NEW_PLAYER, newPlayerSchema, sameDetails, type NewPlayerValues, type PlayerDetails } from "./registration";
@@ -14,6 +16,10 @@ import { formResolver, showServerFieldErrors } from "@/lib/forms";
 
 export type PlayerType = "new" | "existing";
 export type Step = 1 | 2 | 3;
+/** A new player's step 2: their picture, then their name and number. */
+export type NewPlayerStage = "photo" | "details";
+/** What is on screen, for moving focus to each new part as it replaces the last. */
+export type RegistrationView = "type" | NewPlayerStage | "search" | "confirm";
 
 /** A new player the server has made (or matched), and the details that made them. */
 interface SignedUp {
@@ -31,6 +37,9 @@ export function useRegistrationFlow(tournamentId: string) {
 
   const [step, setStep] = useState<Step>(1);
   const [playerType, setPlayerType] = useState<PlayerType | null>(null);
+  const [newPlayerStage, setNewPlayerStage] = useState<NewPlayerStage>("photo");
+  // The server said this club asks every new player for a picture, whatever the page read about the club.
+  const [photoDemanded, setPhotoDemanded] = useState(false);
   const [existingPlayer, setExistingPlayer] = useState<PublicPlayer | null>(null);
   const [signedUp, setSignedUp] = useState<SignedUp | null>(null);
   const [enteringHighHands, setEnteringHighHands] = useState(false);
@@ -40,6 +49,7 @@ export function useRegistrationFlow(tournamentId: string) {
   const [signUpFailure, setSignUpFailure] = useState<unknown>(null);
 
   const player = playerType === "new" ? (signedUp?.player ?? null) : existingPlayer;
+  const view: RegistrationView = step === 1 ? "type" : step === 3 ? "confirm" : playerType === "new" ? newPlayerStage : "search";
 
   const selectionRequired = (description: string) => {
     toast({ title: "Selection Required", description, variant: "destructive" });
@@ -48,6 +58,14 @@ export function useRegistrationFlow(tournamentId: string) {
   const continueFromType = () => {
     if (playerType) setStep(2);
     else selectionRequired("Please choose if you're a new or existing player.");
+  };
+
+  /** From the picture to the name and number: with a picture, or skipping it where the club allows. */
+  const continueFromPhoto = () => setNewPlayerStage("details");
+  /** Back to the picture from the name and number. */
+  const changePhoto = () => {
+    setSignUpFailure(null);
+    setNewPlayerStage("photo");
   };
 
   const submitNewPlayer = form.handleSubmit(async (values) => {
@@ -82,6 +100,13 @@ export function useRegistrationFlow(tournamentId: string) {
       setSignedUp({ details: stored, player: { id: created.id, name: created.name, imageUrl: created.imageUrl }, signUpToken: created.signUpToken });
       setStep(3);
     } catch (error) {
+      // The club asks every new player for a picture (its setting may have changed since the page loaded).
+      if (hasErrorCode(error, "PHOTO_REQUIRED")) {
+        form.setError("imageUrl", { type: "server", message: errorMessage(error) });
+        setPhotoDemanded(true);
+        setNewPlayerStage("photo");
+        return;
+      }
       if (!showServerFieldErrors(form.setError, error, { fields: ["name", "phone"], codes: { PHONE_TAKEN: "phone" } })) setSignUpFailure(error);
     }
   });
@@ -95,7 +120,8 @@ export function useRegistrationFlow(tournamentId: string) {
     register.reset();
     createPlayer.reset();
     setSignUpFailure(null);
-    setStep(step === 3 ? 2 : 1);
+    if (view === "details") setNewPlayerStage("photo");
+    else setStep(step === 3 ? 2 : 1);
   };
 
   const signUp = async (playerId: string) => {
@@ -114,6 +140,8 @@ export function useRegistrationFlow(tournamentId: string) {
   const startOver = () => {
     setStep(1);
     setPlayerType(null);
+    setNewPlayerStage("photo");
+    setPhotoDemanded(false);
     setExistingPlayer(null);
     setSignedUp(null);
     setEnteringHighHands(false);
@@ -127,9 +155,12 @@ export function useRegistrationFlow(tournamentId: string) {
 
   return {
     step,
+    view,
     playerType,
     choosePlayerType: setPlayerType,
     continueFromType,
+    continueFromPhoto,
+    changePhoto,
     form,
     submitNewPlayer,
     creatingPlayer: createPlayer.isPending,
@@ -147,11 +178,15 @@ export function useRegistrationFlow(tournamentId: string) {
     registrationError: register.error ? registrationProblem(register.error) : null,
     // Signed up: the mutation's own success, which Back and Start over reset (P3REV3-CQ-13).
     complete: register.isSuccess,
+    /** The registration once signed up, with where auto-seat put the player (round 5). */
+    registration: register.data ?? null,
     /**
      * The player has been made (or found) with the photo as it stands: it can no longer change here, as
      * sending it again would find that player and drop the new photo (P3REV3-IMG-01).
      */
     photoLocked: signedUp !== null,
+    /** The sign-up was refused for want of a picture (PHOTO_REQUIRED): "Skip for now" is no longer offered. */
+    photoDemanded,
     back,
     startOver,
   };

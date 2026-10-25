@@ -8,7 +8,9 @@ import { pointsAllocationDto, pointsSystemDto, prizePoolSnapshotDto, seasonDto }
 import { clubDto, mockTournamentPages, registrationDto, tournamentDto } from "@test/helpers/f2-public";
 import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
+import { CENTRAL_STARS_THEME, themeVariables } from "@shared/domain/theme";
 import { apiError, mockSignedOut, renderWithApp } from "@test/helpers/web";
+import { screenWidth } from "@test/helpers/f1-tournaments";
 import { clockDto, liveDisplayDto } from "@test/helpers/clock-dto";
 import { publicSeatingDto } from "@test/helpers/seating-dto";
 import { PODIUM } from "@/components/shared/podium";
@@ -117,6 +119,92 @@ describe("PublicTournamentView prize pool", () => {
     expect(screen.getByText("$285")).toBeInTheDocument();
     expect(screen.getByText("$190")).toBeInTheDocument();
     expect(screen.queryByText("TBD")).not.toBeInTheDocument();
+  });
+
+  it("names a deal the players still in made, and marks the prizes it paid (round 5, item 2)", async () => {
+    const snapshot = prizePoolSnapshotDto({
+      paid: [
+        { position: 1, registrationId: "r2", playerId: "p-r2", playerName: "Bob", basisPoints: 6000, amountCents: 24_000 },
+        { position: 2, registrationId: "r1", playerId: "p-r1", playerName: "Ann", basisPoints: 4000, amountCents: 23_500 },
+      ],
+      deal: {
+        reason: "Chip chop at 2 handed",
+        totalCents: 47_500,
+        players: [
+          { registrationId: "r2", playerId: "p-r2", playerName: "Bob", position: 1, plannedCents: 28_500, amountCents: 24_000 },
+          { registrationId: "r1", playerId: "p-r1", playerName: "Ann", position: 2, plannedCents: 19_000, amountCents: 23_500 },
+        ],
+      },
+    });
+    mockPage({ status: "completed", prizePoolLocked: false, prizePoolSnapshot: snapshot }, [
+      registration("r1", "Ann", 2, { finalPosition: 2, prizeAmount: "235.00", isEliminated: true }),
+      registration("r2", "Bob", 2, { finalPosition: 1, prizeAmount: "240.00" }),
+      registration("r3", "Cat", 1, { finalPosition: 3, isEliminated: true }),
+    ]);
+    renderView();
+
+    expect(await screen.findByTestId("prizes-deal")).toHaveTextContent("Deal: Bob $240, Ann $235 (Chip chop at 2 handed)");
+    expect(screen.getAllByText("Deal", { exact: true })).toHaveLength(2);
+  });
+
+  it("says honestly where a difference between the prizes and the money available goes (round 5, item 16)", async () => {
+    // $500 in, $25 AP: $475 available. A $400 pool leaves $75, which the club keeps unless the TD says otherwise.
+    mockPage({ manualPrizePool: "400.00" });
+    const { unmount } = renderView();
+    expect(await screen.findByTestId("public-pool-summary")).toHaveTextContent("Prize pool $400· AP $25· Kept by the club $75");
+    unmount();
+
+    server.use(http.get("/api/seasons/s1", () => HttpResponse.json(seasonDto({ id: "s1", name: "Winter League" }))));
+    mockPage({ manualPrizePool: "400.00", prizeDifference: "carry", seasonId: "s1" });
+    const carried = renderView();
+    await waitFor(() => expect(screen.getByTestId("public-pool-summary")).toHaveTextContent("Prize pool $400· AP $25· Carried over to Winter League $75"));
+    carried.unmount();
+
+    // A $600 pool is $125 more than came in for prizes: the club adds it.
+    mockPage({ manualPrizePool: "600.00" });
+    renderView();
+    expect(await screen.findByTestId("public-pool-summary")).toHaveTextContent("Prize pool $600· AP $25· Added by the club $125");
+  });
+
+  it("says nothing more than the pool when the prizes are what is available, or before the pool is revealed", async () => {
+    mockPage();
+    const { unmount } = renderView();
+    expect(await screen.findByText("Total prize pool: $475")).toBeInTheDocument();
+    expect(screen.queryByTestId("public-pool-summary")).not.toBeInTheDocument();
+    unmount();
+
+    mockPage({ manualPrizePool: "400.00", prizePoolLocked: false });
+    renderView();
+    expect(await screen.findByText("Prize pool will be revealed when locked")).toBeInTheDocument();
+    expect(screen.queryByTestId("public-pool-summary")).not.toBeInTheDocument();
+  });
+
+  it("says where the difference went as finalize froze it", async () => {
+    const snapshot = prizePoolSnapshotDto({
+      paid: [
+        { position: 1, registrationId: "r2", playerId: "p-r2", playerName: "Bob", basisPoints: 6000, amountCents: 25_500 },
+        { position: 2, registrationId: "r1", playerId: "p-r1", playerName: "Ann", basisPoints: 4000, amountCents: 17_000 },
+      ],
+    });
+    const difference = {
+      choice: "club" as const,
+      availableCents: 47_500,
+      setCents: 42_500,
+      cents: 5_000,
+      keptByClubCents: 5_000,
+      addedToPrizesCents: 0,
+      carriedOverCents: 0,
+      addedByClubCents: 0,
+    };
+    const frozen = { ...snapshot, pool: { ...snapshot.pool, netCents: 42_500, impliedRakeCents: 7_500, difference } };
+    mockPage({ status: "completed", prizePoolLocked: false, prizePoolSnapshot: frozen }, [
+      registration("r1", "Ann", 2, { finalPosition: 2, prizeAmount: "170.00", isEliminated: true }),
+      registration("r2", "Bob", 2, { finalPosition: 1, prizeAmount: "255.00" }),
+      registration("r3", "Cat", 1, { finalPosition: 3, isEliminated: true }),
+    ]);
+    renderView();
+
+    expect(await screen.findByTestId("public-pool-summary")).toHaveTextContent("Prize pool $425· AP $25· Kept by the club $50");
   });
 });
 
@@ -422,6 +510,60 @@ describe("PublicTournamentView standings (PUB-25)", () => {
 
     await user.click(await screen.findByRole("tab", { name: "Standings" }));
     expect(await screen.findByText("No players registered yet")).toBeInTheDocument();
+  });
+});
+
+describe("PublicTournamentView waiting list (round 5, item 15)", () => {
+  /** A field of three, full, and two sign-ups behind it, numbered by the server (sign-up order: Eve first). */
+  const fullField = [
+    registration("r1", "Ann", 1, { waitingListPosition: null }),
+    registration("r2", "Bob", 1, { waitingListPosition: null }),
+    registration("r3", "Cat", 1, { waitingListPosition: null, isEliminated: true, eliminationTime: "2026-10-23T08:00:00.000Z" }),
+    registration("r4", "Dee", 1, { waitingListPosition: 2 }),
+    registration("r5", "Eve", 1, { waitingListPosition: 1 }),
+  ];
+
+  it("counts only the field against Max players, and the waiting list apart (390 px)", async () => {
+    screenWidth(390);
+    mockPage({ maxPlayers: 3 }, fullField);
+    renderView();
+
+    expect(await screen.findByTestId("waiting-list-count")).toHaveTextContent("+2 on the waiting list");
+    expect(screen.getByText("Players").parentElement).toHaveTextContent(/^Players3\/3\+2 on the waiting list$/);
+    expect(screen.getByText("Active").parentElement).toHaveTextContent(/^Active2$/);
+    // The pool is the field's: three $100 buy-ins less $5 AP each, nobody on the list (shared/domain poolEntries).
+    expect(await screen.findByText("Total prize pool: $285")).toBeInTheDocument();
+  });
+
+  it("numbers the waiting list under the standings, next in first, and leaves its players out of the standings", async () => {
+    screenWidth(390);
+    mockPage({ maxPlayers: 3 }, fullField);
+    const user = userEvent.setup();
+    renderView();
+
+    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+    const standings = await screen.findByRole("table");
+    expect(within(standings).getAllByRole("row").slice(1).map((row) => within(row).getAllByRole("cell")[1].textContent)).toEqual([
+      expect.stringContaining("Ann"),
+      expect.stringContaining("Bob"),
+      expect.stringContaining("Cat"),
+    ]);
+    expect(within(standings).queryByText("Dee")).not.toBeInTheDocument();
+    const list = within(screen.getByTestId("waiting-list"));
+    expect(list.getByRole("heading", { name: "Waiting list" })).toBeInTheDocument();
+    expect(list.getAllByRole("listitem").map((item) => item.textContent)).toEqual(["#1Number 1EEve", "#2Number 2DDee"]);
+  });
+
+  it("shows no waiting list once the tournament is over: its players never played", async () => {
+    mockPage({ maxPlayers: 3, status: "completed" }, fullField);
+    const user = userEvent.setup();
+    renderView();
+
+    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+    expect(await screen.findByText("Final Results")).toBeInTheDocument();
+    expect(screen.queryByTestId("waiting-list")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("waiting-list-count")).not.toBeInTheDocument();
+    expect(screen.getByText("Players").parentElement).toHaveTextContent(/^Players3\/3$/);
   });
 });
 
@@ -753,5 +895,26 @@ describe("PublicTournamentView links to the night's other screens", () => {
     expect(await screen.findByRole("heading", { name: "Friday Freezeout", level: 1 })).toBeInTheDocument();
     expect(asked).toEqual({ seating: 0, display: 0 });
     expect(screen.queryByRole("link", { name: "Find your seat" })).not.toBeInTheDocument();
+  });
+});
+
+describe("PublicTournamentView in the club's colours (round 5, item 13)", () => {
+  // <html> outlives each test's app: start every test from no colours set on it.
+  beforeEach(() => document.documentElement.removeAttribute("style"));
+
+  it("wears the club's theme, worked out for the light public page", async () => {
+    mockTournamentPages(tournamentDto(), [], clubDto({ theme: CENTRAL_STARS_THEME }));
+    renderView();
+
+    await screen.findByRole("link", { name: /Central Stars/ });
+    await waitFor(() => expect(document.documentElement.style.getPropertyValue("--primary")).toBe(themeVariables(CENTRAL_STARS_THEME, "light")["--primary"]));
+  });
+
+  it("keeps the LovePoker look for a club without a theme", async () => {
+    mockTournamentPages(tournamentDto(), [], clubDto({ theme: null }));
+    renderView();
+
+    await screen.findByRole("link", { name: /Central Stars/ });
+    expect(document.documentElement.style.getPropertyValue("--primary")).toBe("");
   });
 });

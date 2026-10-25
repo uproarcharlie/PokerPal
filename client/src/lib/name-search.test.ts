@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { foldName, nameMatches } from "./name-search";
+import { foldName, matchingNames, nameMatches } from "./name-search";
 
 describe("finding a player by name", () => {
   it("matches the start of any word of the name, in any case", () => {
@@ -22,5 +22,13 @@ describe("finding a player by name", () => {
 
   it("matches nobody for nothing typed", () => {
     expect(nameMatches("Aroha Ngata", "   ")).toBe(false);
+  });
+});
+
+describe("matchingNames", () => {
+  const people = [{ name: "Zoë Clarke" }, { name: "Mark Arnold" }];
+  it("keeps every item while nothing is typed, and the matching ones once something is", () => {
+    expect(matchingNames(people, (person) => person.name, "  ")).toBe(people);
+    expect(matchingNames(people, (person) => person.name, "zo")).toEqual([{ name: "Zoë Clarke" }]);
   });
 });

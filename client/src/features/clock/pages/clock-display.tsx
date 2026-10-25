@@ -3,6 +3,7 @@ import { usePageMeta } from "@/app/page-meta";
 import { lazyPage } from "@/app/lazy-page";
 import { SCREEN_PARAM, VENUE_SCREEN } from "@/app/routes";
 import { EmptyState, QueryState } from "@/components/shared/query-state";
+import { ClubThemeScope } from "@/features/branding/components/public/club-theme-scope";
 import { PageSpinner } from "@/components/shared/page-spinner";
 import { useMediaQuery } from "@/components/shared/use-media-query";
 import { HANDHELD_QUERY, tvRefreshMs } from "../api";
@@ -31,36 +32,40 @@ export default function ClockDisplayPage() {
   usePageMeta({ title: live.display ? `Clock: ${live.display.tournament.name}` : "Tournament clock", noindex: true });
   const { derived } = live;
 
+  // The club's own colours (round 5, item 13), worked out for the TV's dark screen (DisplayLayout's scheme).
   return (
-    <QueryState
-      query={live.query}
-      loading={<PageSpinner label="Loading the clock" className="min-h-dvh" />}
-      notFound={<EmptyState title="Tournament not found" description="Check the link: this tournament may have been removed." />}
-      errorTitle="The clock could not be loaded"
-      stateClassName={STATE_CLASS}
-    >
-      {(display) => (
-        <ClockScreen
-          display={display}
-          derived={derived}
-          offline={live.offline}
-          controls={
-            display.viewer.canControl && derived
-              ? (tools) => (
-                  <ControlsBoundary>
-                    <DisplayControls
-                      tournamentId={display.tournament.id}
-                      derived={derived}
-                      undo={display.clock?.undo ?? null}
-                      overlay={display.clock?.displaySettings.overlay ?? "none"}
-                      tools={tools}
-                    />
-                  </ControlsBoundary>
-                )
-              : undefined
-          }
-        />
-      )}
-    </QueryState>
+    <ClubThemeScope theme={live.display?.club.theme ?? null}>
+      <QueryState
+        query={live.query}
+        loading={<PageSpinner label="Loading the clock" className="min-h-dvh" />}
+        notFound={<EmptyState title="Tournament not found" description="Check the link: this tournament may have been removed." />}
+        errorTitle="The clock could not be loaded"
+        stateClassName={STATE_CLASS}
+      >
+        {(display) => (
+          <ClockScreen
+            display={display}
+            derived={derived}
+            offline={live.offline}
+            controls={
+              display.viewer.canControl && derived
+                ? (tools) => (
+                    <ControlsBoundary>
+                      <DisplayControls
+                        tournamentId={display.tournament.id}
+                        derived={derived}
+                        undo={display.clock?.undo ?? null}
+                        overlay={display.clock?.displaySettings.overlay ?? "none"}
+                        canChangeDisplay={display.viewer.canChangeDisplay}
+                        tools={tools}
+                      />
+                    </ControlsBoundary>
+                  )
+                : undefined
+            }
+          />
+        )}
+      </QueryState>
+    </ClubThemeScope>
   );
 }

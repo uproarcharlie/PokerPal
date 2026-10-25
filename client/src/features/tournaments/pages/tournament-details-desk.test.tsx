@@ -6,17 +6,29 @@ import { server } from "@test/msw/server";
 import { apiError, mockSignedIn, renderWithApp } from "@test/helpers/web";
 import { clubDto, mockDeskLiveReads, phoneLayout, recordBodies, registrationDto, screenWidth, tournamentDto } from "@test/helpers/f1-tournaments";
 import type { PublicRegistration } from "@shared/api/public";
+import type { SeatMoveDto, TableAdviceDto } from "@shared/api/seating";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { PODIUM } from "@/components/shared/podium";
 import { qk } from "@/lib/api/query-keys";
 import { LIVE_REFRESH_MS } from "@/lib/live-refresh";
 import { pausedClock, serveDisplay } from "@test/helpers/clock-dto";
+import { prizePoolDto } from "@test/helpers/ap-dto";
 import { seasonDto } from "@test/helpers/dto";
 import { mockSeating, recordWrite, seatingDto, seatingMutation, seatMove, seatRef } from "@test/helpers/seating-dto";
 import { SEATING_BADGE_REFRESH_MS } from "@/features/seating/staff-hooks";
 import TournamentDetailsPage from "./tournament-details";
 
 const field = [registrationDto("r1", "Ann", 2), registrationDto("r2", "Bob", 2), registrationDto("r3", "Cat", 1)];
+
+/** The table advisor's "balance them" for these moves (SeatingDto.advisor, round 5). */
+const balanceAdvice = (moves: SeatMoveDto[]): TableAdviceDto => ({
+  kind: "balance",
+  message: `Tables are uneven: balance them (${moves.length} move)`,
+  tableId: null,
+  tableNumber: null,
+  moves,
+  players: 2,
+});
 
 function mockDesk(tournament: Partial<TournamentDetailDto> = {}, registrations: PublicRegistration[] = field) {
   mockDeskLiveReads(tournamentDto(tournament), registrations);
@@ -151,16 +163,18 @@ describe("TournamentDetailsPage: the tournament's image", () => {
 });
 
 describe("TournamentDetailsPage: on a phone", () => {
-  it("types the max players into a 16 px box, so iOS does not zoom the page (MA-07), behind a 40 px Edit (MA-08)", async () => {
+  it("types the max players into a 16 px box, so iOS does not zoom the page (MA-07), behind a 44 px Edit (MA-08, round5-contracts §8.1)", async () => {
+    phoneLayout();
     mockDesk();
-    const { user } = renderDesk();
+    const { user } = renderDesk("/admin/tournaments/t1?tab=money");
 
     const edit = await screen.findByTestId("edit-max-players");
-    expect(edit).toHaveClass("h-10");
+    expect(edit).toHaveClass("h-11", "md:h-10");
     await user.click(edit);
 
     const box = screen.getByTestId("max-players-input").className.split(/\s+/);
     expect(box).toContain("text-base");
+    expect(box).toContain("h-11");
     expect(box).not.toContain("text-sm");
   });
 });
@@ -293,16 +307,16 @@ describe("TournamentDetailsPage: Delete", () => {
     expect(queryClient.getQueryState(qk.seasons.leaderboard("s1"))?.isInvalidated).toBe(true);
   });
 
-  it("offers Delete on a phone too, in the header's More menu", async () => {
+  it("offers Delete on a phone too, in the More tab (round5-contracts §8.1)", async () => {
     phoneLayout();
     mockDesk();
     const { user } = renderDesk();
 
-    await user.click(await screen.findByRole("button", { name: "More actions" }));
-    const deleteItem = await screen.findByRole("menuitem", { name: "Delete" });
-    // Highlighted in its own tint, readable (the menu's gold or amethyst highlight was not: MA-09).
-    expect(deleteItem).toHaveClass("focus:bg-destructive/10", "focus:text-destructive");
-    await user.click(deleteItem);
+    await user.click(await screen.findByRole("tab", { name: "More" }));
+    const remove = await screen.findByRole("button", { name: "Delete tournament" });
+    // In its own colour, readable (the menu's gold or amethyst highlight was not: MA-09).
+    expect(remove).toHaveClass("text-destructive");
+    await user.click(remove);
 
     expect(await screen.findByRole("alertdialog", { name: "Delete Tournament" })).toBeInTheDocument();
   });
@@ -330,8 +344,9 @@ describe("TournamentDetailsPage: standings", () => {
   it("puts each player's Eliminate on their own card on a phone, not off the side of a wide table (MA-02)", async () => {
     phoneLayout();
     mockDesk();
-    const { user } = renderDesk();
-    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+    renderDesk();
+    // The phone opens on its Players tab: the standings.
+    expect(await screen.findByRole("tab", { name: "Players" })).toHaveAttribute("aria-selected", "true");
 
     const standings = await screen.findByRole("list", { name: "Standings" });
     const card = within(standings).getByTestId("player-row-r1");
@@ -386,6 +401,39 @@ describe("TournamentDetailsPage: standings", () => {
 
     await waitFor(() => expect(sent).toEqual([{ isEliminated: false }]));
     expect(await screen.findByText("Player restored successfully")).toBeInTheDocument();
+  });
+});
+
+describe("TournamentDetailsPage: the waiting list on a laptop (round 5, item 15)", () => {
+  /** A field of three, full (nobody has paid yet), and Dee behind it. */
+  const signUps: PublicRegistration[] = [
+    ...field.map((registration) => ({ ...registration, waitingListPosition: null })),
+    registrationDto("r4", "Dee", 1, { waitingListPosition: 1 }),
+  ];
+
+  it("counts the field against Max players, the waiting list apart, and leaves its players out of the pool, the standings and the eliminator list", async () => {
+    mockDesk({ maxPlayers: 3 }, signUps);
+    const { user } = renderDesk();
+
+    expect(await screen.findByTestId("players-count")).toHaveTextContent("3/3");
+    expect(screen.getByTestId("waiting-list-count")).toHaveTextContent("+1 on the waiting list");
+    // Five buy-ins at $100 less $5 AP each: Dee's buy-in is not in it (shared/domain poolEntries).
+    expect(screen.getByTestId("prize-pool")).toHaveTextContent("$475");
+
+    await user.click(screen.getByRole("tab", { name: "Standings" }));
+    const standings = await screen.findByRole("table", { name: "Standings" });
+    expect(within(standings).queryByText("Dee")).not.toBeInTheDocument();
+    const list = within(screen.getByTestId("waiting-list"));
+    expect(list.getByTestId("waiting-r4")).toHaveTextContent("#1");
+    expect(list.getByTestId("waiting-r4")).toHaveTextContent("Dee");
+    // Nobody has paid: there is still room to accept, so no "full" line.
+    expect(list.queryByTestId("waiting-list-full")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("eliminate-player-r3"));
+    const dialog = await screen.findByRole("dialog", { name: "Eliminate Player" });
+    await user.click(within(dialog).getByRole("combobox", { name: "Knocked out by (optional)" }));
+    expect(await screen.findByRole("option", { name: "Bob" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Dee" })).not.toBeInTheDocument();
   });
 });
 
@@ -449,6 +497,16 @@ describe("TournamentDetailsPage: the server's answer shows at once (P3REV-PERF-S
 });
 
 describe("TournamentDetailsPage: the pool", () => {
+  it("names the season money left over is carried over to, as the server does (round 5, item 16)", async () => {
+    // $500 in, $25 AP: $475 available; the prizes are fixed at $400 and the $75 left is carried over.
+    const carried = { manualPrizePool: "400.00", prizeDifference: "carry" } satisfies Partial<TournamentDetailDto>;
+    mockDesk(carried);
+    server.use(http.get("/api/tournaments/t1/prize-pool", () => HttpResponse.json(prizePoolDto(tournamentDto(carried), field, { carryTarget: "Winter League" }))));
+    renderDesk();
+
+    await waitFor(() => expect(screen.getByTestId("difference-carried-over")).toHaveTextContent("Carried over to Winter League−$75"));
+  });
+
   it("sets the prize pool by hand, and back to the calculated pool when cleared", async () => {
     mockDesk();
     const sent = mockPut("/api/tournaments/t1");
@@ -732,8 +790,8 @@ describe("TournamentDetailsPage: where focus goes (MA-P3REV1-02, -04, -07)", () 
     await waitFor(() => expect(restore).toHaveFocus());
   });
 
-  it("gives focus back to the More menu after a dialog chosen from it closes, on a phone", async () => {
-    phoneLayout();
+  it("gives focus back to the More menu after a dialog chosen from it closes, on a laptop", async () => {
+    screenWidth(1280);
     mockDesk();
     const { user } = renderDesk();
 
@@ -849,7 +907,14 @@ describe("TournamentDetailsPage: tables, the clock and the AP (Phase 4)", () => 
     const balance = [
       { registrationId: "r1", playerName: "Ann", from: { tableId: "tb1", tableNumber: 1, tableName: "Table 1", seatNumber: 4 }, to: { tableId: "tb2", tableNumber: 2, tableName: "Table 2", seatNumber: 1 }, reason: "balance" as const },
     ];
-    mockSeating(seatingDto({ tables: [{ id: "tb1", number: 1, seats: 9, seated: { 4: { id: "r1", name: "Ann" }, 5: { id: "r2", name: "Bob" } } }, { id: "tb2", number: 2, seats: 9 }], suggestions: { balance } }));
+    // The advice as round 5's table advisor gives it, beside Phase 4's suggestion (round5-contracts §8.2).
+    mockSeating(
+      seatingDto({
+        tables: [{ id: "tb1", number: 1, seats: 9, seated: { 4: { id: "r1", name: "Ann" }, 5: { id: "r2", name: "Bob" } } }, { id: "tb2", number: 2, seats: 9 }],
+        suggestions: { balance },
+        advisor: { advice: [balanceAdvice(balance)] },
+      }),
+    );
     const { user } = renderDesk();
     expect(screen.queryByTestId("seating-tab-alert")).not.toBeInTheDocument();
 
@@ -878,7 +943,7 @@ describe("TournamentDetailsPage: tables, the clock and the AP (Phase 4)", () => 
 
       // The floor busts Cat on another phone: the page's registrations show it, and the badge asks the seating again.
       server.use(http.get("/api/tournaments/t1/registrations", () => HttpResponse.json([field[0], field[1], { ...field[2], isEliminated: true }])));
-      mockSeating(seatingDto({ tables: [tables[0], { ...tables[1], seated: {} }], suggestions: { balance } }));
+      mockSeating(seatingDto({ tables: [tables[0], { ...tables[1], seated: {} }], suggestions: { balance }, advisor: { advice: [balanceAdvice(balance)] } }));
       await act(() => vi.advanceTimersByTimeAsync(LIVE_REFRESH_MS + 100));
       await waitFor(() => expect(screen.getByTestId("seating-tab-alert")).toHaveTextContent("Uneven"));
 

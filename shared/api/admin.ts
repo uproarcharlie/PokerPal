@@ -1,8 +1,10 @@
 /** /api/admin/*: platform admins only (users.role = 'admin', read from the database on every request). */
 import { z } from "zod";
-import type { PrizePoolSnapshot } from "../domain/finalize";
+import type { SnapshotDeal } from "../domain/deal";
+import type { PrizePoolSnapshot, SnapshotDifference } from "../domain/finalize";
 import type { Cents } from "../domain/money";
 import type { NetSource } from "../domain/prize-pool";
+import type { ClubTheme } from "../domain/theme";
 import type { AuditLogEntry, TournamentRegistration } from "../schema";
 import { dateSchema, limitSchema, requiredText, type Json } from "./common";
 import { accountEmailSchema, phoneSchema, type SessionUser } from "./auth";
@@ -96,6 +98,7 @@ export const AUDIT_ACTIONS = [
   "tournament.delete",
   "prize_pool.adjust",
   "prize_pool.rates",
+  "tournament.payouts", // round 5: the payout editor (target = tournament)
   "tournament.finalize",
   "tournament.refinalize",
   "player.update",
@@ -107,6 +110,8 @@ export const AUDIT_ACTIONS = [
   "seed_club_owner", // boot seed (server/db/seeds.ts), actor NULL
   "seed_club_rake_label", // boot seed, actor NULL: Central Stars' rake named "AP"
   "seed_player_home_clubs", // boot seed, actor NULL
+  "seed_club_table_defaults", // boot seed, actor NULL: Central Stars' 9-seat rectangle tables
+  "seed_club_theme", // boot seed, actor NULL: Central Stars' electric blue and gold
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
@@ -120,7 +125,14 @@ type FinalizedPool = {
   planHash: string;
   /** Player requests still waiting that finalize discarded. */
   requestsCleared: number;
+  /** The deal the players still in made (round 5), as the snapshot records it. */
+  deal?: SnapshotDeal;
+  /** Round 5 (item 16): where a difference between the prizes and the money available went, as the snapshot records it. */
+  difference?: SnapshotDifference;
 };
+
+/** Round 5 (item 16): tournaments.prize_difference (where a difference goes; null: the club keeps it) before and after. */
+type PrizeDifferenceChange = { before: string | null; after: string | null };
 
 /**
  * Each audit action's `data`, as its writer records it (null: none), so a disputed payout or staff
@@ -152,9 +164,20 @@ export type AuditData = {
     previous: { manualPrizePool: string | null; rakeOverride: string | null; reason: string | null };
     netCentsBefore: Cents;
     netCentsAfter: Cents;
+    /** When the change also said where a manual pool's difference goes. */
+    prizeDifference?: PrizeDifferenceChange;
   };
   /** The AP rate columns before and after, and whether the manual AP total was cleared. */
   "prize_pool.rates": FieldChanges & { clearedOverride: boolean; reason: string | null };
+  /** payout_structure and custom_payouts (as stored) before and after, the reason, and the pool they split then. */
+  "tournament.payouts": {
+    before: { payoutStructure: string; customPayouts: string | null };
+    after: { payoutStructure: string; customPayouts: string | null };
+    reason: string | null;
+    netCents: Cents;
+    /** Recorded since round 5 (absent from earlier entries). */
+    prizeDifference?: PrizeDifferenceChange;
+  };
   "tournament.finalize": FinalizedPool;
   /** What the correction overwrote: the previous snapshot in full and every registration's previous result. */
   "tournament.refinalize": FinalizedPool & {
@@ -185,6 +208,9 @@ export type AuditData = {
   };
   "seed_club_owner": { previousOwnerId: null; ownerId: string; email: string };
   "seed_club_rake_label": { previousRakeLabel: null; rakeLabel: string };
+  /** What the seed filled (only columns that were NULL). */
+  "seed_club_table_defaults": { defaultSeatsPerTable?: number; defaultTableShape?: string };
+  "seed_club_theme": { previousTheme: null; theme: ClubTheme };
   /** How many players were given a home club. */
   "seed_player_home_clubs": { recorded: number };
 };

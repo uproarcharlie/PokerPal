@@ -44,8 +44,8 @@ describe("Find your seat", () => {
     await user.type(search, "ar");
     const results = within(screen.getByTestId("seat-results")).getAllByRole("listitem");
     expect(results).toHaveLength(2);
-    expect(results[0]).toHaveTextContent(/Aroha Ngata\s*Table 1 · Seat 2$/);
-    expect(results[1]).toHaveTextContent(/Mark Arnold\s*Table 1 · Seat 5$/);
+    expect(results[0]).toHaveTextContent(/Aroha Ngata\s*Table 1 · Seat 2\s*Show my seat$/);
+    expect(results[1]).toHaveTextContent(/Mark Arnold\s*Table 1 · Seat 5\s*Show my seat$/);
 
     await user.clear(search);
     await user.type(search, "zoe");
@@ -85,18 +85,44 @@ describe("Find your seat", () => {
     expect(within(plan).queryByRole("button")).not.toBeInTheDocument();
   });
 
-  it("lists every table seat by seat on a phone", async () => {
-    screenWidth(375);
-    mockPublicSeating(publicSeatingDto(drawn));
+  it("draws the tables in their shape on a phone too (round 5), with a plain list one tap away", async () => {
+    screenWidth(390);
+    mockPublicSeating(publicSeatingDto({ ...drawn, tables: [{ ...drawn.tables![0], shape: "rectangle" }, drawn.tables![1]] }));
+    const user = userEvent.setup();
     showPage();
 
-    const seats = await screen.findByRole("list", { name: "Table 1 seats" });
+    const plan = await screen.findByRole("group", { name: "Table 1: 2 of 6 seats taken" });
+    expect(plan).toHaveAttribute("data-shape", "rectangle");
+    expect(screen.getByRole("group", { name: "Feature table: 1 of 8 seats taken" })).toHaveAttribute("data-shape", "oval");
+
+    await user.click(screen.getByRole("button", { name: "List" }));
+    const seats = screen.getByRole("list", { name: "Table 1 seats" });
     const rows = within(seats).getAllByRole("listitem");
     expect(rows).toHaveLength(6);
     expect(rows[0]).toHaveTextContent(/^Seat 1\s*Empty$/);
     expect(rows[1]).toHaveTextContent(/^Seat 2.*Aroha Ngata$/);
     expect(rows[4]).toHaveTextContent(/^Seat 5.*Mark Arnold$/);
     expect(screen.queryByRole("group", { name: /seats taken/ })).not.toBeInTheDocument();
+  });
+
+  it("takes a player from their result to their table's drawing, their seat ringed", async () => {
+    screenWidth(390);
+    mockPublicSeating(publicSeatingDto(drawn));
+    const scrolled: string[] = [];
+    const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(function (this: Element) {
+      scrolled.push(this.id);
+    });
+    const user = userEvent.setup();
+    showPage();
+
+    await user.type(await screen.findByLabelText("Type your name"), "zoe");
+    await user.click(screen.getByRole("button", { name: "Show my seat: Zoë Brown, Feature table" }));
+
+    expect(scrolled).toEqual(["seat-finder-table-3"]);
+    expect(document.getElementById("seat-finder-table-3")).toHaveFocus();
+    const plan = screen.getByRole("group", { name: "Feature table: 1 of 8 seats taken" });
+    expect(within(plan).getByText("Seat 7: Zoë Brown").parentElement?.innerHTML).toContain("ring-accent");
+    scrollIntoView.mockRestore();
   });
 
   it("says the seats have not been drawn yet", async () => {

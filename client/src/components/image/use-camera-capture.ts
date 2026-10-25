@@ -2,7 +2,20 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 export type FacingMode = "user" | "environment";
 
-export const CAMERA_ERROR_MESSAGE = "Couldn't access the camera. Allow camera permission, or use Upload instead.";
+export const CAMERA_ERROR_MESSAGE = "Couldn't open the camera. You can upload a photo instead.";
+export const CAMERA_BLOCKED_MESSAGE =
+  "Camera access is blocked for this page. Upload a photo instead, or allow the camera in your browser's settings and try again.";
+export const NO_CAMERA_MESSAGE = "No camera was found on this device. Upload a photo instead.";
+export const CAMERA_BUSY_MESSAGE = "The camera is being used by another app. Close it and try again, or upload a photo instead.";
+
+/** What to tell someone whose camera did not open, by the browser's reason (getUserMedia's DOMException name). */
+export function cameraErrorMessage(cause: unknown): string {
+  const name = cause instanceof Error || cause instanceof DOMException ? cause.name : "";
+  if (name === "NotAllowedError" || name === "SecurityError" || name === "PermissionDeniedError") return CAMERA_BLOCKED_MESSAGE;
+  if (name === "NotFoundError" || name === "OverconstrainedError" || name === "DevicesNotFoundError") return NO_CAMERA_MESSAGE;
+  if (name === "NotReadableError" || name === "TrackStartError") return CAMERA_BUSY_MESSAGE;
+  return CAMERA_ERROR_MESSAGE;
+}
 
 export interface CameraCapture {
   /** Whether this browser can open a live camera at all (else use a capture file input). */
@@ -70,8 +83,8 @@ export function useCameraCapture(): CameraCapture {
           streamRef.current = granted;
           setStream(granted);
         })
-        .catch(() => {
-          if (!attempt.signal.aborted) setError(CAMERA_ERROR_MESSAGE);
+        .catch((cause: unknown) => {
+          if (!attempt.signal.aborted) setError(cameraErrorMessage(cause));
         });
     },
     [stop, supported],

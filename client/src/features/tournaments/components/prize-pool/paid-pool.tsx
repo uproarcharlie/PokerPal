@@ -1,15 +1,28 @@
 import { formatMoney, type Cents } from "@/lib/format";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
+import { describeDeal, type SnapshotDeal } from "@shared/domain/deal";
 import { nextHighHandAward, type PayoutDisplay, type PrizePoolBreakdown } from "@shared/domain/prize-pool";
-import { ManualAdjustment, PoolCard, PoolLine } from "./pool-lines";
+import { frozenSummary } from "@/features/prize-pool/components/public/pool-summary";
+import { DifferenceRows, LeftoverNote, PoolCard, PoolLine } from "./pool-lines";
 import { undistributedNote } from "@/lib/prize-pool";
 
 type FrozenPool = NonNullable<TournamentDetailDto["prizePoolSnapshot"]>["pool"];
 
-/** A finalized tournament's pool exactly as finalize froze it, its lines adding up to the net pool. */
-export function PaidPool({ pool, display, rakeLabel }: { pool: FrozenPool; display: PayoutDisplay; rakeLabel: string }) {
+interface PaidPoolProps {
+  pool: FrozenPool;
+  display: PayoutDisplay;
+  rakeLabel: string;
+  /** The deal the players still in made, when finalize paid one. */
+  deal?: SnapshotDeal;
+}
+
+/**
+ * A finalized tournament's pool exactly as finalize froze it, its lines adding up to the net pool (money
+ * carried in, kept by the club, carried over or added by the club: round 5, item 16), and any deal it paid.
+ */
+export function PaidPool({ pool, display, rakeLabel, deal }: PaidPoolProps) {
   const ap = pool.rakeOverrideCents ?? pool.rakeCalculatedCents;
-  const adjustment = pool.netSource === "manual_pool" ? pool.netCents - (pool.grossCents - ap) : 0;
+  const { lines } = frozenSummary(pool, rakeLabel);
   return (
     <PoolCard title="Prize Pool" description="As finalized: what was taken in and paid out">
       <PoolLine label="Gross Total" value={formatMoney(pool.grossCents)} testId="gross-total" tone="total" />
@@ -21,12 +34,13 @@ export function PaidPool({ pool, display, rakeLabel }: { pool: FrozenPool; displ
           tone="deduction"
         />
       ) : null}
-      <ManualAdjustment cents={adjustment} />
+      <DifferenceRows lines={lines} />
       <div className="border-t-2 border-primary pt-3">
         <PoolLine label="Net Prize Pool" value={formatMoney(pool.netCents)} testId="net-prize-pool" tone="result" />
+        <LeftoverNote lines={lines} />
         {pool.netSource === "manual_pool" ? (
           <p className="text-right text-xs text-muted-foreground" data-testid="manual-pool-note">
-            Set manually (calculated: {formatMoney(pool.grossCents - ap)})
+            Set manually (calculated: {formatMoney(pool.difference?.availableCents ?? pool.grossCents - ap)})
           </p>
         ) : null}
         <div data-testid="paid-out">
@@ -35,6 +49,12 @@ export function PaidPool({ pool, display, rakeLabel }: { pool: FrozenPool; displ
         {display.undistributedCents > 0 ? (
           <p className="text-right text-xs text-muted-foreground" data-testid="undistributed">
             {undistributedNote(display, 0)}
+          </p>
+        ) : null}
+        {deal ? (
+          <p className="mt-2 text-sm text-muted-foreground" data-testid="paid-deal">
+            Deal: {describeDeal(deal)} ({deal.reason}). The {deal.players.length} players still in shared the {formatMoney(deal.totalCents)} their
+            places paid.
           </p>
         ) : null}
       </div>

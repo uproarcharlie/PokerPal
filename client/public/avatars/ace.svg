@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">
+<title>Ace</title>
+<defs><radialGradient id="glow" cx=".32" cy=".26" r=".85"><stop offset="0" stop-color="#fff" stop-opacity=".26"/><stop offset=".65" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>
+<rect width="96" height="96" fill="#14532D"/>
+<rect width="96" height="96" fill="url(#glow)"/>
+<g transform="rotate(-8 48 48)">
+<rect x="29" y="20" width="40" height="58" rx="6" fill="#000" fill-opacity=".3"/>
+<rect x="28" y="17" width="40" height="58" rx="6" fill="#fff"/>
+<path d="M48 14C58 28 76 38 76 54C76 64 68 70 60 70C55 70 52 68 50 65Q51 74 58 80H38Q45 74 46 65C44 68 41 70 36 70C28 70 20 64 20 54C20 38 38 28 48 14Z" fill="#111827" transform="translate(48 49) scale(.42) translate(-48 -48)"/>
+<path d="M33 31L36.5 22L40 31M34.3 28H38.7" fill="none" stroke="#111827" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M63 61L59.5 70L56 61M61.7 64H57.3" fill="none" stroke="#111827" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+</svg>

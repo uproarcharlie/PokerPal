@@ -3,14 +3,13 @@ import { createPendingActionSchema } from "@shared/api/pending-actions";
 import type { PublicPlayer, PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { knockoutTargetsFor, requestersFor, requestRefusal, type PlayerActionType } from "@shared/domain/player-actions";
-import { PlayerAvatar } from "@/components/image/player-avatar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Form, FormField, FormItem, FormMessage } from "@/components/ui/form";
 import { useRequestPlayerAction } from "../hooks";
 import { requestProblem } from "../messages";
 import { formResolver } from "@/lib/forms";
+import { PlayerPicker, type PlayerChoice } from "./player-picker";
 
 interface ActionValues {
   playerId: string;
@@ -24,6 +23,12 @@ const SUBMIT_LABELS: Readonly<Record<PlayerActionType, string>> = {
   knockout: "Submit Knockout",
 };
 
+const WHO_FOR: Readonly<Record<PlayerActionType, string>> = {
+  rebuy: "Who is the re-buy for?",
+  addon: "Who is the add-on for?",
+  knockout: "Who made the knockout?",
+};
+
 /** "1 of 2 add-ons", or "1 add-ons" with no limit. */
 const countText = (count: number, max: number | null | undefined, what: string) => (max != null ? `${count} of ${max} ${what}` : `${count} ${what}`);
 
@@ -32,34 +37,28 @@ const countText = (count: number, max: number | null | undefined, what: string) 
  * now (PUB-14): greyed out with the reason when the house rules allow no more (a limit reached, or the
  * other kind already taken under "re-buys OR add-ons": TDN4-HOUSE-RULES-UNSET).
  */
-function requesterOption(tournament: TournamentDetailDto, registration: PublicRegistration, actionType: PlayerActionType) {
-  const name = registration.player?.name ?? "Unknown player";
-  if (actionType === "knockout") return { text: name, disabled: false };
+function requesterChoice(tournament: TournamentDetailDto, registration: PublicRegistration, actionType: PlayerActionType): PlayerChoice {
+  if (actionType === "knockout") return { registration };
   const count =
     actionType === "addon" ? countText(registration.addons ?? 0, tournament.maxAddons, "add-ons") : countText(registration.rebuys ?? 0, tournament.maxRebuys, "re-buys");
   const refusal = requestRefusal(tournament, registration, actionType)?.code;
-  if (refusal === "MAX_REBUYS_REACHED" || refusal === "MAX_ADDONS_REACHED") return { text: `${name} (${count}: limit reached)`, disabled: true };
-  if (refusal === "REBUY_OR_ADDON") return { text: `${name} (took ${actionType === "addon" ? "a re-buy" : "an add-on"}: not both)`, disabled: true };
-  return { text: actionType === "rebuy" && registration.isEliminated ? `${name} (out: buy back in)` : `${name} (${count})`, disabled: false };
+  if (refusal === "MAX_REBUYS_REACHED" || refusal === "MAX_ADDONS_REACHED") return { registration, detail: `${count}: limit reached`, disabled: true };
+  if (refusal === "REBUY_OR_ADDON") return { registration, detail: `Took ${actionType === "addon" ? "a re-buy" : "an add-on"}: not both`, disabled: true };
+  return { registration, detail: actionType === "rebuy" && registration.isEliminated ? "Out: buy back in" : count };
 }
 
-function PlayerOption({ registration, text, disabled = false }: { registration: PublicRegistration; text: string; disabled?: boolean }) {
-  return (
-    <SelectItem value={registration.playerId} disabled={disabled} className="py-3">
-      <span className="flex items-center gap-2">
-        <PlayerAvatar name={registration.player?.name ?? ""} imageUrl={registration.player?.imageUrl} size="xs" />
-        <span>{text}</span>
-      </span>
-    </SelectItem>
-  );
+/** Who a request was for, and for a knockout who went out: what the confirmation shows. */
+export interface SubmittedRequest {
+  player: PublicPlayer | null;
+  target: PublicPlayer | null;
 }
 
 interface ActionRequestFormProps {
   tournament: TournamentDetailDto;
   actionType: PlayerActionType;
   registrations: readonly PublicRegistration[];
-  /** The request is with the TD; `player` is who it is for. */
-  onSubmitted: (player: PublicPlayer | null) => void;
+  /** The request is with the TD. */
+  onSubmitted: (request: SubmittedRequest) => void;
 }
 
 /** Who the request is for (and, for a knockout, who went out), sent to the TD to confirm at the desk. */
@@ -72,63 +71,51 @@ export function ActionRequestForm({ tournament, actionType, registrations, onSub
   const playerId = useWatch({ control: form.control, name: "playerId" });
   const targetPlayerId = useWatch({ control: form.control, name: "targetPlayerId" });
   const knockout = actionType === "knockout";
+  const playerOf = (id: string | null) => registrations.find((registration) => registration.playerId === id)?.player ?? null;
 
   const onSubmit = form.handleSubmit((values) => {
-    const player = registrations.find((registration) => registration.playerId === values.playerId)?.player ?? null;
-    request.mutate(createPendingActionSchema.parse(values), { onSuccess: () => onSubmitted(player) });
+    const submitted = { player: playerOf(values.playerId), target: playerOf(values.targetPlayerId) };
+    request.mutate(createPendingActionSchema.parse(values), { onSuccess: () => onSubmitted(submitted) });
   });
 
   return (
     <Form {...form}>
-      <form onSubmit={(event) => void onSubmit(event)} className="space-y-4" noValidate>
+      <form onSubmit={(event) => void onSubmit(event)} className="space-y-5" noValidate>
         <FormField
           control={form.control}
           name="playerId"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>{knockout ? "Player Who Made Knockout" : "Select Player"}</FormLabel>
-              <Select
+              <PlayerPicker
+                label={WHO_FOR[actionType]}
+                choices={requestersFor(actionType, registrations, tournament).map((registration) => requesterChoice(tournament, registration, actionType))}
                 value={field.value}
-                onValueChange={(value) => {
+                onChange={(value) => {
                   field.onChange(value);
                   if (form.getValues("targetPlayerId") === value) form.setValue("targetPlayerId", null);
                 }}
-              >
-                <FormControl>
-                  <SelectTrigger className="h-11">
-                    <SelectValue placeholder="Choose a player..." />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent className="max-w-[var(--radix-select-trigger-width)]">
-                  {requestersFor(actionType, registrations, tournament).map((registration) => (
-                    <PlayerOption key={registration.id} registration={registration} {...requesterOption(tournament, registration, actionType)} />
-                  ))}
-                </SelectContent>
-              </Select>
+                empty="Nobody is playing yet."
+                data-testid="requester-picker"
+              />
               <FormMessage />
             </FormItem>
           )}
         />
 
-        {knockout ? (
+        {knockout && playerId ? (
           <FormField
             control={form.control}
             name="targetPlayerId"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Player Who Was Knocked Out</FormLabel>
-                <Select value={field.value ?? ""} onValueChange={field.onChange}>
-                  <FormControl>
-                    <SelectTrigger className="h-11">
-                      <SelectValue placeholder="Choose a player..." />
-                    </SelectTrigger>
-                  </FormControl>
-                  <SelectContent className="max-w-[var(--radix-select-trigger-width)]">
-                    {knockoutTargetsFor(registrations, playerId).map((registration) => (
-                      <PlayerOption key={registration.id} registration={registration} text={registration.player?.name ?? "Unknown player"} />
-                    ))}
-                  </SelectContent>
-                </Select>
+                <PlayerPicker
+                  label="Who was knocked out?"
+                  choices={knockoutTargetsFor(registrations, playerId).map((registration) => ({ registration }))}
+                  value={field.value ?? ""}
+                  onChange={field.onChange}
+                  empty="Nobody else is left in to knock out."
+                  data-testid="target-picker"
+                />
                 <FormMessage />
               </FormItem>
             )}

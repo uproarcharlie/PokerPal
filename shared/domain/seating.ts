@@ -21,15 +21,35 @@ export const SEATING_LIMITS = {
   maxActiveTables: 50,
 } as const;
 
-/** Why a player was put in, or taken out of, a seat. */
-export type SeatReason = "draw" | "redraw" | "move" | "swap" | "balance" | "table_broken" | "final_table" | "unseat" | "eliminated" | "restored";
+/**
+ * Why a player was put in, or taken out of, a seat. Round 5: "auto_seat" (a new arrival seated as they
+ * register, shared/domain/table-advisor planAutoSeat) and "open_table" (seated at, or moved to, a table
+ * just opened by planOpenTable).
+ */
+export type SeatReason =
+  | "draw"
+  | "redraw"
+  | "move"
+  | "swap"
+  | "balance"
+  | "table_broken"
+  | "final_table"
+  | "unseat"
+  | "eliminated"
+  | "restored"
+  | "auto_seat"
+  | "open_table";
 
 export const RELEASE_REASONS = ["eliminated", "moved", "swapped", "balanced", "table_broken", "redraw", "final_table", "unseated"] as const;
 /** tournament_seats.release_reason: why a seat row stopped being the player's seat. */
 export type ReleaseReason = (typeof RELEASE_REASONS)[number];
 
-/** The release reason a move's `from` seat is stored with. */
-export const RELEASE_REASON: Readonly<Record<Exclude<SeatReason, "draw" | "restored">, ReleaseReason>> = {
+/**
+ * The release reason a move's `from` seat is stored with. A player moved to a table just opened is
+ * stored as "balanced": that is what the move does, and release_reason's CHECK constraint (0005) is
+ * fixed on an existing table.
+ */
+export const RELEASE_REASON: Readonly<Record<Exclude<SeatReason, "draw" | "restored" | "auto_seat">, ReleaseReason>> = {
   redraw: "redraw",
   move: "moved",
   swap: "swapped",
@@ -38,6 +58,7 @@ export const RELEASE_REASON: Readonly<Record<Exclude<SeatReason, "draw" | "resto
   final_table: "final_table",
   unseat: "unseated",
   eliminated: "eliminated",
+  open_table: "balanced",
 };
 
 export interface SeatTable {
@@ -116,16 +137,24 @@ export function activeTables(tables: readonly SeatTable[]): SeatTable[] {
 }
 
 /**
- * A fingerprint of the active tables and who sits where, 8 hex digits. Balance sends the version its
- * suggestion was made from and is refused (STALE_PLAN) when seating changed since. Order-independent.
+ * A fingerprint of the active tables, who sits where and who is waiting for a seat (and whether they
+ * have paid), 8 hex digits. Balance, Break, Open Table and the rest send the version their suggestion
+ * was made from and are refused (STALE_PLAN) when the seating changed since. The players waiting are
+ * in it because "Open Table N" and "Seat N waiting" seat them: a sign-up between the advice and the
+ * tap must not make Apply seat more players than the advice showed (R5REV-HOST-07). Order-independent.
  */
-export function seatingVersion(snapshot: Pick<SeatingSnapshot, "tables" | "seats">): string {
+export function seatingVersion(snapshot: SeatingSnapshot): string {
   const tables = snapshot.tables
     .filter((table) => table.status === "active")
     .map((table) => `${table.id}:${table.seatCount}`)
     .sort();
   const seats = snapshot.seats.map((seat) => `${seat.tableId}:${seat.seatNumber}:${seat.registrationId}`).sort();
-  return fnv1aHex(`${tables.join("|")}#${seats.join("|")}`);
+  const seated = new Set(snapshot.seats.map((seat) => seat.registrationId));
+  const waiting = snapshot.eligible
+    .filter((player) => !seated.has(player.registrationId))
+    .map((player) => `${player.registrationId}:${player.paymentConfirmed ? 1 : 0}`)
+    .sort();
+  return fnv1aHex(`${tables.join("|")}#${seats.join("|")}#${waiting.join("|")}`);
 }
 
 /** Each active table's empty seat numbers, ascending. */
@@ -330,21 +359,6 @@ export function waitingText(waiting: number, unpaid: number): string | null {
   return `${who} waiting for a seat${unpaid > 0 ? ` (${unpaid} unpaid)` : ""}`;
 }
 
-/**
- * The table to break, when everyone seated fits at the other active tables: the one with the fewest
- * players (ties: the highest number). Null with one table, or when they would not fit. Players
- * waiting for a seat are not counted (TDN3-FINAL-TABLE-WAITING).
- */
-export function suggestBreak(snapshot: SeatingSnapshot): { tableId: string; tableNumber: number; playersToMove: number } | null {
-  const counts = occupancy(snapshot.tables, snapshot.seats);
-  if (counts.length < 2) return null;
-  const fewest = counts.reduce((best, table) =>
-    table.occupied < best.occupied || (table.occupied === best.occupied && table.tableNumber > best.tableNumber) ? table : best,
-  );
-  const elsewhere = counts.filter((table) => table.tableId !== fewest.tableId).reduce((sum, table) => sum + table.capacity, 0);
-  return snapshot.seats.length <= elsewhere ? { tableId: fewest.tableId, tableNumber: fewest.tableNumber, playersToMove: fewest.occupied } : null;
-}
-
 /** Breaks a table: its players are drawn onto the other active tables (reason table_broken), and it is archived. */
 export function planBreak(snapshot: SeatingSnapshot, tableId: string, rng: Rng): SeatingPlan {
   const tables = activeTables(snapshot.tables);
@@ -385,18 +399,6 @@ function finalTablePlayers(snapshot: SeatingSnapshot, includeWaiting: boolean): 
 
 /** The lowest-numbered active table with at least `players` seats. */
 const finalTableFor = (tables: readonly SeatTable[], players: number): SeatTable | undefined => tables.find((candidate) => candidate.seatCount >= players);
-
-/**
- * The final table, once everyone seated fits at one table and more than one is in play: the
- * lowest-numbered active table with enough seats. Null otherwise. Players waiting for a seat are not
- * counted: they would otherwise keep the final table from ever being suggested (TDN3-FINAL-TABLE-WAITING).
- */
-export function suggestFinalTable(snapshot: SeatingSnapshot): { tableId: string; tableNumber: number } | null {
-  const tables = activeTables(snapshot.tables);
-  if (tables.length < 2 || snapshot.seats.length === 0) return null;
-  const table = finalTableFor(tables, snapshot.seats.length);
-  return table ? { tableId: table.id, tableNumber: table.tableNumber } : null;
-}
 
 /**
  * Redraws everyone seated at one table (the given one, else the lowest-numbered one they fit at, else

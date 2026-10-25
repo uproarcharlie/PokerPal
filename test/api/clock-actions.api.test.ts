@@ -79,7 +79,7 @@ describe("start, pause and resume", () => {
         levelIndex: 0,
       },
     });
-    expect(response.body.viewer).toEqual({ canControl: true, clockKeyIssuedAt: null, clockKeyExpiresAt: null });
+    expect(response.body.viewer).toEqual({ canControl: true, canChangeDisplay: true, clockKeyIssuedAt: null, clockKeyExpiresAt: null });
     const row = await stored(tournament);
     expect(row).toMatchObject({ status: "running", periodEndsAt: new Date(T0 + LEVEL_1_MS), startedAt: new Date(T0), updatedBy: owner.user.id });
     expect(row.undoState).toEqual({

@@ -1,7 +1,8 @@
 /**
  * (b) The QR sign-up on a phone, signed out: a first-timer takes a selfie with the camera and registers,
- * a regular finds themselves with the search (which only looks at this club's players), and a second
- * attempt is told kindly that they are already in.
+ * a regular finds themselves with the search (which only looks at this club's players), a second
+ * attempt is told kindly that they are already in, and another first-timer picks an avatar instead of
+ * a photo (served by the app itself).
  */
 import { devices } from "@playwright/test";
 import type { ImageUploadResponse } from "../../shared/api/images";
@@ -22,13 +23,14 @@ import { toast } from "./support/ui";
 const { defaultBrowserType: _browser, ...pixel7 } = devices["Pixel 7"];
 test.use(pixel7);
 
-test("a player registers from the QR code on a phone: new with a selfie, then an existing player, then a duplicate", async ({
+test("a player registers from the QR code on a phone: new with a selfie, then an existing player, then a duplicate, then with an avatar", async ({
   page,
   request,
   baseURL,
 }) => {
   const token = uniqueToken();
   const newcomer = { name: `Nina ${token}`, phone: uniquePhone() };
+  const avatarFan = { name: `Ari ${token}`, phone: uniquePhone() };
 
   // The club's owner prepares tonight's game on their own device (`request` is not the phone's session).
   await signUp(request, "Quinn Owner");
@@ -54,13 +56,14 @@ test("a player registers from the QR code on a phone: new with a selfie, then an
   });
 
   let photoUrl = "";
-  await test.step("a new player takes a photo with the phone's camera", async () => {
+  await test.step("a new player takes a selfie with the phone's camera, the first thing the step offers", async () => {
     await page.getByTestId("player-type-new").click();
     await page.getByTestId("step1-next").click();
-    await page.getByRole("button", { name: "Take Photo" }).click();
+    await expect(page.getByText("Add your photo")).toBeVisible();
+    await page.getByRole("button", { name: "Take a selfie" }).click();
 
     // Capture is enabled once the camera's first frame is in, so pressing it at once takes the photo.
-    const camera = page.getByRole("dialog", { name: "Take a photo" });
+    const camera = page.getByRole("dialog", { name: "Take a selfie" });
     const uploaded = page.waitForResponse((response) => response.url().endsWith("/api/images/player_avatar"));
     await camera.getByRole("button", { name: "Capture" }).click();
     // Then the player frames it in the circle it is shown in, and the upload starts.
@@ -84,10 +87,12 @@ test("a player registers from the QR code on a phone: new with a selfie, then an
     await expect(page.getByAltText("Upload preview")).toBeVisible();
     // Focus is back on the photo field, not thrown to the top of the page (MA-P3REV1-01).
     await expect(page.locator(":focus")).toHaveText(/Retake|Change/);
-    await expect(page.getByTestId("step2-next")).toHaveText("Continue");
+    await expect(page.getByTestId("photo-next")).toHaveText("Continue");
   });
 
   await test.step("and registers with their name and number", async () => {
+    await page.getByTestId("photo-next").click();
+    await expect(page.getByTestId("photo-summary")).toContainText("Your photo");
     await page.getByTestId("player-name").fill(newcomer.name);
     await page.getByTestId("player-phone").fill(newcomer.phone);
     await page.getByTestId("step2-next").click();
@@ -96,6 +101,7 @@ test("a player registers from the QR code on a phone: new with a selfie, then an
     await page.getByTestId("complete-registration").click();
 
     await expect(page.getByText("Registration Complete!")).toBeVisible();
+    await expect(page.getByTestId("registered-player").locator("img")).toHaveAttribute("src", photoUrl);
     await expect(page.getByTestId("amount-due")).toHaveText("$40.00");
   });
 
@@ -121,6 +127,7 @@ test("a player registers from the QR code on a phone: new with a selfie, then an
     await page.getByTestId("register-another").click();
     await page.getByTestId("player-type-new").click();
     await page.getByTestId("step1-next").click();
+    await page.getByTestId("photo-skip").click();
     await page.getByTestId("player-name").fill(newcomer.name);
     await page.getByTestId("player-phone").fill(newcomer.phone);
     await page.getByTestId("step2-next").click();
@@ -142,9 +149,26 @@ test("a player registers from the QR code on a phone: new with a selfie, then an
     await expect(page.getByText("Step 2 of 3")).toBeVisible();
   });
 
-  await test.step("tonight's list has both players once, the newcomer with their photo", async () => {
+  await test.step("another newcomer picks an avatar instead of a photo: nothing is uploaded", async () => {
+    await page.goto(`/register/${tonight.id}`);
+    await page.getByTestId("player-type-new").click();
+    await page.getByTestId("step1-next").click();
+    await page.getByRole("button", { name: "Pick an avatar" }).click();
+    await page.getByRole("dialog", { name: "Pick an avatar" }).getByRole("button", { name: "Shark" }).click();
+    await expect(page.getByAltText("Upload preview")).toHaveAttribute("src", "/avatars/shark.svg");
+    await page.getByTestId("photo-next").click();
+    await page.getByTestId("player-name").fill(avatarFan.name);
+    await page.getByTestId("player-phone").fill(avatarFan.phone);
+    await page.getByTestId("step2-next").click();
+    await page.getByTestId("complete-registration").click();
+
+    await expect(page.getByText("Registration Complete!")).toBeVisible();
+    await expect(page.getByTestId("registered-player").locator("img")).toHaveAttribute("src", "/avatars/shark.svg");
+  });
+
+  await test.step("tonight's list has every player once, the newcomers with their photo and their avatar", async () => {
     const registrations = await registrationsOf(request, tonight.id);
-    expect(registrations.map((registration) => registration.player?.name).sort()).toEqual([regular.name, newcomer.name].sort());
+    expect(registrations.map((registration) => registration.player?.name).sort()).toEqual([regular.name, newcomer.name, avatarFan.name].sort());
     const entry = registrations.find((registration) => registration.player?.name === newcomer.name);
     expect(entry?.player?.imageUrl).toBe(photoUrl);
 
@@ -156,5 +180,12 @@ test("a player registers from the QR code on a phone: new with a selfie, then an
     const avatar = standing.locator("img");
     await expect(avatar).toHaveAttribute("src", photoUrl);
     await expect.poll(() => avatar.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
+
+    // The built-in avatar is a file the app serves itself (client/public/avatars), drawn like any photo.
+    const fan = registrations.find((registration) => registration.player?.name === avatarFan.name);
+    expect(fan?.player?.imageUrl).toBe("/avatars/shark.svg");
+    const fanAvatar = page.getByTestId(`standing-player-${fan?.id}`).locator("img");
+    await expect(fanAvatar).toHaveAttribute("src", "/avatars/shark.svg");
+    await expect.poll(() => fanAvatar.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
   });
 });

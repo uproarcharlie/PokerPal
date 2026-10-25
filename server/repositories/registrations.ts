@@ -15,11 +15,20 @@ export async function getTournamentRegistration(ex: Executor, id: string): Promi
   return registration || undefined;
 }
 
+/**
+ * A new registration. Its sign-up time is the statement's (clock_timestamp), not its transaction's
+ * start (the column's now()): sign-ups take the tournament's lock in turn, so their times come in the
+ * order they were taken, and the waiting list (sign-up order) never puts an entry already told it is
+ * in behind one written after it (round 5, item 15).
+ */
 export async function createTournamentRegistration(
   ex: Executor,
   insertReg: InsertTournamentRegistration,
 ): Promise<TournamentRegistration> {
-  const [registration] = await ex.insert(tournamentRegistrations).values(insertReg).returning();
+  const [registration] = await ex
+    .insert(tournamentRegistrations)
+    .values({ registrationTime: sql`clock_timestamp()`, ...insertReg })
+    .returning();
   return registration;
 }
 

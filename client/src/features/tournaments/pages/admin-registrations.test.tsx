@@ -4,7 +4,7 @@ import { delay, http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it } from "vitest";
 import { server } from "@test/msw/server";
 import { apiError, mockSignedIn, renderWithApp } from "@test/helpers/web";
-import { clubDto, phoneLayout, registrationDto, tournamentDto } from "@test/helpers/f1-tournaments";
+import { clubDto, phoneLayout, registrationDto, screenWidth, tournamentDto } from "@test/helpers/f1-tournaments";
 import type { ConfirmedRegistrationDto, PendingRegistrationDto } from "@shared/api/registrations";
 import AdminRegistrationsPage from "./admin-registrations";
 
@@ -30,10 +30,10 @@ const bob: ConfirmedRegistrationDto = {
   amountPaid: 50,
 };
 
-function mockDesk({ canManage = true, pending = [ann, visitor], confirmed = [bob] } = {}) {
+function mockDesk({ canManage = true, pending = [ann, visitor], confirmed = [bob], maxPlayers = 20 } = {}) {
   const lists: string[] = [];
   server.use(
-    http.get("/api/tournaments/t1", () => HttpResponse.json(tournamentDto({ viewer: { canManage, canOwn: canManage } }))),
+    http.get("/api/tournaments/t1", () => HttpResponse.json(tournamentDto({ maxPlayers, viewer: { canManage, canOwn: canManage } }))),
     http.get("/api/clubs/c1", () => HttpResponse.json(clubDto())),
     http.get("/api/tournaments/t1/pending-registrations", () => {
       lists.push("pending");
@@ -94,7 +94,7 @@ describe("AdminRegistrationsPage", () => {
         await annAnswered;
         return apiError(409, "CONFLICT", "Ann's payment was already confirmed on another device");
       }),
-      http.patch("/api/registrations/r2/confirm-payment", () => HttpResponse.json({ ...visitor, paymentConfirmed: true })),
+      http.patch("/api/registrations/r2/confirm-payment", () => HttpResponse.json({ ...visitor, paymentConfirmed: true, seating: null })),
     );
     const user = userEvent.setup();
     renderDesk();
@@ -115,7 +115,7 @@ describe("AdminRegistrationsPage", () => {
     server.use(
       http.patch("/api/registrations/:id/confirm-payment", ({ params }) => {
         confirmedIds = [...confirmedIds, String(params.id)];
-        return HttpResponse.json({ ...ann, paymentConfirmed: true });
+        return HttpResponse.json({ ...ann, paymentConfirmed: true, seating: null });
       }),
       http.get("/api/tournaments/t1/pending-registrations", () => HttpResponse.json(confirmedIds.includes("r1") ? [visitor] : [ann, visitor])),
     );
@@ -129,6 +129,25 @@ describe("AdminRegistrationsPage", () => {
     await waitFor(() => expect(screen.queryByTestId("registration-r1")).not.toBeInTheDocument());
   });
 
+  it("says where automatic seating put a player once their payment is confirmed (round 5, once they've paid)", async () => {
+    mockDesk();
+    server.use(
+      http.patch("/api/registrations/:id/confirm-payment", () =>
+        HttpResponse.json({
+          ...ann,
+          paymentConfirmed: true,
+          seating: { status: "seated", seat: { tableId: "tb1", tableNumber: 1, tableName: "Table 1", seatNumber: 4 } },
+        }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderDesk();
+
+    await user.click(await screen.findByTestId("confirm-payment-r1"));
+
+    expect(await screen.findByText(/has paid\. Seated at Table 1, Seat 4\./)).toBeInTheDocument();
+  });
+
   it("frees the desk as soon as the server confirms, without waiting for the lists to refresh (P3REV4-PERF-02)", async () => {
     mockDesk();
     let refreshing = false;
@@ -136,7 +155,7 @@ describe("AdminRegistrationsPage", () => {
     server.use(
       http.patch("/api/registrations/:id/confirm-payment", () => {
         refreshing = true;
-        return HttpResponse.json({ ...ann, paymentConfirmed: true });
+        return HttpResponse.json({ ...ann, paymentConfirmed: true, seating: null });
       }),
       // The refresh after it hangs on the venue's Wi-Fi.
       http.get("/api/tournaments/t1/pending-registrations", async () => {
@@ -161,7 +180,7 @@ describe("AdminRegistrationsPage", () => {
     server.use(
       http.patch("/api/registrations/:id/confirm-payment", async () => {
         await new Promise<void>((resolve) => (answer = resolve));
-        return HttpResponse.json({ ...ann, paymentConfirmed: true });
+        return HttpResponse.json({ ...ann, paymentConfirmed: true, seating: null });
       }),
     );
     const user = userEvent.setup();
@@ -235,6 +254,61 @@ describe("AdminRegistrationsPage", () => {
 
     await screen.findByRole("table", { name: "Registrations waiting for payment" });
     expect(screen.queryByText(/updates automatically/)).not.toBeInTheDocument();
+  });
+});
+
+describe("AdminRegistrationsPage: the waiting list (round 5, item 15)", () => {
+  /** Vic signed up once the field of two was full: the server numbers him on the waiting list. */
+  const waitingVic: PendingRegistrationDto = { ...visitor, waitingListPosition: 1 };
+  const FULL = "1 of 1 players accepted: raise Max players to accept more";
+
+  it("numbers the waiting list apart from the field's payments, and leaves its amounts out of the total", async () => {
+    // Ann has not played yet (no re-buys), so she is not accepted until she pays: one of two accepted.
+    mockDesk({ maxPlayers: 2, pending: [{ ...ann, rebuys: 0, addons: 0, amountOwed: 100, waitingListPosition: null }, waitingVic] });
+    renderDesk();
+
+    const field = await screen.findByRole("table", { name: "Registrations waiting for payment" });
+    expect(within(field).getByTestId("registration-r1")).toBeInTheDocument();
+    expect(within(field).queryByTestId("registration-r2")).not.toBeInTheDocument();
+    expect(screen.getByText("Total Pending").parentElement).toHaveTextContent("$100.00");
+    const waiting = within(screen.getByTestId("payment-waiting-list"));
+    expect(waiting.getByRole("heading", { name: "Waiting list · 1" })).toBeInTheDocument();
+    expect(within(waiting.getByRole("table", { name: "Waiting list" })).getByTestId("registration-r2")).toHaveTextContent("#1");
+    // There is room, so nothing says the field is full.
+    expect(screen.queryByTestId("payment-waiting-full")).not.toBeInTheDocument();
+  });
+
+  it("says first that Max players are accepted, and shows the server's refusal of an accept at max: no override", async () => {
+    mockDesk({ maxPlayers: 1, pending: [waitingVic], confirmed: [bob] });
+    let asked = 0;
+    server.use(
+      http.patch("/api/registrations/r2/confirm-payment", () => {
+        asked += 1;
+        return apiError(409, "TOURNAMENT_FULL", FULL);
+      }),
+    );
+    const user = userEvent.setup();
+    renderDesk();
+
+    expect(await screen.findByTestId("payment-waiting-full")).toHaveTextContent(`${FULL}.`);
+    expect(screen.getByText("Everyone in the field has paid.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Confirm payment for Vic" }));
+
+    expect(await screen.findByText("Tournament full")).toBeInTheDocument();
+    expect(screen.getByText(FULL)).toBeInTheDocument();
+    expect(asked).toBe(1);
+    expect(screen.getByTestId("confirm-payment-r2")).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("shows the waiting list as numbered cards on a phone (390 px)", async () => {
+    screenWidth(390);
+    mockDesk({ maxPlayers: 1, pending: [waitingVic], confirmed: [bob] });
+    renderDesk();
+
+    const card = within(await screen.findByRole("list", { name: "Waiting list" })).getByTestId("registration-r2");
+    expect(within(card).getByRole("heading", { level: 4 })).toHaveTextContent("#1");
+    expect(within(card).getByRole("button", { name: "Confirm payment for Vic" })).toHaveClass("h-11");
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 });
 

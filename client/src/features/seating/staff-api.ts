@@ -1,6 +1,6 @@
 /**
- * The seating endpoints only the club's staff call (phase4-contracts §3.1): the TD's view of every
- * table and seat (S1), and every change (S2–S11). Apart from api.ts so the public pages never load
+ * The seating endpoints only the club's staff call (phase4-contracts §3.1, round5-contracts §3.2): the
+ * TD's view of every table and seat (S1), and every change (S2–S11, Undo, round 5's open-table). Apart from api.ts so the public pages never load
  * them. Every change answers SeatingMutationDto: the seating after it, and who moved where.
  */
 import { queryOptions } from "@tanstack/react-query";
@@ -11,9 +11,11 @@ import type {
   CreateTablesInput,
   DrawSeatsInput,
   FinalTableInput,
+  OpenTableInput,
   SeatingDto,
   SeatingMutationDto,
   SeatingSetupInput,
+  UndoSeatingInput,
   UnseatInput,
   UpdateTableInput,
 } from "@shared/api/seating";
@@ -70,3 +72,11 @@ export const balanceTables = (tournamentId: string, input: BalanceInput) =>
 /** S11: everyone still in redrawn at one table; the others archived. */
 export const drawFinalTable = (tournamentId: string, input: FinalTableInput) =>
   apiSend<SeatingMutationDto>("POST", seatingPath(tournamentId, "final-table"), input);
+
+/** R5-S13: the advisor's "Open Table N", exactly as it was shown (the seating version it was worked out from). */
+export const openTable = (tournamentId: string, input: OpenTableInput) =>
+  apiSend<SeatingMutationDto>("POST", seatingPath(tournamentId, "open-table"), input);
+
+/** Puts back everyone the last table break, draw, balance, final table or opened table moved, while the seats are as it left them. */
+export const undoSeatingChange = (tournamentId: string, input: UndoSeatingInput) =>
+  apiSend<SeatingMutationDto>("POST", seatingPath(tournamentId, "undo"), input);

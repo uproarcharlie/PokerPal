@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ImageUploadResponse } from "@shared/api/images";
+import { isBuiltInAvatarUrl } from "@shared/domain/avatars";
 import { imageVariantKey, imageVariantsFromUrl, type CropFractions, type ImageKind } from "@shared/domain/images";
 import type { AppEnv } from "../../config/env";
 import { badRequest, HttpError } from "../../http/errors";
@@ -58,9 +59,10 @@ export function logOrphanedImages(urls: readonly string[], reason: string): void
 
 /**
  * For services that set an image column (club, player, tournament), before the write: a new image must
- * be one our upload endpoints stored, never a link to another server (img-24). An unchanged one is
- * accepted as stored (legacy URLs predate the check), and so is removing it. 400 VALIDATION on
- * `imageUrl` under the form's own message ("Invalid club data").
+ * be one our upload endpoints stored, never a link to another server (img-24), or one of the app's own
+ * built-in avatars (round 5: only the player schemas let one through). An unchanged one is accepted as
+ * stored (legacy URLs predate the check), and so is removing it. 400 VALIDATION on `imageUrl` under the
+ * form's own message ("Invalid club data").
  */
 export function assertOwnedImage(
   env: AppEnv,
@@ -68,13 +70,17 @@ export function assertOwnedImage(
   previous: string | null | undefined,
   message: string,
 ): void {
-  if (next && next !== previous && !ownsImageUrl(env, next)) {
+  if (next && next !== previous && !isBuiltInAvatarUrl(next) && !ownsImageUrl(env, next)) {
     throw badRequest(message, "VALIDATION", [{ code: "custom", path: ["imageUrl"], message: "Must be an uploaded image" }]);
   }
 }
 
-/** An image with every variant it has (just the URL when it is not one of ours). */
-const withVariants = (url: string): string[] => {
+/**
+ * A stored image with every variant it has (just the URL when it is not one of ours), or nothing for a
+ * built-in avatar: it is part of the app, so it is never left behind in storage.
+ */
+const storedFiles = (url: string): string[] => {
+  if (isBuiltInAvatarUrl(url)) return [];
   const variants = imageVariantsFromUrl(url);
   return variants ? Object.values(variants) : [url];
 };
@@ -85,10 +91,10 @@ const withVariants = (url: string): string[] => {
  */
 export function noteReplacedImage(previous: string | null | undefined, next: string | null | undefined, where: string): void {
   if (!previous || previous === next) return;
-  logOrphanedImages(withVariants(previous), `replaced on ${where}`);
+  logOrphanedImages(storedFiles(previous), `replaced on ${where}`);
 }
 
 /** Once a delete is committed: logs the images its rows pointed at, e.g. "club 1f3… was deleted". */
 export function noteDeletedImages(urls: ReadonlyArray<string | null | undefined>, what: string): void {
-  logOrphanedImages(urls.flatMap((url) => (url ? withVariants(url) : [])), `${what} was deleted`);
+  logOrphanedImages(urls.flatMap((url) => (url ? storedFiles(url) : [])), `${what} was deleted`);
 }

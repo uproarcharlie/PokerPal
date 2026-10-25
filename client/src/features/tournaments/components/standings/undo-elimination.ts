@@ -5,22 +5,27 @@
  * was made, instead of from the Standings tab after the seat may have gone (TDN3-BUST-NO-UNDO).
  */
 import type { PublicRegistration } from "@shared/api/public";
-import { useWaitingSeat } from "@/features/seating/waiting-seat";
+import { returnSeatAction, returnSeatText, useReturnSeat } from "@/features/seating/waiting-seat";
 import { toast, type ToastAction } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/api/http";
 import { playerName } from "../../player-name";
 import { useUpdateRegistration } from "../../staff-hooks";
 
 /**
- * `announceReturn(registration, title)`, once a restore is in: the toast that says so, with "Seat now"
- * when the player's old seat was not free.
+ * `announceReturn(registration, title)`, once a restore is in: the toast that says where the player
+ * sits now ("back in, at their old seat: Table 1, Seat 3", or "at a new seat" when theirs was taken),
+ * or that they wait, with "Seat now" (R5REV-HOST-04).
  */
 export function useAnnounceReturn(tournamentId: string): (registration: PublicRegistration, title: string) => Promise<void> {
-  const waitingSeat = useWaitingSeat(tournamentId);
+  const returnSeat = useReturnSeat(tournamentId);
   return async (registration, title) => {
     const name = playerName(registration);
-    const seatNow = await waitingSeat(registration.id, name);
-    toast({ title, description: seatNow ? `${name} is back in, waiting for a seat: their old one was not free.` : undefined, action: seatNow ?? undefined });
+    const outcome = await returnSeat(registration.id, name);
+    toast({
+      title,
+      description: outcome ? returnSeatText(`${name} is back in`, outcome, { waiting: "waiting for a seat: their old one was not free" }) : undefined,
+      action: returnSeatAction(outcome),
+    });
   };
 }
 

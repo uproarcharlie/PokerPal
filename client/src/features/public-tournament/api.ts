@@ -6,8 +6,8 @@
 import { queryOptions } from "@tanstack/react-query";
 import type { CreatePendingActionInput, PendingActionDto } from "@shared/api/pending-actions";
 import type { CreatePlayerInput, CreatePlayerResponse } from "@shared/api/players";
-import type { PublicPlayer, PublicRegistration } from "@shared/api/public";
-import type { PublicRegistrationInput } from "@shared/api/registrations";
+import type { PublicPlayer } from "@shared/api/public";
+import type { PublicRegistrationInput, RegistrationCreatedDto } from "@shared/api/registrations";
 import { apiGet, apiSend, segment, withQuery } from "@/lib/api/http";
 import { qk } from "@/lib/api/query-keys";
 
@@ -24,9 +24,9 @@ export const publicTournamentQueries = {
 /** POST /api/players: a new player, or the stored one with the same name and phone (`existing: true`). */
 export const createPlayer = (input: CreatePlayerInput) => apiSend<CreatePlayerResponse>("POST", "/api/players", input);
 
-/** POST /api/tournaments/:id/registrations: signs a player up for the tournament. */
+/** POST /api/tournaments/:id/registrations: signs a player up for the tournament, and says where auto-seat put them. */
 export const registerForTournament = (tournamentId: string, input: PublicRegistrationInput) =>
-  apiSend<PublicRegistration>("POST", `/api/tournaments/${segment(tournamentId)}/registrations`, input);
+  apiSend<RegistrationCreatedDto>("POST", `/api/tournaments/${segment(tournamentId)}/registrations`, input);
 
 /** POST /api/tournaments/:id/pending-actions: a re-buy, add-on or knockout for the TD to confirm. */
 export const requestPlayerAction = (tournamentId: string, input: CreatePendingActionInput) =>

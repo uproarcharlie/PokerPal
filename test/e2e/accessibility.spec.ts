@@ -149,6 +149,10 @@ for (const [device, use] of [
 
       await page.getByTestId("player-type-new").click();
       await page.getByTestId("step1-next").click();
+      // A new player's photo comes first (round 5): a selfie, an upload, an avatar, or skip it for now.
+      await expect(page.getByRole("button", { name: "Take a selfie" })).toBeVisible();
+      await expectAccessible(page, "sign-up step 2, new player photo");
+      await page.getByTestId("photo-skip").click();
       await expect(page.getByTestId("player-name")).toBeVisible();
       await expectAccessible(page, "sign-up step 2, new player");
       await page.getByTestId("step2-next").click();
@@ -189,18 +193,26 @@ for (const [device, use] of [
         ] as const) {
           await page.goto(`/admin/tournaments/${tournament.id}`);
           await expect(page.getByRole("heading", { name: tournament.name, exact: true })).toBeVisible();
-          await expect(page.getByRole("tab", { name: "Overview" })).toBeVisible();
+          // A phone's tabs are its bottom bar (round 5): Players first; a laptop's row starts with the Overview.
+          await expect(page.getByRole("tab", { name: device === "phone" ? "Players" : "Overview" })).toBeVisible();
           await expectEveryTabAccessible(page, `tournament admin, ${when}, ${colorScheme}`);
         }
       }
 
       await page.goto(`/admin/tournaments/${demo.live.id}`);
-      await page.getByTestId("register-player").click();
+      if (device === "phone") {
+        // On a phone the desk's actions are under the quick-action button.
+        await page.getByTestId("quick-actions").click();
+        await expectAccessible(page, "tournament admin, quick actions menu");
+        await page.getByTestId("quick-register").click();
+      } else {
+        await page.getByTestId("register-player").click();
+      }
       await expect(page.getByRole("dialog")).toBeVisible();
       await expectAccessible(page, "tournament admin, Register Player dialog");
 
-      // End Tournament: the finishing order and the payout plan it previews (MA-REV-07).
-      await page.goto(`/admin/tournaments/${demo.live.id}`);
+      // End Tournament: the finishing order and the payout plan it previews (MA-REV-07); on a phone, in the More tab.
+      await page.goto(device === "phone" ? `/admin/tournaments/${demo.live.id}?tab=more` : `/admin/tournaments/${demo.live.id}`);
       await page.getByTestId("end-tournament").click();
       await expect(page.getByTestId("finalize-plan")).toBeVisible();
       await expectAccessible(page, "tournament admin, End Tournament dialog");
@@ -222,7 +234,7 @@ test.describe("on a 320 px phone (WCAG 1.4.10, reflow)", () => {
       ["/dashboard", page.getByRole("heading", { name: "Season Leaderboard" })],
       ["/tournaments", page.getByRole("heading", { name: "All Tournaments" })],
       ["/clubs", page.getByRole("heading", { name: "Club Management" })],
-      [`/admin/tournaments/${demo.live.id}`, page.getByRole("tab", { name: "Overview" })],
+      [`/admin/tournaments/${demo.live.id}`, page.getByRole("tab", { name: "Players" })],
       // The desks a TD works from on a phone during a game, with their Confirm / Dismiss buttons (MA-REV-01).
       [`/admin/actions/${demo.live.id}`, page.getByRole("button", { name: "Dismiss" }).first()],
       [`/admin/registrations/${demo.live.id}`, page.getByRole("button", { name: "Confirm Payment" }).first()],

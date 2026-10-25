@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollRegion } from "@/components/shared/scroll-region";
 import { formatMoney, formatNumber, ordinal } from "@/lib/format";
 import type { FinalizePreviewDto } from "@shared/api/finalize";
+import type { Dealable } from "@shared/domain/deal";
 import { UNKNOWN_PLAYER } from "../../player-name";
 
 export const PLAN_CHANGED_NOTICE =
@@ -32,7 +33,8 @@ interface FinishOrderListProps {
 }
 
 /** The end of the list a move button would leave it at: there it says so, but keeps focus. */
-const AT_END = "aria-disabled:cursor-not-allowed";
+/** A thumb's 44 px on a phone; an end of the list says so without leaving the tab order. */
+const MOVE_BUTTON = "h-11 w-11 aria-disabled:cursor-not-allowed";
 
 /**
  * An up/down list of players, best first. A button at an end of the list (the first's Up, the last's
@@ -62,7 +64,7 @@ export function FinishOrderList({ order, nameOf, onMove, disabled }: FinishOrder
                 type="button"
                 variant="ghost"
                 size="icon"
-                className={AT_END}
+                className={MOVE_BUTTON}
                 onClick={() => move(index, -1, name)}
                 aria-disabled={first || undefined}
                 disabled={disabled}
@@ -74,7 +76,7 @@ export function FinishOrderList({ order, nameOf, onMove, disabled }: FinishOrder
                 type="button"
                 variant="ghost"
                 size="icon"
-                className={AT_END}
+                className={MOVE_BUTTON}
                 onClick={() => move(index, 1, name)}
                 aria-disabled={last || undefined}
                 disabled={disabled}
@@ -91,6 +93,11 @@ export function FinishOrderList({ order, nameOf, onMove, disabled }: FinishOrder
       </p>
     </>
   );
+}
+
+/** Why the plan cannot be finalized: for a deal that cannot be paid, what to fix first. */
+export function refusalText(plan: Pick<FinalizePreviewDto, "code" | "message" | "dealProblems">): string | undefined {
+  return plan.code === "DEAL_INVALID" ? (plan.dealProblems[0]?.message ?? plan.message) : plan.message;
 }
 
 /** The preview's warnings (pool not locked, requests that will be discarded, points that change, ...). */
@@ -113,10 +120,12 @@ export function PlanWarnings({ warnings }: { warnings: readonly string[] }) {
 /**
  * What finalize will write: every place, prize and points. On a correction each row's points sit
  * beside the points stored before, and the column stays whenever either has points, so points that
- * would go away are never hidden (P2REV1-01).
+ * would go away are never hidden (P2REV1-01). With `deal` (the plan pays one), each player in it shows
+ * what their place pays beside what the deal gives them.
  */
-export function PlanTable({ plan }: { plan: FinalizePreviewDto }) {
+export function PlanTable({ plan, deal = null }: { plan: FinalizePreviewDto; deal?: Dealable | null }) {
   if (plan.rows.length === 0) return null;
+  const planned = new Map((deal?.players ?? []).map((player) => [player.registrationId, player.plannedCents]));
   const before = new Map((plan.previous?.results ?? []).map((result) => [result.registrationId, result.pointsAwarded]));
   const correcting = plan.previous !== null;
   const showPoints = plan.rows.some((row) => row.pointsAwarded !== null || (before.get(row.registrationId) ?? null) !== null);
@@ -140,7 +149,14 @@ export function PlanTable({ plan }: { plan: FinalizePreviewDto }) {
             <tr key={row.registrationId}>
               <td className="px-3 py-2">{ordinal(row.finalPosition)}</td>
               <td className="px-3 py-2">{row.playerName}</td>
-              <td className="px-3 py-2 text-right font-semibold tabular-nums">{row.amountCents > 0 ? formatMoney(row.amountCents) : "-"}</td>
+              <td className="px-3 py-2 text-right font-semibold tabular-nums">
+                {row.amountCents > 0 ? formatMoney(row.amountCents) : "-"}
+                {planned.has(row.registrationId) ? (
+                  <span className="block text-xs font-normal text-muted-foreground" data-testid={`plan-deal-${row.registrationId}`}>
+                    Deal (place pays {formatMoney(planned.get(row.registrationId) ?? 0)})
+                  </span>
+                ) : null}
+              </td>
               {showPoints ? (
                 <td className="px-3 py-2 text-right tabular-nums" data-testid={`plan-points-${row.registrationId}`}>
                   {points(row.pointsAwarded)}

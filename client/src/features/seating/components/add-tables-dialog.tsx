@@ -1,25 +1,30 @@
-import { useForm, useWatch } from "react-hook-form";
+import { useId } from "react";
+import { Controller, useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 import { createTablesSchema, type SeatingMutationDto } from "@shared/api/seating";
 import { SEATING_LIMITS } from "@shared/domain/seating";
+import type { TableShape } from "@shared/domain/table-layout";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Form, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { formResolver, showServerFieldErrors, typedNumber } from "@/lib/forms";
 import { FAILED, seatingRefusal } from "../seating-text";
 import type { SeatingChange } from "../staff-hooks";
-import { NumberStepper } from "./number-stepper";
+import { FormNumberStepper } from "@/components/shared/number-stepper";
+import { ShapePicker } from "./shape-picker";
 
-const shape = createTablesSchema.shape;
-const addTablesFormSchema = z.object({ count: typedNumber(shape.count), seatCount: typedNumber(shape.seatCount) });
+const fields = createTablesSchema.shape;
+const addTablesFormSchema = z.object({ count: typedNumber(fields.count), seatCount: typedNumber(fields.seatCount), shape: fields.shape });
 
 /** The most tables one tap adds (createTablesSchema's own limit). */
-const MAX_TABLES_PER_ADD = shape.count.removeDefault().maxValue ?? 20;
+const MAX_TABLES_PER_ADD = fields.count.removeDefault().maxValue ?? 20;
 
 interface AddTablesValues {
   count: string;
   seatCount: string;
+  shape: TableShape;
 }
 
 /** "Adds Table 4 (9 seats)" / "Adds Tables 4 to 6 (9 seats each)", for what is typed so far. */
@@ -36,13 +41,14 @@ interface AddTablesDialogProps {
   onOpenChange: (open: boolean) => void;
   /** The number the first new table gets: one past the highest so far (archived tables count). */
   nextNumber: number;
-  /** The seats a new table starts with: what most tables have. */
+  /** The seats and shape a new table starts with: the tournament's seating settings. */
   defaultSeats: number;
+  defaultShape: TableShape;
   perform: (change: SeatingChange) => Promise<SeatingMutationDto>;
 }
 
 /** More tables for a tournament that has outgrown its seats (late registrations, re-entries). */
-export function AddTablesDialog({ open, onOpenChange, nextNumber, defaultSeats, perform }: AddTablesDialogProps) {
+export function AddTablesDialog({ open, onOpenChange, nextNumber, defaultSeats, defaultShape, perform }: AddTablesDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -50,17 +56,18 @@ export function AddTablesDialog({ open, onOpenChange, nextNumber, defaultSeats, 
           <DialogTitle>Add tables</DialogTitle>
           <DialogDescription>New tables start empty: seat the players waiting, or balance the tables, once they are out.</DialogDescription>
         </DialogHeader>
-        {open ? <AddTablesForm nextNumber={nextNumber} defaultSeats={defaultSeats} perform={perform} onDone={() => onOpenChange(false)} /> : null}
+        {open ? <AddTablesForm nextNumber={nextNumber} defaultSeats={defaultSeats} defaultShape={defaultShape} perform={perform} onDone={() => onOpenChange(false)} /> : null}
       </DialogContent>
     </Dialog>
   );
 }
 
-function AddTablesForm({ nextNumber, defaultSeats, perform, onDone }: Omit<AddTablesDialogProps, "open" | "onOpenChange"> & { onDone: () => void }) {
+function AddTablesForm({ nextNumber, defaultSeats, defaultShape, perform, onDone }: Omit<AddTablesDialogProps, "open" | "onOpenChange"> & { onDone: () => void }) {
   const { toast } = useToast();
+  const shapeLabel = useId();
   const form = useForm<AddTablesValues>({
     resolver: formResolver(addTablesFormSchema),
-    defaultValues: { count: "1", seatCount: String(defaultSeats) },
+    defaultValues: { count: "1", seatCount: String(defaultSeats), shape: defaultShape },
   });
   const [countText, seatsText] = useWatch({ control: form.control, name: ["count", "seatCount"] });
   const preview = addTablesPreview(nextNumber, countText, seatsText);
@@ -86,7 +93,7 @@ function AddTablesForm({ nextNumber, defaultSeats, perform, onDone }: Omit<AddTa
           render={({ field }) => (
             <FormItem>
               <FormLabel>Tables</FormLabel>
-              <NumberStepper field={field} min={1} max={MAX_TABLES_PER_ADD} unit="table" testId="add-tables-count" />
+              <FormNumberStepper field={field} min={1} max={MAX_TABLES_PER_ADD} noun="table" testId="add-tables-count" />
               <FormMessage />
             </FormItem>
           )}
@@ -97,11 +104,15 @@ function AddTablesForm({ nextNumber, defaultSeats, perform, onDone }: Omit<AddTa
           render={({ field }) => (
             <FormItem>
               <FormLabel>Seats per table</FormLabel>
-              <NumberStepper field={field} min={SEATING_LIMITS.minSeats} max={SEATING_LIMITS.maxSeats} unit="seat" quickPicks={[6, 8, 9, 10]} testId="add-tables-seats" />
+              <FormNumberStepper field={field} min={SEATING_LIMITS.minSeats} max={SEATING_LIMITS.maxSeats} noun="seat" quickPicks={[6, 8, 9, 10]} testId="add-tables-seats" />
               <FormMessage />
             </FormItem>
           )}
         />
+        <div className="space-y-2">
+          <Label id={shapeLabel}>Table shape</Label>
+          <Controller control={form.control} name="shape" render={({ field }) => <ShapePicker value={field.value} onChange={field.onChange} labelledBy={shapeLabel} testId="add-tables-shape" />} />
+        </div>
         <p className="rounded-md bg-muted px-3 py-2 text-sm font-medium text-foreground" aria-live="polite">
           {preview ?? `Choose 1 to ${MAX_TABLES_PER_ADD} tables of ${SEATING_LIMITS.minSeats} to ${SEATING_LIMITS.maxSeats} seats`}
         </p>

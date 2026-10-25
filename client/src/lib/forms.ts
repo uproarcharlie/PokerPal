@@ -72,6 +72,8 @@ interface ServerFieldErrorOptions<T extends FieldValues> {
   fields: readonly Path<T>[] | ((name: string) => boolean);
   /** Refusals that are about one field whatever their details say: `{ PHONE_TAKEN: "phone" }`. */
   codes?: Partial<Record<ErrorCode, Path<T>>>;
+  /** The form's name for a field the server names otherwise (its "places.3" is the box "places.3.value"); before `fields`. */
+  rename?: (name: string) => string;
 }
 
 /** The sentence for a field: the server's, or the list of rules a WEAK_PASSWORD answer says were broken. */
@@ -111,7 +113,7 @@ function namedFields(error: ApiError): { names: string[]; message: string }[] {
 export function showServerFieldErrors<T extends FieldValues>(
   setError: UseFormSetError<T>,
   error: unknown,
-  { fields, codes = {} }: ServerFieldErrorOptions<T>,
+  { fields, codes = {}, rename = (name) => name }: ServerFieldErrorOptions<T>,
 ): boolean {
   if (!isApiError(error)) return false;
   const isField = typeof fields === "function" ? fields : (name: string) => (fields as readonly string[]).includes(name);
@@ -124,7 +126,7 @@ export function showServerFieldErrors<T extends FieldValues>(
 
   let shown = false;
   for (const { names, message } of namedFields(error)) {
-    const name = names.find(isField);
+    const name = names.map(rename).find(isField);
     if (name === undefined) continue;
     setError(name as Path<T>, { type: "server", message }, { shouldFocus: !shown });
     shown = true;

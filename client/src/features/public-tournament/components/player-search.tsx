@@ -1,9 +1,10 @@
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Check, Loader2, Search } from "lucide-react";
 import type { PublicPlayer } from "@shared/api/public";
 import { PlayerAvatar } from "@/components/image/player-avatar";
 import { Input } from "@/components/ui/input";
+import { useDebounced } from "@/hooks/use-debounced";
 import { errorMessage } from "@/lib/api/http";
 import { cn } from "@/lib/utils";
 import { publicTournamentQueries } from "../api";
@@ -13,15 +14,6 @@ export const MIN_SEARCH_LENGTH = 2;
 const DEBOUNCE_MS = 250;
 /** A search result is good for this long: the players known at a club change slowly. */
 const SEARCH_STALE_MS = 30_000;
-
-function useDebounced<T>(value: T, ms: number): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timer = setTimeout(() => setDebounced(value), ms);
-    return () => clearTimeout(timer);
-  }, [value, ms]);
-  return debounced;
-}
 
 /** The search's wording: the QR page speaks to the player, the TD's desk about them. */
 export interface PlayerSearchWording {
@@ -122,12 +114,13 @@ export function PlayerSearch({ tournamentId, selected, onSelect, wording = PLAYE
                   onClick={() => onSelect(player)}
                   aria-pressed={isSelected}
                   className={cn(
-                    "flex min-h-12 w-full items-center gap-3 rounded-lg border-2 p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    "flex min-h-14 w-full items-center gap-3 rounded-lg border-2 px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     isSelected ? "border-primary bg-primary/5" : "border-border hover:border-primary/50",
                   )}
                   data-testid={`player-option-${player.id}`}
                 >
-                  <PlayerAvatar name={player.name} imageUrl={player.imageUrl} size="sm" />
+                  {/* Big enough to know yourself by (round 5, item 6); initials for a player with no picture. */}
+                  <PlayerAvatar name={player.name} imageUrl={player.imageUrl} size="md" />
                   <span className="flex-1 font-medium text-foreground">{player.name}</span>
                   {isSelected ? <Check className="h-4 w-4 text-primary" aria-hidden="true" /> : null}
                 </button>

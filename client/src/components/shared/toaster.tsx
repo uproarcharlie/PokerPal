@@ -28,8 +28,9 @@ export function Toaster() {
       // Not "outside" an open dialog or sheet: tapping a toast leaves the form open (lib/notifications-region).
       {...{ [NOTIFICATIONS_REGION_ATTRIBUTE]: "" }}
       // At the foot of the screen (above the phone's home bar), never over the staff header and its menu
-      // button at the top of a phone, where it sat after nearly every desk action (MA-P3REV1-05).
-      className="pointer-events-none fixed bottom-0 z-[100] flex max-h-screen w-full flex-col gap-2 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:right-0 md:max-w-[420px]"
+      // button at the top of a phone, where it sat after nearly every desk action (MA-P3REV1-05). Over a
+      // phone's bottom tab bar (the TD's page), above it and its quick-action button instead.
+      className="pointer-events-none fixed bottom-0 z-[100] flex max-h-screen w-full flex-col gap-2 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:right-0 md:max-w-[420px] [:root:has([data-bottom-bar])_&]:bottom-[calc(7.5rem+env(safe-area-inset-bottom))]"
       data-testid="notifications"
     >
       <ol role="list" aria-live="assertive" className="flex flex-col gap-2">

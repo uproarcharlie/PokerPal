@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { Check } from "lucide-react";
 import { updatePlayerSchema, type StaffPlayer } from "@shared/api/players";
-import { ImageField } from "@/components/image/image-field";
+import { PlayerPhotoField } from "@/components/image/player-photo-field";
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
@@ -31,7 +31,7 @@ interface EditPlayerSheetProps {
   onClose: () => void;
 }
 
-/** Edit a player's photo, name, email and phone in a panel from the side. */
+/** Edit a player's photo (or avatar), name, email and phone in a panel from the side. */
 export function EditPlayerSheet({ player, onClose }: EditPlayerSheetProps) {
   return (
     <Sheet open={player !== null} onOpenChange={(open) => (open ? undefined : onClose())}>
@@ -83,9 +83,10 @@ function PlayerForm({ player, onDone }: { player: EditablePlayer; onDone: () => 
               name="imageUrl"
               render={({ field }) => (
                 <FormItem>
-                  <ImageField
-                    kind="player_avatar"
+                  <PlayerPhotoField
+                    taker="staff"
                     label="Player Photo"
+                    description="A photo, or one of the avatars, shown next to their name."
                     value={field.value}
                     onChange={field.onChange}
                     onUploadingChange={setUploading}

@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { z } from "zod";
 import { BLIND_PRESETS, generateStructure, type StructureGeneratorInput } from "../domain/blind-structures";
-import type { BlindLevel, ClockAction, ClockStructure } from "../domain/clock";
+import type { BlindLevel, ClockAction, ClockStructure, EdgeMargin } from "../domain/clock";
 import {
   blindLevelSchema,
   clockActionSchema,
@@ -9,6 +9,7 @@ import {
   clockDisplaySettingsPatchSchema,
   clockStructureSchema,
   DEFAULT_DISPLAY_SETTINGS,
+  type ClockDisplaySettings,
   earlyBirdsSchema,
   resolveDisplaySettings,
   structureGeneratorSchema,
@@ -95,7 +96,7 @@ describe("the clock request schemas", () => {
 });
 
 describe("display settings", () => {
-  it("default to showing the pool only once it is locked, and the QR to the season", () => {
+  it("default to the TV's core set: the pool once locked, the payouts, the average stack, the QR to the season, every sound, a 2.5% edge margin (round 5, items 20–26)", () => {
     expect(DEFAULT_DISPLAY_SETTINGS).toEqual({
       showPrizePool: "when_locked",
       showPayouts: true,
@@ -103,7 +104,22 @@ describe("display settings", () => {
       showAverageStack: true,
       qrTarget: "season",
       overlay: "none",
+      showLevel: false,
+      showEntries: false,
+      showRebuys: false,
+      showAddons: false,
+      showEarlyBirds: false,
+      showChipsInPlay: false,
+      showTables: false,
+      showRebuyWindow: false,
+      soundVolume: 0.8,
+      soundMinute: true,
+      soundCountdown: true,
+      soundLevel: true,
+      soundBreak: true,
+      edgeMargin: 2.5,
     });
+    expectTypeOf<ClockDisplaySettings["edgeMargin"]>().toEqualTypeOf<EdgeMargin>();
   });
 
   it("are read back field by field, never throwing", () => {
@@ -114,13 +130,23 @@ describe("display settings", () => {
       showAp: true,
       overlay: "seating",
     });
+    expect(resolveDisplaySettings({ soundVolume: 1.5, edgeMargin: 3, showLevel: "yes" })).toEqual(DEFAULT_DISPLAY_SETTINGS);
+  });
+
+  it("read a clock stored before the round 5 settings with each new one at its default", () => {
+    const phase4 = { showPrizePool: "always", showPayouts: false, showAp: true, showAverageStack: true, qrTarget: "seats", overlay: "none" };
+    expect(resolveDisplaySettings(phase4)).toEqual({ ...DEFAULT_DISPLAY_SETTINGS, ...phase4 });
   });
 
   it("are patched one or more at a time, refusing unknown or empty patches", () => {
     expect(clockDisplaySettingsPatchSchema.parse({ overlay: "payouts" })).toEqual({ overlay: "payouts" });
+    expect(clockDisplaySettingsPatchSchema.parse({ showLevel: true, soundVolume: 0.35, edgeMargin: 0 })).toEqual({ showLevel: true, soundVolume: 0.35, edgeMargin: 0 });
     expect(clockDisplaySettingsPatchSchema.safeParse({}).success).toBe(false);
     expect(clockDisplaySettingsPatchSchema.safeParse({ colour: "red" }).success).toBe(false);
     expect(clockDisplaySettingsPatchSchema.safeParse({ showPrizePool: "sometimes" }).success).toBe(false);
+    expect(clockDisplaySettingsPatchSchema.safeParse({ soundVolume: -0.1 }).success).toBe(false);
+    expect(clockDisplaySettingsPatchSchema.safeParse({ edgeMargin: 10 }).success).toBe(false);
+    expect(clockDisplaySettingsPatchSchema.safeParse({ showEarlyBirds: "on" }).success).toBe(false);
   });
 });
 

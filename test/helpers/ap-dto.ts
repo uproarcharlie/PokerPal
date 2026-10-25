@@ -59,6 +59,7 @@ export function prizePoolDto(
     adjustment: tournament.prizePoolAdjustedAt
       ? { reason: tournament.prizePoolAdjustmentReason, adjustedAt: tournament.prizePoolAdjustedAt }
       : null,
+    carryTarget: "the next tournament",
     ...overrides,
   };
 }
@@ -72,7 +73,7 @@ export function apUpdateResponse(tournament: TournamentDetailDto, registrations:
 export function publicSeasonLeaderboardDto(overrides: Partial<PublicSeasonLeaderboardDto> = {}): PublicSeasonLeaderboardDto {
   return {
     season: { id: "s1", name: "Summer 2026", startDate: "2026-09-01T00:00:00.000Z", endDate: "2027-03-31T00:00:00.000Z", isActive: true },
-    club: { id: "c1", name: "Central Stars", slug: "central-stars", imageUrl: null },
+    club: { id: "c1", name: "Central Stars", slug: "central-stars", imageUrl: null, theme: null },
     entries: [
       leaderboardEntryDto(1, "Ann Smith", 120, { tournaments: 5 }),
       leaderboardEntryDto(2, "Bea Jones", 95, { tournaments: 4 }),

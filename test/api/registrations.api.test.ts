@@ -70,7 +70,8 @@ const publicPlayer = (player: Player) => ({ id: player.id, name: player.name, im
  * A registration as the club's staff get it (ManagedRegistration): the row with the player reduced to
  * PublicPlayer. Everyone else gets `asPublic` of it, without whether it has paid (P2REV0-SEC-04).
  */
-const withPlayer = (registration: object, player: Player) => ({ ...(asJson(registration) as object), player: publicPlayer(player) });
+/** A registration as the API answers it, in the field (round 5: `waitingListPosition` null). */
+const withPlayer = (registration: object, player: Player) => ({ ...(asJson(registration) as object), player: publicPlayer(player), waitingListPosition: null });
 const asPublic = ({ paymentConfirmed: _paid, ...rest }: Record<string, unknown>) => rest;
 
 /** The QR page's sign-up of a player whose details the visitor typed in: it carries their sign-up token, unless `body` sets one. */
@@ -108,6 +109,9 @@ describe("POST /api/tournaments/:id/registrations", () => {
       highHandAmount: null,
       earlyBird: false,
       player: publicPlayer(player),
+      // Round 5: in the field (no waiting list), and what auto-seat did; before any table is in play, setup seats everyone.
+      waitingListPosition: null,
+      seating: { status: "waiting", reason: "no_tables" },
     });
     expect(findForbiddenKeys(response.body)).toEqual([]);
     expect(await activityFor(tournament.id)).toEqual([logEntry("registration", "Alice registered for the tournament", player)]);
@@ -187,10 +191,12 @@ describe("POST /api/tournaments/:id/registrations", () => {
     await registered(tournament.id, "Alice");
     const { agent } = await signIn();
 
-    const full = await agent.post(`/api/tournaments/${tournament.id}/registrations`).send(vouched({ playerId: (await createPlayer()).id }));
+    const response = await agent.post(`/api/tournaments/${tournament.id}/registrations`).send(vouched({ playerId: (await createPlayer()).id, paymentConfirmed: true }));
 
-    expect(full.status).toBe(409);
-    expect(full.body.code).toBe("TOURNAMENT_FULL");
+    expect(response.status).toBe(201);
+    expect(response.body).not.toHaveProperty("paymentConfirmed");
+    expect(response.body.waitingListPosition).toBe(1);
+    expect(await registrationRow(response.body.id)).toMatchObject({ paymentConfirmed: false });
   });
 
   it("answers 404 for an unknown tournament or player", async () => {
@@ -230,18 +236,38 @@ describe("POST /api/tournaments/:id/registrations", () => {
     expect(await registrationsOf(tournament.id)).toHaveLength(1);
   });
 
-  it("refuses a sign-up once maxPlayers is reached (409 TOURNAMENT_FULL), but lets staff seat an extra player", async () => {
+  it("takes sign-ups past Max players onto a numbered waiting list, from the QR page and the desk alike (round 5, item 15)", async () => {
     const { tournament, agent } = await ownedTournament({ maxPlayers: 2 });
     await registered(tournament.id, "Alice");
     await registered(tournament.id, "Bob", { paymentConfirmed: true });
+    const carol = await createPlayer({ name: "Carol" });
 
-    const anonymous = await signUp(tournament, { playerId: (await createPlayer()).id });
+    const anonymous = await signUp(tournament, { playerId: carol.id });
     const staff = await agent.post(`/api/tournaments/${tournament.id}/registrations`).send({ playerId: (await createPlayer()).id });
 
-    expect(anonymous.status).toBe(409);
-    expect(anonymous.body.code).toBe("TOURNAMENT_FULL");
+    expect(anonymous.status).toBe(201);
+    expect(anonymous.body).toMatchObject({ waitingListPosition: 1, seating: { status: "waiting", reason: "awaiting_payment" } });
     expect(staff.status).toBe(201);
-    expect(await registrationsOf(tournament.id)).toHaveLength(3);
+    expect(staff.body).toMatchObject({ waitingListPosition: 2, paymentConfirmed: false });
+    expect(await registrationsOf(tournament.id)).toHaveLength(4);
+    expect((await activityFor(tournament.id)).map((entry) => entry.description)).toContain("Carol registered for the tournament: #1 on the waiting list");
+    const listed = (await agent.get(`/api/tournaments/${tournament.id}/registrations`)).body as Array<{ waitingListPosition: number | null }>;
+    expect(listed.map((entry) => entry.waitingListPosition)).toEqual([null, null, 1, 2]);
+  });
+
+  it("refuses staff accepting a player past Max players at the desk (409 TOURNAMENT_FULL, no override), owners included", async () => {
+    const { tournament, agent } = await ownedTournament({ maxPlayers: 2, rebuyAmount: "20.00" });
+    await registered(tournament.id, "Alice", { paymentConfirmed: true });
+    await registered(tournament.id, "Bob", { paymentConfirmed: true });
+
+    const paid = await agent.post(`/api/tournaments/${tournament.id}/registrations`).send({ playerId: (await createPlayer()).id, paymentConfirmed: true });
+    const reBought = await agent.post(`/api/tournaments/${tournament.id}/registrations`).send({ playerId: (await createPlayer()).id, rebuys: 1 });
+
+    for (const response of [paid, reBought]) {
+      expect(response.status).toBe(409);
+      expect(response.body).toEqual({ error: "2 of 2 players accepted: raise Max players to accept more", code: "TOURNAMENT_FULL" });
+    }
+    expect(await registrationsOf(tournament.id)).toHaveLength(2);
   });
 
   it.each(["completed", "cancelled"])("refuses any registration for a %s tournament (409 TOURNAMENT_CLOSED)", async (status) => {
@@ -301,7 +327,7 @@ describe("POST /api/tournaments/:id/registrations", () => {
     expect(await registrationsOf(tournament.id)).toHaveLength(1);
   });
 
-  it("never seats more than maxPlayers when the last seats are taken at once", async () => {
+  it("numbers the waiting list once when the last places are taken at once", async () => {
     const tournament = await createTournament({ clubId: (await createClub()).id, maxPlayers: 2 });
     const entrants = await Promise.all([1, 2, 3, 4].map(() => createPlayer()));
     const app = await anon();
@@ -310,8 +336,9 @@ describe("POST /api/tournaments/:id/registrations", () => {
       entrants.map((player) => app.post(`/api/tournaments/${tournament.id}/registrations`).send(vouched({ playerId: player.id }))),
     );
 
-    expect(responses.map((r) => r.status).sort()).toEqual([201, 201, 409, 409]);
-    expect(await registrationsOf(tournament.id)).toHaveLength(2);
+    expect(responses.map((r) => r.status)).toEqual([201, 201, 201, 201]);
+    expect(responses.map((r) => r.body.waitingListPosition).sort()).toEqual([1, 2, null, null]);
+    expect(await registrationsOf(tournament.id)).toHaveLength(4);
   });
 });
 
@@ -816,7 +843,8 @@ describe("POST /api/registrations/:id/counts", () => {
     const removed = await agent.post(`/api/registrations/${registration.id}/counts`).send({ rebuys: -1 });
 
     expect(added.status).toBe(200);
-    expect(added.body).toEqual({ ...withPlayer(registration, player), rebuys: 2, addons: 1, knockouts: 1 });
+    const { waitingListPosition: _notWorkedOut, ...counted } = withPlayer(registration, player);
+    expect(added.body).toEqual({ ...counted, rebuys: 2, addons: 1, knockouts: 1 });
     expect(removed.body).toMatchObject({ rebuys: 1, addons: 1, knockouts: 1 });
     const logs = await activityFor(tournament.id);
     expect(logs).toHaveLength(2);
@@ -881,7 +909,8 @@ describe("PATCH /api/registrations/:id/confirm-payment", () => {
     const response = await agent.patch(`/api/registrations/${registration.id}/confirm-payment`);
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ ...withPlayer(registration, player), paymentConfirmed: true });
+    // Round 5: no table is in play, so auto-seat had nothing to do.
+    expect(response.body).toEqual({ ...withPlayer(registration, player), paymentConfirmed: true, seating: null });
     expect(await activityFor(tournament.id)).toEqual([logEntry("payment_confirmed", "Payment confirmed for Alice", player)]);
   });
 
@@ -964,7 +993,7 @@ describe("pending and confirmed registrations (the payment desk)", () => {
   /** A row as its home club's staff see it: the player's contact details included (ClubPlayer). */
   const staffRow = (entry: { registration: object; player: Player }) => {
     const { userId: _userId, ...player } = asJson(entry.player) as Record<string, unknown>;
-    return { ...(asJson(entry.registration) as object), player: { ...player, canEdit: true } };
+    return { ...(asJson(entry.registration) as object), player: { ...player, canEdit: true }, waitingListPosition: null };
   };
 
   it("lists unpaid registrations in sign-up order with amountOwed counting every buy-in, re-buy, add-on and the high hand (money-18)", async () => {
@@ -977,6 +1006,24 @@ describe("pending and confirmed registrations (the payment desk)", () => {
       { ...staffRow(unpaidMulti), amountOwed: 175 },
       { ...staffRow(unpaid), amountOwed: 70 },
     ]);
+  });
+
+  it("numbers the unpaid sign-ups past Max players as the waiting list (round 5, item 15)", async () => {
+    const { tournament, agent } = await ownedTournament({ maxPlayers: 2 });
+    await registered(tournament.id, "Paid", { paymentConfirmed: true, registrationTime: new Date(Date.UTC(2026, 2, 1, 18, 1)) });
+    await registered(tournament.id, "First", { registrationTime: new Date(Date.UTC(2026, 2, 1, 18, 2)) });
+    await registered(tournament.id, "Second", { registrationTime: new Date(Date.UTC(2026, 2, 1, 18, 3)) });
+    await registered(tournament.id, "Third", { registrationTime: new Date(Date.UTC(2026, 2, 1, 18, 4)) });
+
+    const pending = (await agent.get(`/api/tournaments/${tournament.id}/pending-registrations`)).body as Array<{ player: { name: string }; waitingListPosition: number | null }>;
+    const confirmed = (await agent.get(`/api/tournaments/${tournament.id}/confirmed-registrations`)).body as Array<{ waitingListPosition: number | null }>;
+
+    expect(pending.map((row) => [row.player.name, row.waitingListPosition])).toEqual([
+      ["First", null],
+      ["Second", 1],
+      ["Third", 2],
+    ]);
+    expect(confirmed.map((row) => row.waitingListPosition)).toEqual([null]);
   });
 
   it("lists paid registrations with amountPaid worked out the same way", async () => {
@@ -1042,12 +1089,12 @@ describe("who an anonymous sign-up may register (P2REV0-02)", () => {
     const ours = await createTournament({ clubId: (await createClub()).id });
     const env = loadEnv(process.env);
 
-    const expired = await signUp(ours, { playerId: theirs.id, signUpToken: issueSignUpToken(env, theirs.id, Date.now() - SIGN_UP_TOKEN_TTL_MS - 1) });
+    const expired = await signUp(ours, { playerId: theirs.id, signUpToken: issueSignUpToken(env, theirs.id, null, Date.now() - SIGN_UP_TOKEN_TTL_MS - 1) });
     expect(expired.status).toBe(404);
     expect(expired.body).toEqual({ error: "Player not found", code: "PLAYER_NOT_FOUND" });
     expect(await registrationsOf(ours.id)).toEqual([]);
 
-    const fresh = await signUp(ours, { playerId: theirs.id, signUpToken: issueSignUpToken(env, theirs.id, Date.now() - SIGN_UP_TOKEN_TTL_MS + 60_000) });
+    const fresh = await signUp(ours, { playerId: theirs.id, signUpToken: issueSignUpToken(env, theirs.id, null, Date.now() - SIGN_UP_TOKEN_TTL_MS + 60_000) });
     expect(fresh.status).toBe(201);
   });
 
@@ -1078,20 +1125,22 @@ describe("DELETE /api/registrations/:id (P2REV0-02)", () => {
     const { tournament, agent } = await ownedTournament({ status: "in_progress", maxPlayers: 2, rebuyAmount: "20.00" });
     const { player, registration } = await registered(tournament.id, "Fake Entry");
     const { player: other } = await registered(tournament.id, "Real Player");
-    expect((await signUp(tournament, { playerId: (await createPlayer()).id })).body.code).toBe("TOURNAMENT_FULL");
+    const late = await signUp(tournament, { playerId: (await createPlayer()).id });
+    expect(late.body.waitingListPosition).toBe(1);
     await (await anon()).post(`/api/tournaments/${tournament.id}/pending-actions`).send({ playerId: player.id, actionType: "rebuy" });
 
     const response = await agent.delete(`/api/registrations/${registration.id}`);
 
     expect(response.status).toBe(204);
-    expect((await registrationsOf(tournament.id)).map((r) => r.playerId)).toEqual([other.id]);
+    expect((await registrationsOf(tournament.id)).map((r) => r.playerId).sort()).toEqual([other.id, late.body.playerId].sort());
     expect(await testDb().select().from(pendingActions).where(eq(pendingActions.tournamentId, tournament.id))).toEqual([]);
     expect((await activityFor(tournament.id)).at(-1)).toEqual(logEntry("registration_removed", "Fake Entry's entry was removed", player));
     const [audit] = await testDb().select().from(auditLog).where(eq(auditLog.action, "registration.remove"));
     expect(audit).toMatchObject({ targetType: "registration", targetId: registration.id, data: { requestsRemoved: 1, playerName: "Fake Entry" } });
     expect((audit.data as { registration: { id: string } }).registration.id).toBe(registration.id);
-    // The seat is free again for a real QR sign-up.
-    expect((await signUp(tournament, { playerId: (await createPlayer()).id })).status).toBe(201);
+    // The place is free again: the first on the waiting list moves into the field.
+    const listed = (await agent.get(`/api/tournaments/${tournament.id}/registrations`)).body as Array<{ waitingListPosition: number | null }>;
+    expect(listed.map((entry) => entry.waitingListPosition)).toEqual([null, null]);
   });
 
   it("refuses an entry that already has results, counts or knockouts (409 REGISTRATION_IN_PLAY), and a closed tournament", async () => {

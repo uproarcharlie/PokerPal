@@ -3,10 +3,13 @@
  * functions the server pays with); dates and times are shown in the club's time zone, so a player
  * abroad and the TD at the venue read the same start time.
  */
-import { formatMoney, toCents, type Cents, type MoneyInput } from "@shared/domain/money";
+import { centsToDecimalString, formatMoney, toCents, type Cents, type MoneyInput } from "@shared/domain/money";
 
 export { formatMoney };
 export type { Cents };
+
+/** An amount as a box shows it for editing: "300" for $300, "12.50" for $12.50 (the payout editor, a deal). */
+export const amountBoxText = (cents: Cents): string => (cents % 100 === 0 ? String(cents / 100) : centsToDecimalString(cents));
 
 /** A decimal amount as the API sends row columns ("50.00", "12.5"), formatted like formatMoney. */
 export function formatAmount(value: MoneyInput, options: { forceCents?: boolean } = {}): string {
@@ -178,6 +181,17 @@ export function initials(name: string | null | undefined, max = 2): string {
     .slice(0, max)
     .join("")
     .toLocaleUpperCase(LOCALE);
+}
+
+/**
+ * The name written beside a seat on a table drawing (the TD's plan, the seat finder, the TV's seats):
+ * "Alice S." for "Alice Smith", so two Alices at one table are told apart; one word as it is. One rule
+ * for every drawing (R5REV3-CQ-07).
+ */
+export function seatLabel(name: string): string {
+  const words = name.trim().split(/\s+/);
+  if (words.length < 2) return words[0] ?? "";
+  return `${words[0]} ${words[words.length - 1].charAt(0).toLocaleUpperCase(LOCALE)}.`;
 }
 
 const WHOLE_NUMBER = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 0 });

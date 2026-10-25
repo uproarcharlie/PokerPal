@@ -38,6 +38,7 @@ import {
   type RouteRow,
 } from "../helpers/authz-matrix";
 import { CLOCK_ROUTE_ROWS } from "../helpers/authz-rows-clock";
+import { MONEY_ROUTE_ROWS } from "../helpers/authz-rows-money";
 import { SEATING_ROUTE_ROWS } from "../helpers/authz-rows-seating";
 import { agentFor, clubWithStaff, VISITORS, type ClubStaffAgents } from "../helpers/club-staff";
 import { solidImage } from "../helpers/images";
@@ -421,6 +422,7 @@ const ROUTES: Record<string, RouteRow> = {
   // Phase 4: each domain keeps its rows beside its routes' contract.
   ...SEATING_ROUTE_ROWS,
   ...CLOCK_ROUTE_ROWS,
+  ...MONEY_ROUTE_ROWS,
 };
 
 let uploadDir: string;

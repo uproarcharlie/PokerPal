@@ -155,6 +155,17 @@ describe("GET /api/dashboard/stats", () => {
     expect((await statsFor((await signInAdmin()).agent)).totalPrizePool).toBe(550);
   });
 
+  it("counts a live pool's difference added to the prizes, and money carried into it, as finalize pays them (round 5, item 16)", async () => {
+    const club = await createClub();
+    // $60 in, prizes set at $50: the $10 left over goes to 1st, so the pool pays $60.
+    await tournamentWith(club.id, { status: "in_progress", buyInAmount: "20.00", manualPrizePool: "50.00", prizeDifference: "first" }, [{}, {}, {}]);
+    // $60 in and $40 carried over from an earlier tournament: a $100 pool.
+    const carriedIn = [{ carryOverId: "co-1", fromTournamentId: null, fromName: "Test Wednesday", amountCents: 4_000 }];
+    await tournamentWith(club.id, { status: "registration", buyInAmount: "20.00", carriedIn }, [{}, {}, {}]);
+
+    expect((await statsFor((await signInAdmin()).agent)).totalPrizePool).toBe(160);
+  });
+
   it("counts what a completed tournament paid, never a recomputed pool (money-14, spec D20)", async () => {
     const club = await createClub();
     // A $180 pool (4 x $50 less 10%) that paid $100 and $50: it adds the $150 paid.

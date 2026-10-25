@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { RotateCcw, Trash2, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/shared/query-state";
 import { MoneyText } from "@/components/shared/money-text";
 import { PlayerAvatar } from "@/components/image/player-avatar";
 import { ResponsiveTable, type ResponsiveColumn } from "@/components/shared/responsive-table";
+import { PHONE_QUERY, useMediaQuery } from "@/components/shared/use-media-query";
 import { useBusyRows } from "@/hooks/use-busy-rows";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/api/http";
@@ -20,13 +21,19 @@ import { useSeating } from "@/features/seating/staff-hooks";
 import type { SeatingDto } from "@shared/api/seating";
 import { useRemoveRegistration, useUpdateRegistration } from "../../staff-hooks";
 import { playerName } from "../../player-name";
+import { BustSheet } from "../mobile/bust-sheet";
 import { EliminatePlayerDialog } from "./eliminate-player-dialog";
 import { useAnnounceReturn } from "./undo-elimination";
 import { PlaceBadge, StandingStatus } from "@/components/shared/podium";
+import { lineupOf } from "@/features/public-tournament/waiting-list";
+import { acceptRefusal } from "@shared/domain/waiting-list";
+import { WaitingListCard } from "./waiting-list-card";
 
 interface StandingsTableProps {
   tournamentId: string;
   registrations: readonly PublicRegistration[];
+  /** The field's cap: sign-ups past it are on the waiting list, shown under the standings (round 5, item 15). */
+  maxPlayers: number;
   /** Eliminate, restore and remove are for the club's staff (viewer.canManage). */
   canManage: boolean;
   /** Completed or cancelled: the standings can no longer change here (a finished one is fixed with Correct Results). */
@@ -91,8 +98,13 @@ function entryText(registration: PublicRegistration): string {
   return addons > 0 ? `${entries} · ${plural(addons, "add-on")}` : entries;
 }
 
-/** The players, best first, with the TD's eliminate, restore and remove controls while the game is open. */
-export function StandingsTable({ tournamentId, registrations, canManage, closed, completed }: StandingsTableProps) {
+/**
+ * The players, best first, with the TD's eliminate, restore and remove controls while the game is
+ * open; under them the waiting list behind a full field, whose players are in none of it.
+ */
+export function StandingsTable({ tournamentId, registrations: everyone, maxPlayers, canManage, closed, completed }: StandingsTableProps) {
+  // Worked out once per answer: the focus effect below follows the field.
+  const { field: registrations, waiting: waitingList } = useMemo(() => lineupOf(everyone, maxPlayers), [everyone, maxPlayers]);
   const { toast } = useToast();
   const [eliminating, setEliminating] = useState<PublicRegistration | null>(null);
   const [removing, setRemoving] = useState<PublicRegistration | null>(null);
@@ -120,6 +132,10 @@ export function StandingsTable({ tournamentId, registrations, canManage, closed,
     },
   }));
   const afterEliminate = useFirstInPage(eliminatedControl, heading);
+  const phone = useMediaQuery(PHONE_QUERY);
+  const onEliminated = (registrationId: string) => {
+    keepFocus.current = { registrationId, eliminated: true };
+  };
 
   useEffect(() => {
     const wanted = keepFocus.current;
@@ -176,16 +192,26 @@ export function StandingsTable({ tournamentId, registrations, canManage, closed,
         <StandingStatus place={placeOf.get(registration.id) ?? null} eliminated={registration.isEliminated === true} completed={completed} />
       ),
     },
+    // A phone's card is short (round5-contracts §8.1): the entries are under the name already, and the
+    // points and prizes are only written when the tournament is finalized.
     {
       id: "entry",
       header: "Entry",
+      phone: "hidden",
       className: "text-sm text-muted-foreground",
       cell: entryText,
     },
-    { id: "points", header: "Points", className: "text-sm font-semibold text-foreground", cell: (registration) => formatNumber(registration.pointsAwarded ?? 0) },
+    {
+      id: "points",
+      header: "Points",
+      phone: completed ? "detail" : "hidden",
+      className: "text-sm font-semibold text-foreground",
+      cell: (registration) => formatNumber(registration.pointsAwarded ?? 0),
+    },
     {
       id: "prize",
       header: "Prize",
+      phone: completed ? "detail" : "hidden",
       className: "text-sm font-semibold",
       cell: (registration) =>
         registration.prizeAmount ? <MoneyText amount={registration.prizeAmount} className="text-accent-text" /> : <span className="text-muted-foreground">-</span>,
@@ -205,6 +231,7 @@ export function StandingsTable({ tournamentId, registrations, canManage, closed,
             {registration.isEliminated ? (
               <Button
                 variant="outline"
+                className="h-11 md:h-10"
                 onClick={() => void restorePlayer(registration)}
                 busy={restoring.busy.has(registration.id)}
                 aria-label={`Restore ${name}`}
@@ -221,7 +248,7 @@ export function StandingsTable({ tournamentId, registrations, canManage, closed,
                   eliminatedId.current = registration.id;
                   setEliminating(registration);
                 }}
-                className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                className="h-11 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive md:h-10"
                 aria-label={`Eliminate ${name}`}
                 data-standing-control={registration.id}
                 data-testid={`eliminate-player-${registration.id}`}
@@ -234,6 +261,7 @@ export function StandingsTable({ tournamentId, registrations, canManage, closed,
               <Button
                 variant="ghost"
                 size="icon"
+                className="h-11 w-11 md:h-10 md:w-10"
                 onClick={() => setRemoving(registration)}
                 aria-label={`Remove ${name}'s entry`}
                 data-testid={`remove-registration-${registration.id}`}
@@ -248,66 +276,88 @@ export function StandingsTable({ tournamentId, registrations, canManage, closed,
   }
 
   return (
-    <Card>
-      <CardHeader className="border-b border-border">
-        <CardTitle ref={heading} tabIndex={-1} className="focus:outline-none">
-          {closed ? "Final Standings" : "Current Standings"}
-        </CardTitle>
-        <p className="mt-1 text-sm text-muted-foreground" data-testid="standings-note">
-          {completed && canManage
-            ? "This tournament is finalized: to change who finished where, use Correct Results."
-            : closed
-              ? "This tournament is closed."
-              : "Live player rankings and eliminations"}
-        </p>
-      </CardHeader>
-      <CardContent ref={list} className="p-0">
-        {rows.length === 0 ? (
-          <EmptyState
-            className="m-4 border-0"
-            icon={<Users className="h-8 w-8" />}
-            title="No Players Registered"
-            description="Players will appear here once they register for the tournament."
+    <div className="space-y-4">
+      <Card>
+        <CardHeader className="border-b border-border">
+          <CardTitle ref={heading} tabIndex={-1} className="focus:outline-none">
+            {closed ? "Final Standings" : "Current Standings"}
+          </CardTitle>
+          <p className="mt-1 text-sm text-muted-foreground" data-testid="standings-note">
+            {completed && canManage
+              ? "This tournament is finalized: to change who finished where, use Correct Results."
+              : closed
+                ? "This tournament is closed."
+                : "Live player rankings and eliminations"}
+          </p>
+        </CardHeader>
+        <CardContent ref={list} className="p-0">
+          {rows.length === 0 ? (
+            <EmptyState
+              className="m-4 border-0"
+              icon={<Users className="h-8 w-8" />}
+              title="No Players Registered"
+              description="Players will appear here once they register for the tournament."
+            />
+          ) : (
+            <ResponsiveTable
+              rows={rows}
+              columns={columns}
+              rowKey={(registration) => registration.id}
+              rowProps={(registration) => ({ "data-testid": `player-row-${registration.id}` })}
+              caption="Standings"
+            />
+          )}
+        </CardContent>
+
+        <ConfirmDialog
+          open={removing !== null}
+          onOpenChange={(open) => !open && setRemoving(null)}
+          // A removed entry's row (and its button) is gone: focus goes to the standings' heading.
+          returnFocusTo={heading}
+          title="Remove this entry?"
+          description={`${removing?.player?.name ?? "This player"}: use this for a sign-up that should not be here, such as the wrong player or someone who is not playing. Their requests waiting for confirmation are removed too.`}
+          confirmLabel="Remove entry"
+          pendingLabel="Removing…"
+          destructive
+          onConfirm={async () => {
+            if (!removing) return;
+            await remove.mutateAsync(removing.id);
+            toast({ title: "Entry removed", description: "The player is no longer registered for this tournament" });
+          }}
+        />
+
+        {/* On a phone the bust is the photo picker's two taps from here (round5-contracts §8.1); a wider screen keeps the dialog. */}
+        {phone ? (
+          <BustSheet
+            tournamentId={tournamentId}
+            registrations={registrations}
+            seatOf={seatOf}
+            open={eliminating !== null}
+            player={eliminating}
+            onOpenChange={(open) => !open && setEliminating(null)}
+            onEliminated={onEliminated}
+            returnFocusTo={afterEliminate}
           />
         ) : (
-          <ResponsiveTable
-            rows={rows}
-            columns={columns}
-            rowKey={(registration) => registration.id}
-            rowProps={(registration) => ({ "data-testid": `player-row-${registration.id}` })}
-            caption="Standings"
+          <EliminatePlayerDialog
+            tournamentId={tournamentId}
+            registration={eliminating}
+            registrations={registrations}
+            seatOf={seatOf}
+            onEliminated={onEliminated}
+            onClose={() => setEliminating(null)}
+            returnFocusTo={afterEliminate}
           />
         )}
-      </CardContent>
-
-      <ConfirmDialog
-        open={removing !== null}
-        onOpenChange={(open) => !open && setRemoving(null)}
-        // A removed entry's row (and its button) is gone: focus goes to the standings' heading.
-        returnFocusTo={heading}
-        title="Remove this entry?"
-        description={`${removing?.player?.name ?? "This player"}: use this for a sign-up that should not be here, such as the wrong player or someone who is not playing. Their requests waiting for confirmation are removed too.`}
-        confirmLabel="Remove entry"
-        pendingLabel="Removing…"
-        destructive
-        onConfirm={async () => {
-          if (!removing) return;
-          await remove.mutateAsync(removing.id);
-          toast({ title: "Entry removed", description: "The player is no longer registered for this tournament" });
-        }}
-      />
-
-      <EliminatePlayerDialog
-        tournamentId={tournamentId}
-        registration={eliminating}
-        registrations={registrations}
-        seatOf={seatOf}
-        onEliminated={(registrationId) => {
-          keepFocus.current = { registrationId, eliminated: true };
-        }}
-        onClose={() => setEliminating(null)}
-        returnFocusTo={afterEliminate}
-      />
-    </Card>
+      </Card>
+      {closed ? null : (
+        <WaitingListCard
+          waiting={waitingList}
+          maxPlayers={maxPlayers}
+          full={canManage ? acceptRefusal(everyone, maxPlayers) : null}
+          onRemove={controls ? setRemoving : undefined}
+        />
+      )}
+    </div>
   );
 }

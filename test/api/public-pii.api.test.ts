@@ -245,7 +245,8 @@ describe("public reads", () => {
     expect(detail.body).toMatchObject({ status: "completed", prizePoolSnapshot: expect.any(Object) });
     // The finalize warnings are the TD's bookkeeping (unconfirmed payments, discarded requests): staff only (P2REV1-MONEY-02).
     expect(detail.body.prizePoolSnapshot).not.toHaveProperty("warnings");
-    expect(Object.keys(detail.body.prizePoolSnapshot).sort()).toEqual([...PUBLIC_SNAPSHOT_FIELDS].sort());
+    // Every public field, but the deal (round 5): this one was finalized without one.
+    expect(Object.keys(detail.body.prizePoolSnapshot).sort()).toEqual(PUBLIC_SNAPSHOT_FIELDS.filter((field) => field !== "deal").sort());
     expect(leaderboard.body.length).toBeGreaterThanOrEqual(3);
     expect(activity.body.map((entry: { eventType: string }) => entry.eventType)).toEqual(
       expect.arrayContaining(["elimination", "prize_pool_adjusted"]),

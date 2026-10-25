@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">
+<title>Shark</title>
+<defs><radialGradient id="glow" cx=".32" cy=".26" r=".85"><stop offset="0" stop-color="#fff" stop-opacity=".26"/><stop offset=".65" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>
+<rect width="96" height="96" fill="#0E7490"/>
+<rect width="96" height="96" fill="url(#glow)"/>
+<path d="M18 65C28 60 37 48 42 36C46 27 53 19 66 15C61 28 60 46 72 65Z" fill="#E2E8F0"/>
+<path d="M66 15C61 28 60 46 72 65H64C56 50 56 31 66 15Z" fill="#94A3B8"/>
+<path d="M78 65C80 60 83 56 88 53C86 58 86 61 88 65Z" fill="#CBD5E1"/>
+<rect y="64" width="96" height="32" fill="#155E75"/>
+<path d="M-2 65Q6 59 14 65T30 65T46 65T62 65T78 65T94 65T110 65" fill="none" stroke="#A5F3FC" stroke-width="4" stroke-linecap="round"/>
+<path d="M6 78Q14 73 22 78T38 78T54 78T70 78T86 78" fill="none" stroke="#A5F3FC" stroke-opacity=".45" stroke-width="3" stroke-linecap="round"/>
+</svg>

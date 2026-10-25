@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">
+<title>Cowboy hat</title>
+<defs><radialGradient id="glow" cx=".32" cy=".26" r=".85"><stop offset="0" stop-color="#fff" stop-opacity=".26"/><stop offset=".65" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>
+<rect width="96" height="96" fill="#EA580C"/>
+<rect width="96" height="96" fill="url(#glow)"/>
+<path d="M31 60C30 46 31 32 37 25C40 22 44 24 48 28C52 24 56 22 59 25C65 32 66 46 65 60Z" fill="#000" fill-opacity=".2" transform="translate(0 2.5)"/>
+<path d="M31 60C30 46 31 32 37 25C40 22 44 24 48 28C52 24 56 22 59 25C65 32 66 46 65 60Z" fill="#92400E"/>
+<path d="M59 25C65 32 66 46 65 60H59C60 46 60 34 56 26Z" fill="#78350F"/>
+<path d="M48 30V45" stroke="#78350F" stroke-width="3" stroke-linecap="round"/>
+<path d="M31 50C41 53 55 53 65 50V57C55 60 41 60 31 57Z" fill="#FDE68A"/>
+<path d="M8 48C13 59 29 64 48 64C67 64 83 59 88 48C90 61 76 73 48 73C20 73 6 61 8 48Z" fill="#000" fill-opacity=".2" transform="translate(0 2.5)"/>
+<path d="M8 48C13 59 29 64 48 64C67 64 83 59 88 48C90 61 76 73 48 73C20 73 6 61 8 48Z" fill="#78350F"/>
+<path d="M10 51C17 60 31 64 48 64C65 64 79 60 86 51" fill="none" stroke="#B45309" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

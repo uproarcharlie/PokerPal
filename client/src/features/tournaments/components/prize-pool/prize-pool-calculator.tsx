@@ -2,10 +2,11 @@ import { formatAmount, formatMoney, type Cents } from "@/lib/format";
 import { EmptyState } from "@/components/shared/query-state";
 import { Calculator } from "lucide-react";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
+import { carryTargetName, differenceLines } from "@shared/domain/prize-difference";
 import { DEFAULT_RAKE_LABEL, type PayoutDisplay, type PrizePoolBreakdown, type PrizePoolInput } from "@shared/domain/prize-pool";
 import { describeApRates, rateText } from "@shared/domain/rake-rates";
 import { HighHandAwards, PaidPool } from "./paid-pool";
-import { ManualAdjustment, PoolCard, PoolLine } from "./pool-lines";
+import { DifferenceRows, LeftoverNote, PoolCard, PoolLine } from "./pool-lines";
 import { offersAddons, offersHighHand, offersRebuys } from "@shared/domain/player-actions";
 
 /** What the calculator reads of a tournament: its money settings, and what finalize froze. */
@@ -21,6 +22,8 @@ interface PrizePoolCalculatorProps {
   rakeLabel?: string;
   /** The high-hand prizes already awarded, in cents: what the next winner gets is worked out from them. */
   highHandAwardsCents?: readonly Cents[];
+  /** Where money carried over goes (PrizePoolDto.carryTarget); default "the next tournament". */
+  carryTarget?: string;
 }
 
 const amount = (value: PrizePoolInput["buyInAmount"]) => formatAmount(value, { forceCents: true });
@@ -37,9 +40,10 @@ export function PrizePoolCalculator({
   display,
   rakeLabel = DEFAULT_RAKE_LABEL,
   highHandAwardsCents = [],
+  carryTarget = carryTargetName(null),
 }: PrizePoolCalculatorProps) {
   const snapshot = display.source === "snapshot" ? tournament.prizePoolSnapshot : null;
-  if (snapshot) return <PaidPool pool={snapshot.pool} display={display} rakeLabel={rakeLabel} />;
+  if (snapshot) return <PaidPool pool={snapshot.pool} display={display} rakeLabel={rakeLabel} deal={snapshot.deal} />;
   if (display.source === "cancelled") {
     return (
       <PoolCard title="Prize Pool">
@@ -55,6 +59,7 @@ export function PrizePoolCalculator({
   const rates = describeApRates(tournament);
   const rakeDescription = rake.override !== null ? " (manual total)" : rates ? ` (${rates})` : "";
   const highHandRakeShown = (tournament.highHandRakeType === "percentage" || tournament.highHandRakeType === "fixed") && highHand.rake > 0;
+  const lines = differenceLines(breakdown, carryTarget);
 
   return (
     <PoolCard
@@ -67,8 +72,8 @@ export function PrizePoolCalculator({
             : "Real-time prize pool calculation"
       }
     >
-      {/* A manual pool with nothing taken in (a freeroll or a guaranteed pool) is still a pool finalize pays. */}
-      {gross.total > 0 || breakdown.manualPrizePool !== null ? (
+      {/* A manual pool or fixed prizes with nothing taken in (a freeroll, a guarantee) are still a pool finalize pays. */}
+      {gross.total > 0 || breakdown.manualPrizePool !== null || breakdown.net > 0 ? (
         <>
           <div className="space-y-1">
             <PoolLine label={`Buy-ins (${counts.buyIns} × ${amount(tournament.buyInAmount)})`} value={formatMoney(gross.buyIn)} testId="buyins-total" />
@@ -85,7 +90,7 @@ export function PrizePoolCalculator({
             {rake.applied > 0 ? (
               <PoolLine label={`${rakeLabel}${rakeDescription}`} value={`-${formatMoney(rake.applied)}`} testId="rake-amount" tone="deduction" />
             ) : null}
-            {breakdown.netSource === "manual_pool" ? <ManualAdjustment cents={breakdown.net - breakdown.netAfterAp} /> : null}
+            <DifferenceRows lines={lines} />
           </div>
 
           <div className="border-t-2 border-primary pt-3">
@@ -95,6 +100,7 @@ export function PrizePoolCalculator({
               testId="net-prize-pool"
               tone="result"
             />
+            <LeftoverNote lines={lines} />
             {breakdown.netSource === "manual_pool" ? (
               <p className="text-right text-xs text-muted-foreground" data-testid="manual-pool-note">
                 Set manually (calculated: {formatMoney(breakdown.netAfterAp)})

@@ -11,6 +11,7 @@ import {
   type UpdateClubInput,
 } from "@shared/api/clubs";
 import type { Viewer } from "@shared/api/common";
+import { readTheme } from "@shared/domain/theme";
 import { safeHttpUrl } from "@shared/domain/urls";
 import { pickFields, PUBLIC_CLUB_FIELDS, type ClubDto } from "@shared/api/public";
 import type { AppEnv } from "../config/env";
@@ -42,6 +43,8 @@ export function toClubDto(club: Club, viewer: Viewer): ClubDto {
     ...pickFields(club, PUBLIC_CLUB_FIELDS),
     ...links,
     description: servedDescription(club.description),
+    // A stored theme that does not read is never sent (as the TV, seat finder and season pages do).
+    theme: readTheme(club.theme),
     createdAt: club.createdAt?.toISOString() ?? null,
     viewer,
   };

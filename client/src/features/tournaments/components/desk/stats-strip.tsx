@@ -9,7 +9,10 @@ import { ManualPoolEditor, MaxPlayersEditor } from "./stat-editors";
 interface StatsStripProps {
   tournament: TournamentDetailDto;
   money: TournamentMoney;
+  /** The players in the field: the waiting list behind a full one is counted apart (round 5, item 15). */
   totalPlayers: number;
+  /** Sign-ups on the waiting list. */
+  waitingList: number;
   rakeLabel: string;
   /** The club's staff, while the tournament is open, may change the max players. */
   canEditPlayers: boolean;
@@ -42,7 +45,7 @@ function poolNote({ display, breakdown }: TournamentMoney, rakeLabel: string): s
 }
 
 /** The figures the TD reads out: players, the pool, and the entries it is made of. */
-export function StatsStrip({ tournament, money, totalPlayers, rakeLabel, canEditPlayers, canEditPool }: StatsStripProps) {
+export function StatsStrip({ tournament, money, totalPlayers, waitingList, rakeLabel, canEditPlayers, canEditPool }: StatsStripProps) {
   const [editing, setEditing] = useState<"players" | "pool" | null>(null);
   // While an AP total is fixed, a pool typed here would replace it (and its "Low turnout" reason) without a
   // word, and a blank one would change nothing: the AP dialog, which says so, sets the pool then (MONEY-AP-04).
@@ -73,7 +76,7 @@ export function StatsStrip({ tournament, money, totalPlayers, rakeLabel, canEdit
               ref={editPlayers}
               variant="ghost"
               size="sm"
-              className="-my-2 h-10 px-3"
+              className="-my-2 h-11 px-3 md:h-10"
               onClick={() => toggle("players")}
               aria-expanded={editing === "players"}
               aria-label={editing === "players" ? "Cancel editing max players" : "Edit max players"}
@@ -87,9 +90,16 @@ export function StatsStrip({ tournament, money, totalPlayers, rakeLabel, canEdit
         {editing === "players" && canEditPlayers ? (
           <MaxPlayersEditor tournamentId={tournament.id} current={tournament.maxPlayers} onDone={playersSaved} />
         ) : (
-          <p className={STAT} data-testid="players-count">
-            {totalPlayers}/{tournament.maxPlayers}
-          </p>
+          <>
+            <p className={STAT} data-testid="players-count">
+              {totalPlayers}/{tournament.maxPlayers}
+            </p>
+            {waitingList > 0 ? (
+              <p className="text-xs font-medium text-accent-text" data-testid="waiting-list-count">
+                +{waitingList} on the waiting list
+              </p>
+            ) : null}
+          </>
         )}
       </StatTile>
 
@@ -101,7 +111,7 @@ export function StatsStrip({ tournament, money, totalPlayers, rakeLabel, canEdit
               ref={editPool}
               variant="ghost"
               size="sm"
-              className="-my-2 h-10 px-3"
+              className="-my-2 h-11 px-3 md:h-10"
               onClick={() => (apFixed ? setAdjusting(true) : toggle("pool"))}
               aria-expanded={apFixed ? undefined : editing === "pool"}
               aria-label={editing === "pool" ? "Cancel editing the prize pool" : "Edit prize pool"}

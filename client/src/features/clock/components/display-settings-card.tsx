@@ -1,7 +1,8 @@
 import { memo, useId } from "react";
+import { Volume2 } from "lucide-react";
 import type { ClockDisplaySettings, ClockDisplaySettingsPatch } from "@shared/api/clock";
 import type { LiveDisplayDto } from "@shared/api/live-display";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
@@ -9,6 +10,9 @@ import { useBusyRows } from "@/hooks/use-busy-rows";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/api/http";
 import { useClockConfig } from "../staff-hooks";
+import { PanelCard } from "./panel-card";
+import { CUE_SWITCHES, EdgeMarginChoice, useVolumeDraft, VolumeSlider } from "./public/screen-settings";
+import { playTestSounds } from "./public/use-clock-sound";
 
 const PRIZE_POOL_CHOICES: ReadonlyArray<[ClockDisplaySettings["showPrizePool"], string]> = [
   ["when_locked", "Once the pool is locked"],
@@ -54,6 +58,21 @@ export function publicPoolNote(showPrizePool: ClockDisplaySettings["showPrizePoo
 
 type Choice<T> = ReadonlyArray<[T, string]>;
 
+/** The settings that are switched on or off. */
+type Toggle = { [K in keyof ClockDisplaySettings]: ClockDisplaySettings[K] extends boolean ? K : never }[keyof ClockDisplaySettings];
+
+/** The TV's figures beyond the core set, each off until switched on (round 5, items 21, 25 and 26). */
+const FIGURE_SWITCHES: ReadonlyArray<{ field: Toggle; label: string }> = [
+  { field: "showLevel", label: "Level number (LEVEL 3)" },
+  { field: "showEntries", label: "Entries" },
+  { field: "showRebuys", label: "Re-buys" },
+  { field: "showAddons", label: "Add-ons" },
+  { field: "showEarlyBirds", label: "Early birds" },
+  { field: "showChipsInPlay", label: "Chips in play" },
+  { field: "showTables", label: "Tables" },
+  { field: "showRebuyWindow", label: "Time left to re-buy (Re-buys close in …)" },
+];
+
 interface SettingsCardProps extends Pick<LiveDisplayDto, "qr" | "season"> {
   tournamentId: string;
   settings: ClockDisplaySettings;
@@ -61,24 +80,34 @@ interface SettingsCardProps extends Pick<LiveDisplayDto, "qr" | "season"> {
   rakeLabel: string;
   /** The prize pool is locked: every screen shows it. */
   poolLocked: boolean;
+  /** In a sheet of its own (a phone's Clock tab). */
+  bare?: boolean;
 }
 
 /**
- * What the TV clock shows, changed at once (no Save): the prize pool and payouts, the club's take,
- * the average stack, where the QR code leads, and a layer over the clock (the seats after a draw, the
- * payouts at the bubble).
+ * What the TV clock shows and plays, changed at once (no Save) and remembered for this tournament: the
+ * prize pool and payouts, the club's take, a layer over the clock (the seats after a draw, the payouts
+ * at the bubble), the figures beyond the core set (each off until switched on), where the QR code
+ * leads, the sounds (how loud, which, and a test on this device) and the edge margin for a TV that
+ * crops the picture's edges. Every screen showing the clock follows within a few seconds.
  */
-export const DisplaySettingsCard = memo(function DisplaySettingsCard({ tournamentId, settings, rakeLabel, poolLocked, qr, season }: SettingsCardProps) {
+export const DisplaySettingsCard = memo(function DisplaySettingsCard({ tournamentId, settings, rakeLabel, poolLocked, qr, season, bare = false }: SettingsCardProps) {
   const { toast } = useToast();
   const { patchDisplay } = useClockConfig(tournamentId);
   const { busy, run } = useBusyRows();
   const id = useId();
-  const change = (patch: ClockDisplaySettingsPatch) => {
+  const save = (patch: ClockDisplaySettingsPatch): Promise<boolean> => {
     const [field] = Object.keys(patch);
-    void run(field, () => patchDisplay.mutateAsync(patch)).catch((error: unknown) =>
-      toast({ title: "Could not change the TV display", description: errorMessage(error), variant: "destructive" }),
+    return run(field, () => patchDisplay.mutateAsync(patch)).then(
+      () => true,
+      (error: unknown) => {
+        toast({ title: "Could not change the TV display", description: errorMessage(error), variant: "destructive" });
+        return false;
+      },
     );
   };
+  const change = (patch: ClockDisplaySettingsPatch) => void save(patch);
+  const volume = useVolumeDraft(settings.soundVolume, save);
 
   const select = <K extends "showPrizePool" | "qrTarget" | "overlay">(field: K, label: string, choices: Choice<ClockDisplaySettings[K]>) => (
     <div className="space-y-2">
@@ -98,9 +127,11 @@ export const DisplaySettingsCard = memo(function DisplaySettingsCard({ tournamen
     </div>
   );
 
-  const toggle = (field: "showPayouts" | "showAp" | "showAverageStack", label: string) => (
-    <div className="flex items-center justify-between gap-4">
-      <Label htmlFor={`${id}-${field}`}>{label}</Label>
+  const toggle = (field: Toggle, label: string) => (
+    <div key={field} className="flex min-h-11 items-center justify-between gap-4">
+      <Label htmlFor={`${id}-${field}`} className="min-w-0">
+        {label}
+      </Label>
       <Switch
         id={`${id}-${field}`}
         checked={settings[field]}
@@ -111,35 +142,55 @@ export const DisplaySettingsCard = memo(function DisplaySettingsCard({ tournamen
   );
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>TV display</CardTitle>
-        <CardDescription>Changes show on the TV within a few seconds.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-5">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div className="space-y-2">
-            {select("showPrizePool", "Show the prize pool", PRIZE_POOL_CHOICES)}
-            {publicPoolNote(settings.showPrizePool, poolLocked) ? (
-              <p className="text-sm text-muted-foreground" data-testid="public-pool-note">
-                {publicPoolNote(settings.showPrizePool, poolLocked)}
-              </p>
-            ) : null}
-          </div>
-          {select("overlay", "Over the clock", OVERLAY_CHOICES)}
-        </div>
-        <div className="space-y-3">
-          {toggle("showPayouts", "Show the payouts with the pool")}
-          {toggle("showAp", `Show the ${rakeLabel}`)}
-          {toggle("showAverageStack", "Show the chips in play and the average stack")}
-        </div>
+    <PanelCard title="TV display" description={bare ? undefined : "Changes show on the TV within a few seconds."} bare={bare} className="space-y-5">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="space-y-2">
-          {select("qrTarget", "The QR code leads to", QR_CHOICES)}
-          <p className="text-sm text-muted-foreground" aria-live="polite">
-            {qrDestination({ qr, season }, settings.qrTarget)}
-          </p>
+          {select("showPrizePool", "Show the prize pool", PRIZE_POOL_CHOICES)}
+          {publicPoolNote(settings.showPrizePool, poolLocked) ? (
+            <p className="text-sm text-muted-foreground" data-testid="public-pool-note">
+              {publicPoolNote(settings.showPrizePool, poolLocked)}
+            </p>
+          ) : null}
         </div>
-      </CardContent>
-    </Card>
+        {select("overlay", "Over the clock", OVERLAY_CHOICES)}
+      </div>
+      <div className="space-y-1">
+        {toggle("showPayouts", "Show the payouts with the pool")}
+        {toggle("showAp", `Show the ${rakeLabel}`)}
+        {toggle("showAverageStack", "Show the average stack")}
+      </div>
+      <fieldset className="space-y-1 border-t border-border pt-4" data-testid="tv-figures">
+        <legend className="text-sm font-medium text-foreground">More on the TV</legend>
+        <p className="text-sm text-muted-foreground">
+          The TV always shows the countdown, the blinds and ante, what comes next, the time to the break and the players left. Switch on anything else
+          the room should see.
+        </p>
+        {FIGURE_SWITCHES.map(({ field, label }) => toggle(field, label))}
+      </fieldset>
+      <div className="space-y-2">
+        {select("qrTarget", "The QR code leads to", QR_CHOICES)}
+        <p className="text-sm text-muted-foreground" aria-live="polite">
+          {qrDestination({ qr, season }, settings.qrTarget)}
+        </p>
+      </div>
+      <fieldset className="space-y-3 border-t border-border pt-4" data-testid="tv-sounds">
+        <legend className="text-sm font-medium text-foreground">Sounds</legend>
+        <VolumeSlider id={`${id}-volume`} volume={volume.volume} onChange={volume.change} />
+        <div className="space-y-1">
+          {CUE_SWITCHES.map(({ setting, label }) => toggle(setting, label))}
+        </div>
+        <Button type="button" variant="outline" className="h-11" onClick={() => playTestSounds(volume.volume)}>
+          <Volume2 aria-hidden="true" />
+          Test sounds on this device
+        </Button>
+      </fieldset>
+      <section aria-labelledby={`${id}-edge`} className="space-y-3 border-t border-border pt-4">
+        <h3 id={`${id}-edge`} className="text-sm font-medium text-foreground">
+          Edge margin (TV overscan)
+        </h3>
+        <p className="text-sm text-muted-foreground">Many TVs cut off the edges of the picture. A margin keeps everything on screen.</p>
+        <EdgeMarginChoice id={`${id}-edge-margin`} labelledBy={`${id}-edge`} margin={settings.edgeMargin} onChange={(edgeMargin) => change({ edgeMargin })} />
+      </section>
+    </PanelCard>
   );
 });

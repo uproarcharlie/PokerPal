@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   clubTimeZone,
   DEFAULT_TIME_ZONE,
+  amountBoxText,
   formatAmount,
   formatDate,
   formatDateTime,
@@ -12,6 +13,7 @@ import {
   formatTime,
   fromZonedDateTimeLocal,
   initials,
+  seatLabel,
   ordinal,
   plural,
   toZonedDateTimeLocal,
@@ -24,6 +26,9 @@ describe("money", () => {
     expect(formatAmount("50.00")).toBe("$50");
     expect(formatAmount("12.5", { forceCents: true })).toBe("$12.50");
     expect(formatAmount(null)).toBe("$0");
+    // As a box shows it for editing (the payout editor and a deal: R5REV3-CQ-09).
+    expect(amountBoxText(30_000)).toBe("300");
+    expect(amountBoxText(1_250)).toBe("12.50");
   });
 });
 
@@ -105,6 +110,14 @@ describe("formatters (P3REV4-PERF-G)", () => {
     expect(built.mock.calls.length).toBeLessThanOrEqual(2);
     expect(relative).not.toHaveBeenCalled();
     vi.restoreAllMocks();
+  });
+});
+
+describe("seatLabel", () => {
+  it("writes a first name and the last name's initial beside a seat, one word as it is", () => {
+    expect(seatLabel("Alice Smith")).toBe("Alice S.");
+    expect(seatLabel("Mary Jane van der Berg")).toBe("Mary B.");
+    expect(seatLabel("  Cher ")).toBe("Cher");
   });
 });
 

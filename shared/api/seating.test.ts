@@ -6,6 +6,7 @@ import {
   createTablesSchema,
   drawSeatsSchema,
   finalTableSchema,
+  openTableSchema,
   seatingSetupSchema,
   undoSeatingSchema,
   unseatSchema,
@@ -13,9 +14,10 @@ import {
 } from "./seating";
 
 describe("the seating request schemas", () => {
-  it("default new tables to one of 9 seats, and keep tables between 2 and 10 seats", () => {
-    expect(createTablesSchema.parse({})).toEqual({ count: 1, seatCount: 9 });
-    expect(createTablesSchema.parse({ count: 3, seatCount: 6 })).toEqual({ count: 3, seatCount: 6 });
+  it("add one table by default, its seats and shape left to the tournament's settings, and keep tables between 2 and 10 seats", () => {
+    expect(createTablesSchema.parse({})).toEqual({ count: 1 });
+    expect(createTablesSchema.parse({ count: 3, seatCount: 6, shape: "rectangle" })).toEqual({ count: 3, seatCount: 6, shape: "rectangle" });
+    expect(createTablesSchema.safeParse({ shape: "hexagon" }).success).toBe(false);
     expect(createTablesSchema.safeParse({ seatCount: 11 }).success).toBe(false);
     expect(createTablesSchema.safeParse({ seatCount: 1 }).success).toBe(false);
     expect(createTablesSchema.safeParse({ count: 21 }).success).toBe(false);
@@ -25,6 +27,8 @@ describe("the seating request schemas", () => {
     expect(updateTableSchema.parse({ name: "  " })).toEqual({ name: null });
     expect(updateTableSchema.parse({ name: " Feature table ", seatCount: 8 })).toEqual({ name: "Feature table", seatCount: 8 });
     expect(updateTableSchema.parse({ status: "active" })).toEqual({ status: "active" });
+    expect(updateTableSchema.parse({ shape: "round" })).toEqual({ shape: "round" });
+    expect(updateTableSchema.safeParse({ shape: "square" }).success).toBe(false);
     expect(updateTableSchema.safeParse({ status: "broken" }).success).toBe(false);
     expect(updateTableSchema.safeParse({}).success).toBe(false);
     expect(updateTableSchema.safeParse({ tableNumber: 1000 }).success).toBe(false);
@@ -32,8 +36,13 @@ describe("the seating request schemas", () => {
   });
 
   it("set up and draw including unpaid entries unless told otherwise", () => {
-    expect(seatingSetupSchema.parse({})).toEqual({ seatCount: 9, includeUnconfirmed: true });
-    expect(seatingSetupSchema.parse({ seatCount: 8, tableCount: 3, includeUnconfirmed: false })).toEqual({ seatCount: 8, tableCount: 3, includeUnconfirmed: false });
+    expect(seatingSetupSchema.parse({})).toEqual({ includeUnconfirmed: true });
+    expect(seatingSetupSchema.parse({ seatCount: 8, tableCount: 3, shape: "oval", includeUnconfirmed: false })).toEqual({
+      seatCount: 8,
+      tableCount: 3,
+      shape: "oval",
+      includeUnconfirmed: false,
+    });
     expect(seatingSetupSchema.safeParse({ tableCount: 51 }).success).toBe(false);
     expect(drawSeatsSchema.parse({})).toEqual({ scope: "unseated", includeUnconfirmed: true });
     expect(drawSeatsSchema.parse({ scope: "all", registrationIds: ["r1"] })).toMatchObject({ scope: "all", registrationIds: ["r1"] });
@@ -67,5 +76,15 @@ describe("the seating request schemas", () => {
     expect(undoSeatingSchema.parse({ activityId: "a1", expectedVersion: "0a1b2c3d" })).toEqual({ activityId: "a1", expectedVersion: "0a1b2c3d" });
     expect(undoSeatingSchema.safeParse({}).success).toBe(false);
     expect(undoSeatingSchema.safeParse({ activityId: "a1", expectedVersion: "nope" }).success).toBe(false);
+  });
+});
+
+describe("opening a table (round 5)", () => {
+  it("applies the advice shown, so it needs the seating version it was shown with", () => {
+    expect(openTableSchema.parse({ expectedVersion: "0badc0de" })).toEqual({ expectedVersion: "0badc0de" });
+    expect(openTableSchema.parse({ expectedVersion: "0badc0de", seatCount: 6, shape: "round" })).toEqual({ expectedVersion: "0badc0de", seatCount: 6, shape: "round" });
+    expect(openTableSchema.safeParse({}).success).toBe(false);
+    expect(openTableSchema.safeParse({ expectedVersion: "nope" }).success).toBe(false);
+    expect(openTableSchema.safeParse({ expectedVersion: "0badc0de", seatCount: 11 }).success).toBe(false);
   });
 });

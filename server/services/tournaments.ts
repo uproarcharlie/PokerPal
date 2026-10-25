@@ -16,13 +16,16 @@ import {
 import { formatMoney, isAmountSet, toCents } from "@shared/domain/money";
 import { computePrizePool, rakeLabel } from "@shared/domain/prize-pool";
 import { isActiveStatus } from "@shared/domain/tournaments";
+import { waitingListCount } from "@shared/domain/waiting-list";
 import { RAKE_RATE_KEYS, type RakeAmountKey, type RakeRates, type RakeTypeKey } from "@shared/domain/rake-rates";
+import { seatingSettingsProblem, type SeatingSettingsInput } from "@shared/domain/table-advisor";
 import type { Tournament } from "@shared/schema";
 import type { AppEnv } from "../config/env";
 import { db, type Executor } from "../db";
 import { actingUserId, clubScope, viewerFor } from "../http/authz";
 import { badRequest, conflict, notFound } from "../http/errors";
 import { insertActivity } from "../repositories/activity";
+import { getClub } from "../repositories/clubs";
 import * as pointsRepo from "../repositories/points";
 import * as seasonsRepo from "../repositories/seasons";
 import * as tournamentsRepo from "../repositories/tournaments";
@@ -48,6 +51,17 @@ import {
 } from "./tournament-views";
 
 const INVALID_MESSAGE = "Invalid tournament data";
+
+/**
+ * Round 5: the seating settings a create or edit would leave, checked with the club's defaults they
+ * fall back on: an open-table threshold above the seats per table is refused on its field (400
+ * VALIDATION). Nothing to check while no threshold is set (it then means "when full").
+ */
+async function assertSeatingSettings(ex: Executor, clubId: string, tournament: SeatingSettingsInput["tournament"]): Promise<void> {
+  if (typeof tournament.openTableAt !== "number") return;
+  const problem = seatingSettingsProblem({ tournament, club: await getClub(ex, clubId) });
+  if (problem) throw badRequest(problem.message, "VALIDATION", [{ path: [problem.field], message: problem.message }]);
+}
 
 /** The tournament, or 404. */
 export async function requireTournament(id: string): Promise<Tournament> {
@@ -78,10 +92,11 @@ export async function listTournaments(req: Request, query: TournamentsQuery) {
     req.user ? clubScope(req.user) : null,
   ]);
   const runs = (clubId: string) => scope !== null && (scope.all || scope.clubIds.includes(clubId));
-  return rows.map(({ tournament, registeredCount, confirmedPlayerCount }) => ({
+  return rows.map(({ tournament, registeredCount, confirmedPlayerCount, inFieldByRightCount }) => ({
     ...toPublicTournament(tournament),
     confirmedPlayerCount: runs(tournament.clubId) ? confirmedPlayerCount : null,
     registeredCount,
+    waitingListCount: waitingListCount(registeredCount, inFieldByRightCount, tournament.maxPlayers),
   }));
 }
 
@@ -134,6 +149,7 @@ export async function createTournament(env: AppEnv, req: Request, input: CreateT
   assertRatesWithinPrices({ ...input, ...merged });
   const row = await db.transaction(async (tx) => {
     await assertSeasonAndPoints(tx, input.clubId, input.seasonId, input.pointsSystemId);
+    await assertSeatingSettings(tx, input.clubId, input);
     await tournamentsRepo.lockClubTournamentCreates(tx, input.clubId);
     if ((await tournamentsRepo.countUpcomingTournaments(tx, input.clubId)) >= MAX_UPCOMING_TOURNAMENTS_PER_CLUB) {
       throw conflict(
@@ -321,6 +337,14 @@ export async function updateTournament(env: AppEnv, req: Request, id: string, in
         config.seasonId !== undefined ? config.seasonId : current.seasonId,
         config.pointsSystemId !== undefined ? config.pointsSystemId : current.pointsSystemId,
       );
+    }
+
+    if (config.openTableAt !== undefined || config.seatsPerTable !== undefined) {
+      await assertSeatingSettings(tx, current.clubId, {
+        ...current,
+        ...(config.openTableAt !== undefined ? { openTableAt: config.openTableAt } : {}),
+        ...(config.seatsPerTable !== undefined ? { seatsPerTable: config.seatsPerTable } : {}),
+      });
     }
 
     const locking = prizePoolLocked === true && !current.prizePoolLocked;

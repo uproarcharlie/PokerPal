@@ -8,8 +8,14 @@ import type { AuthMeResponse } from "@shared/api/auth";
 import type { Json } from "@shared/api/common";
 import type { ConfirmPendingActionResponse, PendingActionDto } from "@shared/api/pending-actions";
 import type { ClubPlayer, CreatePlayerResponse, StaffPlayer } from "@shared/api/players";
-import type { ActivityDto, PublicPointsAllocation, PublicPointsSystem, PublicRegistration } from "@shared/api/public";
-import type { ConfirmedRegistrationDto, ManagedRegistration, PendingRegistrationDto } from "@shared/api/registrations";
+import type { ActivityDto, PublicPointsAllocation, PublicPointsSystem, PublicRegistration, WaitingListPlace } from "@shared/api/public";
+import type {
+  ConfirmedRegistrationDto,
+  ManagedRegistration,
+  PaymentConfirmedDto,
+  PendingRegistrationDto,
+  RegistrationCreatedDto,
+} from "@shared/api/registrations";
 import type { tournamentActivity } from "./activity";
 import type { SessionDescription } from "./auth";
 import type { confirmPendingAction, createPendingAction, listPendingActions } from "./pending-actions";
@@ -17,6 +23,7 @@ import type { createAllocation, createPointsSystem, listAllocations } from "./po
 import type { toClubPlayer, toPublicPlayer, toStaffPlayer } from "./players";
 import type {
   adjustCounts,
+  confirmPayment,
   listPaymentRegistrations,
   listRegistrations,
   registerPlayer,
@@ -36,16 +43,19 @@ describe("service results serialise to the shared DTOs", () => {
     expectTypeOf<Out<typeof listRegistrations>[number]>().toExtend<PublicRegistration | ManagedRegistration>();
     expectTypeOf<PublicRegistration>().toExtend<Out<typeof listRegistrations>[number]>();
     expectTypeOf<ManagedRegistration>().toExtend<Out<typeof listRegistrations>[number]>();
-    expectTypeOf<Out<typeof registerPlayer>>().toExtend<PublicRegistration | ManagedRegistration>();
-    expectTypeOf<PublicRegistration>().toExtend<Out<typeof registerPlayer>>();
+    expectTypeOf<Out<typeof registerPlayer>>().toExtend<RegistrationCreatedDto>();
+    expectTypeOf<PublicRegistration & Pick<RegistrationCreatedDto, "seating">>().toExtend<Out<typeof registerPlayer>>();
+    expectTypeOf<Out<typeof confirmPayment>>().toExtend<PaymentConfirmedDto>();
+    expectTypeOf<PaymentConfirmedDto>().toExtend<Out<typeof confirmPayment>>();
     expectTypeOf<Out<typeof updateRegistration>>().toExtend<ManagedRegistration>();
     expectTypeOf<ManagedRegistration>().toExtend<Out<typeof updateRegistration>>();
     expectTypeOf<Out<typeof adjustCounts>>().toExtend<ManagedRegistration>();
     expectTypeOf<ManagedRegistration>().toExtend<Out<typeof adjustCounts>>();
     type PaymentRow = Out<typeof listPaymentRegistrations>[number];
     expectTypeOf<PaymentRow>().toExtend<PendingRegistrationDto | ConfirmedRegistrationDto>();
-    expectTypeOf<PendingRegistrationDto>().toExtend<PaymentRow>();
-    expectTypeOf<ConfirmedRegistrationDto>().toExtend<PaymentRow>();
+    // The payment desk's rows always say their place on the waiting list (optional in the DTO for older fixtures).
+    expectTypeOf<PendingRegistrationDto & Required<WaitingListPlace>>().toExtend<PaymentRow>();
+    expectTypeOf<ConfirmedRegistrationDto & Required<WaitingListPlace>>().toExtend<PaymentRow>();
   });
 
   it("pending actions", () => {

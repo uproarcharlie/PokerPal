@@ -4,12 +4,21 @@
  * runtime imports outside shared/domain. The server hashes `planHashInput(plan)` and writes the rows
  * in one transaction; the preview shows exactly the same plan, so what the TD sees is what is paid.
  *
- * Money is the v2 rule (`allocatePayouts`): each place's share floored to whole dollars, the leftover
- * dollars and cents to 1st, so the places add up to the pool exactly. Places beyond the number of
- * entrants are not paid (as before; the warnings say how much). Unpaid registrations still count.
+ * Money is the v2 rule (`allocatePayouts`: each place's share floored to whole dollars, the leftover
+ * dollars and cents to 1st, so the places add up to the pool exactly), or for custom places each
+ * place's own amount (`placeAmounts`), with any difference from the money available settled as the
+ * tournament chose (./prize-difference, round 5 item 16: kept by the club, added to 1st, shared across
+ * the places, carried over, or added by the club): finalize pays exactly the prizes set, and the
+ * snapshot records where the difference went. Places beyond the number of entrants are not paid (as
+ * before; the warnings say how much). Unpaid registrations still count, but the waiting list (round 5, item 15:
+ * sign-ups beyond Max players nobody accepted) never played: it is not ranked, paid, scored or counted.
+ * A deal (./deal) replaces what the players still in are paid, sharing exactly what their places pay
+ * together.
  */
+import { dealProblems, type Dealable, type DealInput, type DealProblem, type SnapshotDeal } from "./deal";
 import { centsToDecimalString, formatMoney, toCents, type Cents, type MoneyInput } from "./money";
-import { PAYOUT_ALGORITHM, undistributedCents, type PayoutAlgorithm, type PayoutStructureKey } from "./payouts";
+import { PAYOUT_ALGORITHM, undistributedCents, type PayoutAlgorithm, type PayoutPlace, type PayoutStructureKey } from "./payouts";
+import { carryTargetName, differenceSentence, type CarriedIn, type PrizeDifference } from "./prize-difference";
 import { isPlayerActionType, PLAYER_ACTION_LABELS } from "./player-actions";
 import { pointsForFinish, type AllocationInput, type PointsRules, type PointsSystemInput } from "./points";
 import {
@@ -20,8 +29,15 @@ import {
   type PrizePoolInput,
 } from "./prize-pool";
 import { rankFinishers, type FinisherInput, type FinishOrderProblem, type FinishOrderSource } from "./standings";
+import { fieldEntries } from "./waiting-list";
 
 export const FINALIZE_SNAPSHOT_VERSION = 1 as const;
+
+/**
+ * Where a difference between the prizes as set and the money available for prizes went (round 5,
+ * item 16), as finalize paid it; `carryTarget` names where carried money went ("Winter League").
+ */
+export type SnapshotDifference = PrizeDifference & { carryTarget?: string };
 
 /**
  * The season-points rules a finalize scored with, frozen with the payouts: a later correction
@@ -53,11 +69,21 @@ export interface PrizePoolSnapshot {
     netCents: Cents;
     netSource: NetSource;
     impliedRakeCents: Cents;
-    structure: { requested: string; used: PayoutStructureKey; basisPoints: number[]; error?: string };
+    /** `places`: only for a custom structure with fixed places (round 5); basisPoints are then each place's share of this pool. */
+    structure: { requested: string; used: PayoutStructureKey; basisPoints: number[]; places?: PayoutPlace[]; error?: string };
+    /** Only when the prizes as set were not exactly the money available (round 5): where the difference went. */
+    difference?: SnapshotDifference;
+    /** Only when money carried over from earlier tournaments was in the pool (round 5). */
+    carriedIn?: CarriedIn[];
   };
   /** The points rules scored with (absent from snapshots written before they were frozen). */
   points?: SnapshotPointsRules;
-  /** Positions 1..min(places, entrants), including any zero amounts. */
+  /** The deal the players still in made, when they made one (round 5): `paid` holds what it paid them. */
+  deal?: SnapshotDeal;
+  /**
+   * Positions 1..min(places, entrants), including any zero amounts, and every player in a deal (who may
+   * finish below the paid places; their basisPoints are then 0).
+   */
   paid: Array<{
     position: number;
     registrationId: string;
@@ -116,6 +142,10 @@ export interface FinalizePlanInput {
   rakeLabel: string;
   /** Player requests still waiting: finalize deletes them, so the TD is warned and the plan hash covers them. */
   pendingRequests?: readonly PendingRequestInput[];
+  /** What the players still in agreed to share instead of their places' payouts (checked with dealProblems). */
+  deal?: DealInput;
+  /** Where money carried over goes, as named (carryTargetName of the tournament's season); default "the next tournament". */
+  carryTarget?: string;
 }
 
 /** One registration as finalize writes it. */
@@ -143,11 +173,16 @@ interface PlanCommon {
   warnings: string[];
   /** The ids of the requests finalize would discard, sorted (part of the plan hash). */
   pendingRequestIds: string[];
+  /** What a deal would share: the players still in and their places' payouts together; null with fewer than two in. */
+  dealable: Dealable | null;
 }
+
+/** DEAL_INVALID: the deal given does not share exactly what the players still in would be paid (see `dealProblems`). */
+export type FinalizePlanProblem = FinishOrderProblem | "DEAL_INVALID";
 
 export type FinalizePlan =
   | (PlanCommon & { ok: true; rows: FinalizeRow[]; snapshot: PrizePoolSnapshot })
-  | (PlanCommon & { ok: false; problem: FinishOrderProblem });
+  | (PlanCommon & { ok: false; problem: FinalizePlanProblem; dealProblems?: DealProblem[] });
 
 const UNKNOWN_PLAYER = "Unknown player";
 
@@ -169,33 +204,67 @@ export function pointsRulesFor(input: Pick<FinalizePlanInput, "tournament" | "po
 }
 
 export function buildFinalizePlan(input: FinalizePlanInput): FinalizePlan {
-  const { tournament, registrations } = input;
+  const { tournament } = input;
+  const registrations = fieldEntries(input.registrations, tournament.maxPlayers);
   const prizePool = computePrizePool(tournament, registrations);
   const nameOf = (playerId: string) => input.playerNames.get(playerId) ?? UNKNOWN_PLAYER;
-  const warnings = planWarnings(input, prizePool);
+  const warnings = planWarnings(input, registrations, prizePool);
   const activePlayers = suggestedActivePlayers(registrations, input.finishOrder, nameOf);
   const pendingRequestIds = (input.pendingRequests ?? []).map((request) => request.id).sort();
 
   const ranked = rankFinishers(registrations, input.finishOrder);
-  if (!ranked.ok) return { ok: false, problem: ranked.problem, prizePool, activePlayers, warnings, pendingRequestIds };
+  if (!ranked.ok) {
+    const dealable = dealableBeforeOrder(prizePool, activePlayers);
+    return { ok: false, problem: ranked.problem, prizePool, activePlayers, warnings, pendingRequestIds, dealable };
+  }
 
   const points = pointsRulesFor(input);
   const rules: PointsRules = points;
-  const rows = ranked.ordered.map((registration, index): FinalizeRow => {
+  const planned = ranked.ordered.map((registration, index): FinalizeRow => {
     const finalPosition = index + 1;
-    const amountCents = prizePool.payouts[index]?.amountCents ?? 0;
-    return {
-      registrationId: registration.id,
-      playerId: registration.playerId,
-      playerName: nameOf(registration.playerId),
-      finalPosition,
-      amountCents,
-      prizeAmount: amountCents > 0 ? centsToDecimalString(amountCents) : null,
-      pointsAwarded: pointsForFinish(rules, finalPosition, registration.knockouts),
-    };
+    return withAmount(
+      {
+        registrationId: registration.id,
+        playerId: registration.playerId,
+        playerName: nameOf(registration.playerId),
+        finalPosition,
+        amountCents: 0,
+        prizeAmount: null,
+        pointsAwarded: pointsForFinish(rules, finalPosition, registration.knockouts),
+      },
+      prizePool.payouts[index]?.amountCents ?? 0,
+    );
   });
 
-  const { structure } = prizePool;
+  const stillIn = new Set(activePlayers.map((player) => player.registrationId));
+  const dealable = dealableOf(planned.filter((row) => stillIn.has(row.registrationId)));
+  let rows = planned;
+  let deal: SnapshotDeal | undefined;
+  if (input.deal) {
+    const problems = dealProblems(dealable, input.deal);
+    if (problems.length > 0) {
+      return { ok: false, problem: "DEAL_INVALID", dealProblems: problems, prizePool, activePlayers, warnings, pendingRequestIds, dealable };
+    }
+    const agreed = new Map(input.deal.amounts.map(({ registrationId, amountCents }) => [registrationId, amountCents]));
+    rows = planned.map((row) => (agreed.has(row.registrationId) ? withAmount(row, agreed.get(row.registrationId) as Cents) : row));
+    deal = {
+      reason: input.deal.reason.trim(),
+      totalCents: (dealable as Dealable).totalCents,
+      players: planned
+        .filter((row) => agreed.has(row.registrationId))
+        .map((row) => ({
+          registrationId: row.registrationId,
+          playerId: row.playerId,
+          playerName: row.playerName,
+          position: row.finalPosition,
+          plannedCents: row.amountCents,
+          amountCents: agreed.get(row.registrationId) as Cents,
+        })),
+    };
+    warnings.push(dealWarning(deal));
+  }
+
+  const { structure, difference, carriedIn } = prizePool;
   const snapshot: PrizePoolSnapshot = {
     v: FINALIZE_SNAPSHOT_VERSION,
     algorithm: PAYOUT_ALGORITHM,
@@ -214,34 +283,89 @@ export function buildFinalizePlan(input: FinalizePlanInput): FinalizePlan {
         requested: structure.requested,
         used: structure.used,
         basisPoints: [...structure.basisPoints],
+        ...(structure.places ? { places: structure.places.map((place) => ({ ...place })) } : {}),
         ...(structure.error ? { error: structure.error } : {}),
       },
+      ...(difference.cents !== 0 ? { difference: snapshotDifference(difference, input.carryTarget) } : {}),
+      ...(carriedIn.length > 0 ? { carriedIn: carriedIn.map((entry) => ({ ...entry })) } : {}),
     },
     points,
-    paid: rows.slice(0, structure.basisPoints.length).map((row, index) => ({
-      position: row.finalPosition,
-      registrationId: row.registrationId,
-      playerId: row.playerId,
-      playerName: row.playerName,
-      basisPoints: structure.basisPoints[index],
-      amountCents: row.amountCents,
-    })),
+    ...(deal ? { deal } : {}),
+    paid: rows
+      .filter((row, index) => index < structure.basisPoints.length || (deal !== undefined && stillIn.has(row.registrationId)))
+      .map((row) => ({
+        position: row.finalPosition,
+        registrationId: row.registrationId,
+        playerId: row.playerId,
+        playerName: row.playerName,
+        basisPoints: structure.basisPoints[row.finalPosition - 1] ?? 0,
+        amountCents: row.amountCents,
+      })),
     warnings: [...warnings, ...pointsChangeWarnings(registrations, rows, tournament.status === "completed", nameOf)],
   };
 
-  return { ok: true, prizePool, activePlayers, warnings: snapshot.warnings, rows, snapshot, pendingRequestIds };
+  return { ok: true, prizePool, activePlayers, warnings: snapshot.warnings, rows, snapshot, pendingRequestIds, dealable };
+}
+
+function snapshotDifference(difference: PrizeDifference, carryTarget: string | undefined): SnapshotDifference {
+  return { ...difference, ...(difference.carriedOverCents > 0 ? { carryTarget: carryTarget ?? carryTargetName(null) } : {}) };
+}
+
+function withAmount(row: FinalizeRow, amountCents: Cents): FinalizeRow {
+  return { ...row, amountCents, prizeAmount: amountCents > 0 ? centsToDecimalString(amountCents) : null };
+}
+
+/** The players still in, with what their places pay (rows of theirs, in finish order); null with fewer than two. */
+function dealableOf(rows: readonly FinalizeRow[]): Dealable | null {
+  if (rows.length < 2) return null;
+  return {
+    totalCents: rows.reduce((sum, row) => sum + row.amountCents, 0),
+    players: rows.map((row) => ({
+      registrationId: row.registrationId,
+      playerId: row.playerId,
+      playerName: row.playerName,
+      position: row.finalPosition,
+      plannedCents: row.amountCents,
+    })),
+  };
 }
 
 /**
- * The text the plan hash is taken over: the pool, every row finalize writes and the player requests it
- * would discard. Any change to what would be paid, stored or thrown away (a request arriving after the
- * preview) changes it, so finalize can refuse a plan that moved since the preview.
+ * Before the finish order is known, what the players still in share: the payouts of places 1 to N
+ * (they take those places between them, whatever the order).
  */
-export function planHashInput(netCents: Cents, rows: readonly FinalizeRow[], pendingRequestIds: readonly string[] = []): string {
+function dealableBeforeOrder(prizePool: PrizePoolBreakdown, activePlayers: readonly ActivePlayer[]): Dealable | null {
+  if (activePlayers.length < 2) return null;
+  return {
+    totalCents: prizePool.payouts.slice(0, activePlayers.length).reduce((sum, payout) => sum + payout.amountCents, 0),
+    players: activePlayers.map((player) => ({ ...player, position: null, plannedCents: null })),
+  };
+}
+
+function dealWarning(deal: SnapshotDeal): string {
+  return `Deal: the ${plural(deal.players.length, "player")} still in share ${formatMoney(deal.totalCents)} as agreed (${deal.reason})`;
+}
+
+/**
+ * The text the plan hash is taken over: the pool, every row finalize writes, the player requests it
+ * would discard, and where a difference from the money available goes (round 5: kept, carried over or
+ * added by the club; a plan with none hashes as before). Any change to what would be paid, stored,
+ * carried over or thrown away (a request arriving after the preview) changes it, so finalize can
+ * refuse a plan that moved since the preview.
+ */
+export function planHashInput(
+  netCents: Cents,
+  rows: readonly FinalizeRow[],
+  pendingRequestIds: readonly string[] = [],
+  difference?: Pick<PrizeDifference, "cents" | "choice" | "keptByClubCents" | "carriedOverCents" | "addedByClubCents"> | null,
+): string {
   return JSON.stringify([
     netCents,
     rows.map((r) => [r.registrationId, r.finalPosition, r.prizeAmount, r.pointsAwarded]),
     [...pendingRequestIds].sort(),
+    ...(difference && difference.cents !== 0
+      ? [[difference.choice, difference.keptByClubCents, difference.carriedOverCents, difference.addedByClubCents]]
+      : []),
   ]);
 }
 
@@ -280,8 +404,9 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-function planWarnings(input: FinalizePlanInput, pool: PrizePoolBreakdown): string[] {
-  const { tournament, registrations } = input;
+/** The plan's warnings; `registrations` is the field (the waiting list left out). */
+function planWarnings(input: FinalizePlanInput, registrations: readonly FinalizeRegistrationInput[], pool: PrizePoolBreakdown): string[] {
+  const { tournament } = input;
   const warnings: string[] = [];
 
   if (tournament.status === "completed") {
@@ -290,20 +415,34 @@ function planWarnings(input: FinalizePlanInput, pool: PrizePoolBreakdown): strin
         ? "Finalizing again replaces the stored positions, prizes and points"
         : "This tournament was finalized before payouts were recorded in full: its stored prizes will be overwritten",
     );
+    const previousDeal = tournament.prizePoolSnapshot?.deal;
+    if (previousDeal && !input.deal) {
+      warnings.push(`It was finalized with a deal (${previousDeal.reason}): without one, the players still in are paid their places' payouts`);
+    }
   }
   if (!tournament.prizePoolLocked) warnings.push("The prize pool is not locked");
 
   const unpaid = registrations.filter((r) => !r.paymentConfirmed).length;
   if (unpaid > 0) warnings.push(`${plural(unpaid, "payment")} not confirmed`);
+  const waitingList = input.registrations.length - registrations.length;
+  if (waitingList > 0) {
+    warnings.push(`${plural(waitingList, "sign-up")} on the waiting list ${waitingList === 1 ? "is" : "are"} not ranked, paid or counted in the pool`);
+  }
 
   if (pool.netSource === "ap_override") {
     warnings.push(
       `${input.rakeLabel} is set manually to ${formatMoney(pool.rake.applied)} (the rates give ${formatMoney(pool.rake.calculated)})`,
     );
   } else if (pool.netSource === "manual_pool") {
-    warnings.push(`The prize pool is set manually to ${formatMoney(pool.net)} (calculated ${formatMoney(pool.netAfterAp)})`);
+    warnings.push(`The prize pool is set manually to ${formatMoney(pool.manualPrizePool ?? pool.net)} (calculated ${formatMoney(pool.netAfterAp)})`);
   }
+  for (const entry of pool.carriedIn) {
+    warnings.push(`${formatMoney(entry.amountCents)} carried over from ${entry.fromName} is in the prize pool`);
+  }
+  const difference = differenceSentence(pool.difference, input.carryTarget ?? carryTargetName(null));
+  if (difference) warnings.push(difference.replace(/\.$/, ""));
   if (pool.structure.error) warnings.push(pool.structure.error);
+  if (pool.structure.warning) warnings.push(pool.structure.warning);
 
   if (registrations.length > 0 && pool.net <= 0) {
     warnings.push("The prize pool is $0 or less, so nobody is paid");

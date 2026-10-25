@@ -35,6 +35,10 @@ export function clubDto(overrides: Partial<ClubDto> = {}): ClubDto {
     instagramUrl: null,
     websiteUrl: null,
     rakeLabel: null,
+    defaultSeatsPerTable: null,
+    defaultTableShape: null,
+    requireSignupPhoto: false,
+    theme: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     viewer: VISITOR_VIEW,
     ...overrides,
@@ -86,7 +90,14 @@ export function tournamentDto(overrides: Partial<TournamentDetailDto> = {}): Tou
     finalizedAt: null,
     useClubAddress: true,
     address: null,
+    seatsPerTable: null,
+    startingTables: null,
+    openTableAt: null,
+    autoSeat: null,
+    tableShape: null,
     createdAt: "2026-10-01T00:00:00.000Z",
+    prizeDifference: null,
+    carriedIn: null,
     prizePoolSnapshot: null,
     viewer: VISITOR_VIEW,
     ...overrides,
@@ -120,7 +131,7 @@ export function prizePoolSnapshotDto(overrides: Partial<PrizePoolSnapshot> = {})
 /** A row of GET /api/tournaments: the tournament's public fields and its counts. */
 export function tournamentListItemDto(overrides: Partial<TournamentListItemDto> = {}): TournamentListItemDto {
   const { viewer: _viewer, prizePoolSnapshot: _snapshot, ...tournament } = tournamentDto();
-  return { ...tournament, confirmedPlayerCount: null, registeredCount: 0, ...overrides };
+  return { ...tournament, confirmedPlayerCount: null, registeredCount: 0, waitingListCount: 0, ...overrides };
 }
 
 /** One entry with one buy-in, still in. */

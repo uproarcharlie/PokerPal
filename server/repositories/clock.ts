@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
-import { CLOCK_ACTIONS, CLOCK_STATUSES, type ClockState, type ClockStructure, type ClockUndo } from "@shared/domain/clock";
+import { CLOCK_ACTIONS, CLOCK_STATUSES, deriveClock, type ClockState, type ClockStructure, type ClockUndo } from "@shared/domain/clock";
 import { isUpcomingStatus, type TournamentStatus } from "@shared/domain/tournaments";
 import {
   tournamentClocks,
@@ -20,6 +20,13 @@ import type { Executor } from "../db";
 export async function getClock(ex: Executor, tournamentId: string): Promise<TournamentClock | undefined> {
   const [clock] = await ex.select().from(tournamentClocks).where(eq(tournamentClocks.tournamentId, tournamentId));
   return clock;
+}
+
+/** The tournament clock's time now (ms since level 1 began, breaks included); null without a clock. */
+export async function clockElapsedMsNow(ex: Executor, tournamentId: string): Promise<number | null> {
+  const clock = await getClock(ex, tournamentId);
+  const derived = clock ? deriveClock(clockStateOf(clock), clock.levels, Date.now()) : null;
+  return derived ? Math.round(derived.elapsedClockMs) : null;
 }
 
 /** The stored anchors as shared/domain/clock reads them (epoch ms). */

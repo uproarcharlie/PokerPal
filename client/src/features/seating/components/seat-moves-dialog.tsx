@@ -1,3 +1,4 @@
+import { Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { plural } from "@/lib/format";
@@ -5,17 +6,24 @@ import { movesByName, seatText, type AnnouncedMoves } from "../seating-text";
 
 interface SeatMovesDialogProps {
   announced: AnnouncedMoves | null;
+  /** A change is being saved: Undo holds until it lands. */
+  busy?: boolean;
+  /** Puts everyone back where they were (the change's Undo, offered while the seats are as it left them). */
+  onUndo?: (undoable: NonNullable<AnnouncedMoves["undoable"]>) => void;
   onClose: () => void;
 }
 
 /**
  * Who goes where, in large type and by name, so the TD can call the moves out (or show the phone), and
- * who is still waiting for a seat after a break, a balance or the final table.
+ * who is still waiting for a seat after a break, a balance, the final table or an opened table. A
+ * change the TD regrets (the wrong table broken, a table opened too soon) is one Undo away while
+ * nobody has moved since.
  */
-export function SeatMovesDialog({ announced, onClose }: SeatMovesDialogProps) {
+export function SeatMovesDialog({ announced, busy = false, onUndo, onClose }: SeatMovesDialogProps) {
   const moves = announced ? movesByName(announced.moves) : [];
   const excluded = announced?.excludedUnconfirmed ?? 0;
   const waiting = announced?.waiting;
+  const undoable = announced?.undoable;
   return (
     <Dialog open={announced !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
@@ -46,8 +54,14 @@ export function SeatMovesDialog({ announced, onClose }: SeatMovesDialogProps) {
             {waiting.text}: <span className="font-medium">{waiting.names.join(", ")}</span>. {plural(waiting.openSeats, "open seat")} left.
           </p>
         ) : null}
-        <DialogFooter>
-          <Button type="button" onClick={onClose}>
+        <DialogFooter className="gap-2">
+          {undoable && onUndo ? (
+            <Button type="button" variant="outline" className="min-h-11" busy={busy} onClick={() => onUndo(undoable)} data-testid="undo-seating-change">
+              <Undo2 aria-hidden="true" />
+              Undo
+            </Button>
+          ) : null}
+          <Button type="button" className="min-h-11" onClick={onClose}>
             Done
           </Button>
         </DialogFooter>

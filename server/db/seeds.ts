@@ -1,12 +1,14 @@
 import type { Pool, PoolClient } from "pg";
 import type { AuditAction, AuditData } from "@shared/api/admin";
+import { CENTRAL_STARS_THEME } from "@shared/domain/theme";
 
 /**
  * Boot-time data seeds, run by every boot (runBootMigrations: after the migrations, or on their own
  * with MIGRATE_ON_BOOT=false) and by `npm run db:migrate`. A seed only ever fills a value that is
  * still NULL and never overwrites one, so every run can repeat it. Each seed decides in one
  * transaction, logs one line saying what it did or why it did nothing, and records what it changed in
- * audit_log; one whose tables do not exist yet (a database the migrations have not reached) is skipped.
+ * audit_log; one whose tables or columns do not exist yet (a database the migrations have not reached)
+ * is skipped.
  * A seed that fails is logged and the boot carries on: seeds fill gaps in data, and the app works
  * without them.
  */
@@ -171,6 +173,82 @@ export async function seedCentralStarsRakeLabel(pool: Pool): Promise<SeedOutcome
   });
 }
 
+/** Central Stars' tables, as the owner asked (round 5, item 12): 9 seats, rectangles. */
+export const CENTRAL_STARS_TABLE_DEFAULTS = Object.freeze({ seatsPerTable: 9, tableShape: "rectangle" } as const);
+
+/**
+ * Gives the Central Stars club its table defaults (clubs.default_seats_per_table = 9,
+ * default_table_shape = 'rectangle'), filling only whichever is NULL, when exactly one club is Central
+ * Stars and this seed never ran for it before (no `seed_club_table_defaults` audit row): so an owner
+ * who later clears or changes either keeps their choice. Its tournaments' settings left NULL follow
+ * the club's (9-seat rectangle tables); a tournament's own settings are never touched. Audited with
+ * what it filled.
+ */
+export async function seedCentralStarsTableDefaults(pool: Pool): Promise<SeedOutcome> {
+  return inTransaction(pool, async (client) => {
+    const found = await lockCentralStars(client);
+    if ("reason" in found) return { applied: false, reason: found.reason };
+    const { club } = found;
+    const { rows } = await client.query<{ default_seats_per_table: number | null; default_table_shape: string | null }>(
+      "SELECT default_seats_per_table, default_table_shape FROM clubs WHERE id = $1",
+      [club.id],
+    );
+    const [current] = rows;
+    if (current.default_seats_per_table !== null && current.default_table_shape !== null) {
+      return { applied: false, reason: `club ${club.id} already has its table defaults` };
+    }
+    const history = await client.query("SELECT 1 FROM audit_log WHERE target_type = 'club' AND target_id = $1 AND action = $2 LIMIT 1", [
+      club.id,
+      "seed_club_table_defaults" satisfies SeedAuditAction,
+    ]);
+    if (history.rows.length > 0) {
+      return { applied: false, reason: `club ${club.id}'s table defaults were set by this seed before, so they are left as they are` };
+    }
+    const filled: AuditData["seed_club_table_defaults"] = {};
+    if (current.default_seats_per_table === null) filled.defaultSeatsPerTable = CENTRAL_STARS_TABLE_DEFAULTS.seatsPerTable;
+    if (current.default_table_shape === null) filled.defaultTableShape = CENTRAL_STARS_TABLE_DEFAULTS.tableShape;
+    // The row is locked and read in this transaction: coalesce keeps any value an owner set meanwhile all the same.
+    await client.query(
+      `UPDATE clubs SET default_seats_per_table = coalesce(default_seats_per_table, $1),
+                        default_table_shape = coalesce(default_table_shape, $2)
+        WHERE id = $3`,
+      [CENTRAL_STARS_TABLE_DEFAULTS.seatsPerTable, CENTRAL_STARS_TABLE_DEFAULTS.tableShape, club.id],
+    );
+    await recordSeedAudit(client, "seed_club_table_defaults", { type: "club", id: club.id }, filled);
+    const what = [
+      filled.defaultSeatsPerTable !== undefined ? `${filled.defaultSeatsPerTable} seats per table` : null,
+      filled.defaultTableShape !== undefined ? `${filled.defaultTableShape} tables` : null,
+    ].filter(Boolean);
+    return { applied: true, detail: `club ${club.id} now defaults to ${what.join(" and ")}` };
+  });
+}
+
+/**
+ * Gives the Central Stars club its colours (clubs.theme = CENTRAL_STARS_THEME, electric blue with
+ * metallic gold from their flyer), only when exactly one club is Central Stars, it has no theme, and
+ * this seed never set one before (no `seed_club_theme` audit row): so a club that picks other colours,
+ * or goes back to the LovePoker look (NULL), keeps its choice. Audited like the other seeds.
+ */
+export async function seedCentralStarsTheme(pool: Pool): Promise<SeedOutcome> {
+  return inTransaction(pool, async (client) => {
+    const found = await lockCentralStars(client);
+    if ("reason" in found) return { applied: false, reason: found.reason };
+    const { club } = found;
+    const { rows } = await client.query<{ has_theme: boolean }>("SELECT theme IS NOT NULL AS has_theme FROM clubs WHERE id = $1", [club.id]);
+    if (rows[0].has_theme) return { applied: false, reason: `club ${club.id} already has its colours` };
+    const history = await client.query("SELECT 1 FROM audit_log WHERE target_type = 'club' AND target_id = $1 AND action = $2 LIMIT 1", [
+      club.id,
+      "seed_club_theme" satisfies SeedAuditAction,
+    ]);
+    if (history.rows.length > 0) {
+      return { applied: false, reason: `club ${club.id}'s colours were set by this seed before and have since been cleared, so they are left as they are` };
+    }
+    await client.query("UPDATE clubs SET theme = $1 WHERE id = $2 AND theme IS NULL", [JSON.stringify(CENTRAL_STARS_THEME), club.id]);
+    await recordSeedAudit(client, "seed_club_theme", { type: "club", id: club.id }, { previousTheme: null, theme: CENTRAL_STARS_THEME });
+    return { applied: true, detail: `club ${club.id} now wears the Central Stars colours (${CENTRAL_STARS_THEME.colors.primary} and ${CENTRAL_STARS_THEME.colors.accent})` };
+  });
+}
+
 /**
  * Records a home club for every player who has registered somewhere but has none recorded yet: the
  * club of their first registration that still exists (registration time, then id), exactly the rule
@@ -197,10 +275,20 @@ export async function seedPlayerHomeClubs(pool: Pool): Promise<SeedOutcome> {
   });
 }
 
-/** Every boot seed, in order, with the name each logs under and the tables it reads or writes. */
-const BOOT_SEEDS: ReadonlyArray<{ name: string; tables: readonly string[]; run: (pool: Pool) => Promise<SeedOutcome> }> = [
+/**
+ * Every boot seed, in order, with the name each logs under, the tables it reads or writes, and the
+ * columns ("table.column") it needs that the first migrations did not make.
+ */
+const BOOT_SEEDS: ReadonlyArray<{ name: string; tables: readonly string[]; columns?: readonly string[]; run: (pool: Pool) => Promise<SeedOutcome> }> = [
   { name: "Central Stars owner", tables: ["clubs", "users", "club_managers", "audit_log"], run: seedCentralStarsOwner },
   { name: "Central Stars AP label", tables: ["clubs", "audit_log"], run: seedCentralStarsRakeLabel },
+  {
+    name: "Central Stars tables",
+    tables: ["clubs", "audit_log"],
+    columns: ["clubs.default_seats_per_table", "clubs.default_table_shape"],
+    run: seedCentralStarsTableDefaults,
+  },
+  { name: "Central Stars colours", tables: ["clubs", "audit_log"], columns: ["clubs.theme"], run: seedCentralStarsTheme },
   {
     name: "Player home clubs",
     tables: ["player_home_clubs", "tournament_registrations", "tournaments", "audit_log"],
@@ -208,15 +296,28 @@ const BOOT_SEEDS: ReadonlyArray<{ name: string; tables: readonly string[]; run: 
   },
 ];
 
-/** The first of `tables` this database does not have yet, or undefined when it has them all. */
-async function firstMissingTable(pool: Pool, tables: readonly string[]): Promise<string | undefined> {
+/**
+ * The first of `tables` ("the clubs table"), then of `columns` ("the clubs.theme column"), this
+ * database does not have yet, or undefined when it has them all.
+ */
+async function firstMissing(pool: Pool, tables: readonly string[], columns: readonly string[]): Promise<string | undefined> {
   const client = await pool.connect();
   try {
     const { rows } = await client.query<{ name: string; present: boolean }>(
       "SELECT name, to_regclass(format('public.%I', name)) IS NOT NULL AS present FROM unnest($1::text[]) WITH ORDINALITY AS t(name, n) ORDER BY n",
       [tables],
     );
-    return rows.find((row) => !row.present)?.name;
+    const table = rows.find((row) => !row.present)?.name;
+    if (table) return `the ${table} table`;
+    if (columns.length === 0) return undefined;
+    const present = await client.query<{ name: string }>(
+      `SELECT table_name || '.' || column_name AS name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name || '.' || column_name = ANY($1::text[])`,
+      [columns],
+    );
+    const found = new Set(present.rows.map((row) => row.name));
+    const column = columns.find((name) => !found.has(name));
+    return column ? `the ${column} column` : undefined;
   } finally {
     client.release();
   }
@@ -231,9 +332,9 @@ const consoleLogger: SeedLogger = {
 export async function runBootSeeds(pool: Pool, logger: SeedLogger = consoleLogger): Promise<void> {
   for (const seed of BOOT_SEEDS) {
     try {
-      const missing = await firstMissingTable(pool, seed.tables);
+      const missing = await firstMissing(pool, seed.tables, seed.columns ?? []);
       if (missing) {
-        logger.info(`${seed.name}: unchanged; the ${missing} table does not exist yet (the migrations have not run)`);
+        logger.info(`${seed.name}: unchanged; ${missing} does not exist yet (the migrations have not run)`);
         continue;
       }
       const outcome = await seed.run(pool);

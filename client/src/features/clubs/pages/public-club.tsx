@@ -11,6 +11,7 @@ import { ClubAboutTab } from "../components/club-about-tab";
 import { ClubTournamentsTab } from "../components/club-tournaments-tab";
 import { SeasonStandings } from "../components/season-standings";
 import { SocialLinks } from "../components/social-links";
+import { ClubThemeScope } from "@/features/branding/components/public/club-theme-scope";
 import { useSeasons } from "@/features/seasons/hooks";
 import { useTournaments } from "@/features/tournaments/hooks";
 import { useClubBySlug } from "../hooks";
@@ -53,15 +54,18 @@ export default function PublicClubPage() {
   const club = useClubBySlug(slug);
   usePageMeta({ title: club.data?.name });
 
+  // The club's own colours (round 5, item 13), around the page's every state so it is never remounted.
   return (
-    <QueryState
-      query={club}
-      loading={<PageSpinner label="Loading the club" />}
-      notFound={<EmptyState title="Club not found" description="This club's page has moved or no longer exists." />}
-      errorTitle="This club could not be loaded"
-      stateClassName="mx-auto min-h-dvh max-w-md bg-background px-4 py-12"
-    >
-      {(loaded) => <PublicClub club={loaded} />}
-    </QueryState>
+    <ClubThemeScope theme={club.data?.theme ?? null} scheme="light">
+      <QueryState
+        query={club}
+        loading={<PageSpinner label="Loading the club" />}
+        notFound={<EmptyState title="Club not found" description="This club's page has moved or no longer exists." />}
+        errorTitle="This club could not be loaded"
+        stateClassName="mx-auto min-h-dvh max-w-md bg-background px-4 py-12"
+      >
+        {(loaded) => <PublicClub club={loaded} />}
+      </QueryState>
+    </ClubThemeScope>
   );
 }

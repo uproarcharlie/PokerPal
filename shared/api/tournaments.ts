@@ -2,6 +2,9 @@
 import { z } from "zod";
 import { PAYOUT_STRUCTURE_KEYS, parseCustomPayouts } from "../domain/payouts";
 import { HIGH_HAND_PRIZES_MAX } from "../domain/prize-pool";
+import { SEATING_LIMITS } from "../domain/seating";
+import { AUTO_SEAT_MODES } from "../domain/table-advisor";
+import { TABLE_SHAPES } from "../domain/table-layout";
 import { TOURNAMENT_STATUSES } from "../domain/tournaments";
 import {
   dateSchema,
@@ -26,7 +29,12 @@ export const tournamentStatusSchema = z.enum(TOURNAMENT_STATUSES);
 export { PAYOUT_STRUCTURE_KEYS };
 
 
-/** JSON array of percentages for 1st place onwards, e.g. "[60,40]"; checked by shared/domain/payouts. */
+/**
+ * tournaments.custom_payouts, checked by shared/domain/payouts parseCustomPayouts: the classic JSON
+ * array of percentages for 1st place onwards ("[60,40]"), or the per-place form the payout editor
+ * writes (serializeCustomPayouts: `{"v":2,"places":[{"percent":50},{"amountCents":30000}]}`). The
+ * payout editor itself uses PUT /api/tournaments/:id/prize-pool/payouts (shared/api/prize-pool).
+ */
 const customPayoutsSchema = z
   .preprocess(
     (value) => (typeof value === "string" && value.trim() === "" ? null : value),
@@ -77,7 +85,18 @@ const configFields = {
   maxPlayers: integerSchema(2, 1000),
   useClubAddress: z.boolean().optional(),
   address: optionalText(300),
+  /**
+   * Seating settings (round 5; shared/domain/table-advisor resolveSeatingSettings). Null takes the
+   * club's default, else the app's. The server refuses an openTableAt above the seats per table in
+   * force after the change (400 VALIDATION on openTableAt, the message seatingSettingsProblem gives).
+   */
+  seatsPerTable: nullableIntegerSchema(SEATING_LIMITS.minSeats, SEATING_LIMITS.maxSeats),
+  startingTables: nullableIntegerSchema(1, SEATING_LIMITS.maxActiveTables),
+  openTableAt: nullableIntegerSchema(1, SEATING_LIMITS.maxSeats),
+  autoSeat: z.enum(AUTO_SEAT_MODES).nullable().optional(),
+  tableShape: z.enum(TABLE_SHAPES).nullable().optional(),
 };
+
 
 /**
  * The most upcoming tournaments (scheduled or open for registration, not started more than a few hours
@@ -181,7 +200,10 @@ export type TournamentListItemDto = PublicTournament & {
    * everyone else (who has paid is staff bookkeeping: P2REV0-SEC-04).
    */
   confirmedPlayerCount: number | null;
+  /** Every sign-up, the waiting list included. */
   registeredCount: number;
+  /** Sign-ups on the waiting list behind a full field (round 5, item 15); the field is registeredCount less these. */
+  waitingListCount: number;
 };
 
 /** GET /api/tournaments/:id, and the body of create/update. */

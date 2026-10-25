@@ -19,7 +19,7 @@ import type { Player } from "@shared/schema";
 import type { AppEnv } from "../config/env";
 import { db, type Executor } from "../db";
 import { canManageClub, type AuthUser, type ClubScope } from "../http/authz";
-import { forbidden, notFound, unauthenticated } from "../http/errors";
+import { badRequest, forbidden, notFound, unauthenticated } from "../http/errors";
 import { getClub } from "../repositories/clubs";
 import * as playersRepo from "../repositories/players";
 import { getTournament } from "../repositories/tournaments";
@@ -115,15 +115,42 @@ export async function preferredMatch(ex: Executor, matches: readonly Player[], c
   return ranked[0];
 }
 
+export const PHOTO_REQUIRED_MESSAGE = "Add a photo or pick an avatar to sign up";
+
+/**
+ * A QR sign-up at a club that asks every new player for a picture (clubs.require_signup_photo, round 5):
+ * one without a picture is refused, 400 PHOTO_REQUIRED on `imageUrl`, before the phone number is looked
+ * at, whoever's number it is (R5REV-SEC-02: an answer that depended on it would tell anyone which
+ * numbers are stored, without leaving a trace). The club's staff are not held to it. A returning
+ * player finds themselves with the QR page's search instead; one who sends a picture and turns out to
+ * be stored already is matched to their player, who keeps the picture they have. The token the sign-up
+ * gets names the club, so the registration knows the rule was met (registerPlayer, R5REV-SEC-01).
+ */
+async function assertSignUpPicture(user: AuthUser | undefined, clubId: string, input: Pick<CreatePlayerInput, "imageUrl">): Promise<void> {
+  if (input.imageUrl) return;
+  if (!(await clubRequiresSignUpPhoto(db, clubId)) || (await canManageClub(user, clubId))) return;
+  throw photoRequired();
+}
+
+/** Whether the club asks every new player for a picture (clubs.require_signup_photo). Read on `ex`: a transaction's own connection. */
+export async function clubRequiresSignUpPhoto(ex: Executor, clubId: string): Promise<boolean> {
+  return (await getClub(ex, clubId))?.requireSignupPhoto === true;
+}
+
+/** 400 PHOTO_REQUIRED, on `imageUrl`. */
+export function photoRequired() {
+  return badRequest(PHOTO_REQUIRED_MESSAGE, "PHOTO_REQUIRED", [{ code: "custom", path: ["imageUrl"], message: PHOTO_REQUIRED_MESSAGE }]);
+}
+
 /**
  * The club adding a player to POST /api/players (see createPlayerSchema): `clubId`, which the caller
  * must run (403; 404 when it does not exist), else the club of `tournamentId`, which must be open for
  * sign-ups as its QR page is (404 when there is no such tournament, 409 TOURNAMENT_CLOSED once it is
- * completed or cancelled), else none.
+ * completed or cancelled) and whose picture rule a new player must meet (400 PHOTO_REQUIRED), else none.
  */
 export async function addingClub(
   user: AuthUser | undefined,
-  input: Pick<CreatePlayerInput, "clubId" | "tournamentId">,
+  input: Pick<CreatePlayerInput, "clubId" | "tournamentId" | "imageUrl">,
 ): Promise<string | null> {
   if (input.clubId !== undefined) {
     if (!user) throw unauthenticated();
@@ -135,6 +162,7 @@ export async function addingClub(
     const tournament = await getTournament(db, input.tournamentId);
     if (!tournament) throw notFound("Tournament not found");
     assertOpen(tournament);
+    await assertSignUpPicture(user, tournament.clubId, input);
     return tournament.clubId;
   }
   return null;

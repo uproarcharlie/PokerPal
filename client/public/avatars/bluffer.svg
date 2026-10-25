@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">
+<title>Bluffer in sunglasses</title>
+<defs><radialGradient id="glow" cx=".32" cy=".26" r=".85"><stop offset="0" stop-color="#fff" stop-opacity=".26"/><stop offset=".65" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>
+<rect width="96" height="96" fill="#FACC15"/>
+<rect width="96" height="96" fill="url(#glow)"/>
+<circle cx="48" cy="52" r="28" fill="#000" fill-opacity=".15" transform="translate(0 2.5)"/>
+<circle cx="48" cy="52" r="28" fill="#FDBA74" stroke="#9A3412" stroke-width="2.5"/>
+<path d="M54 35Q62 30 70 34" fill="none" stroke="#7C2D12" stroke-width="3" stroke-linecap="round"/>
+<path d="M27 39Q33 37 40 38" fill="none" stroke="#7C2D12" stroke-width="3" stroke-linecap="round"/>
+<path d="M19 44H77" stroke="#111827" stroke-width="4" stroke-linecap="round"/>
+<path d="M22 44H45V49Q45 59 34 59Q23 59 22 49Z" fill="#111827"/>
+<path d="M51 44H74V49Q73 59 62 59Q51 59 51 49Z" fill="#111827"/>
+<path d="M26 47.5H33M55 47.5H62" stroke="#fff" stroke-opacity=".6" stroke-width="2" stroke-linecap="round"/>
+<path d="M37 69Q48 73 59 64" fill="none" stroke="#7C2D12" stroke-width="3" stroke-linecap="round"/>
+</svg>

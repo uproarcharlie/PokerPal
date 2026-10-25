@@ -38,7 +38,9 @@ class ResizeObserverStub implements ResizeObserver {
   unobserve(): void {}
   disconnect(): void {}
 }
-vi.stubGlobal("ResizeObserver", ResizeObserverStub);
+// A plain global, not vi.stubGlobal: a test file's vi.unstubAllGlobals() (after stubbing XMLHttpRequest)
+// would otherwise take it away for the rest of the file, and Radix's switches and sliders measure with it.
+Object.defineProperty(globalThis, "ResizeObserver", { configurable: true, writable: true, value: ResizeObserverStub });
 
 // Radix Select captures the pointer and scrolls the chosen option into view when it opens.
 Element.prototype.hasPointerCapture ??= () => false;

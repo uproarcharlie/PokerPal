@@ -112,7 +112,10 @@ test("a TD confirms payments, approves re-buys and add-ons, records knockouts an
     await phone.goto(`/tournaments/${tournament.id}/actions`);
     for (const [action, player] of [["Re-buy", ava], ["Add-on", ben]] as const) {
       await phone.getByRole("button", { name: new RegExp(`^${action}`) }).click();
-      await choose(phone, phone.getByRole("combobox"), new RegExp(`^${player}`));
+      await phone
+        .getByRole("list", { name: action === "Re-buy" ? "Who is the re-buy for?" : "Who is the add-on for?" })
+        .getByRole("button", { name: new RegExp(`^${player}`) })
+        .click();
       await phone.getByRole("button", { name: `Submit ${action}` }).click();
       await expect(phone.getByText("Action Submitted!")).toBeVisible();
       await expect(phone.getByText(`${action} for ${player}`)).toBeVisible();

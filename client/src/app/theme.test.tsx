@@ -86,6 +86,65 @@ describe("ThemeController", () => {
     expect(root.style.getPropertyValue("--primary")).toBe("");
   });
 
+  it("keeps the enclosing scope's scheme and surface for whatever an inner scope leaves out (a club's colours on the TV)", () => {
+    const DISPLAY: ThemeLayer = { colorScheme: "dark", surface: "display" };
+    const COLOURS: ThemeLayer = { variables: { "--primary": "63 169 255" } };
+    render(
+      <ThemeController>
+        <ThemeScope layer={DISPLAY}>
+          <ThemeScope layer={COLOURS}>clock</ThemeScope>
+        </ThemeScope>
+      </ThemeController>,
+    );
+
+    expect(root).toHaveClass("dark");
+    expect(root.dataset.surface).toBe("display");
+    expect(root.style.getPropertyValue("--primary")).toBe("63 169 255");
+  });
+
+  it("works out scheme-aware variables for the scheme on screen, again when the person switches it", async () => {
+    window.localStorage.setItem("theme", "dark");
+    const COLOURS: ThemeLayer = { variables: (scheme) => ({ "--primary": scheme === "dark" ? "63 169 255" : "26 108 224" }) };
+    render(
+      <ThemeController>
+        <ThemeScope layer={STAFF}>
+          <ThemeScope layer={COLOURS}>
+            <Toggle />
+          </ThemeScope>
+        </ThemeScope>
+      </ThemeController>,
+    );
+
+    expect(root).toHaveClass("dark");
+    expect(root.dataset.surface).toBe("admin");
+    expect(root.style.getPropertyValue("--primary")).toBe("63 169 255");
+
+    await userEvent.click(screen.getByRole("button", { name: "dark" }));
+
+    expect(root).not.toHaveClass("dark");
+    expect(root.style.getPropertyValue("--primary")).toBe("26 108 224");
+  });
+
+  it("keeps the enclosing scope's variables when an inner scope sets none, and clears them for an empty set", () => {
+    const EMPTY: ThemeLayer = { variables: {} };
+    function App({ inner }: { inner: ThemeLayer }) {
+      return (
+        <ThemeController>
+          <ThemeScope layer={CLUB}>
+            <ThemeScope layer={inner}>page</ThemeScope>
+          </ThemeScope>
+        </ThemeController>
+      );
+    }
+    const { rerender } = render(<App inner={PUBLIC} />);
+    expect(root.style.getPropertyValue("--primary")).toBe("30 123 255");
+    expect(root.dataset.surface).toBe("public");
+
+    rerender(<App inner={EMPTY} />);
+    expect(root.style.getPropertyValue("--primary")).toBe("");
+    expect(root.dataset.surface).toBe("club");
+  });
+
   it("uses the device's setting when nothing is saved, and works without storage", () => {
     const original = window.localStorage.getItem;
     window.localStorage.getItem = () => {

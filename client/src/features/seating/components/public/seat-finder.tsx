@@ -1,7 +1,8 @@
 import { useEffect, useId, useRef } from "react";
-import { Search } from "lucide-react";
+import { MapPin, Search } from "lucide-react";
 import type { PublicSeatingDto } from "@shared/api/seating";
 import { PlayerAvatar } from "@/components/image/player-avatar";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,6 +19,8 @@ interface SeatFinderProps {
   unseatedCount: number;
   query: string;
   onQueryChange: (query: string) => void;
+  /** Takes the player to their table's drawing, their seat ringed (absent: no "Show my seat"). */
+  onShow?: (entry: SeatedPlayer) => void;
 }
 
 /** The players whose names match what is typed, in name order (the list arrives sorted by name). */
@@ -29,11 +32,11 @@ export function findSeats(players: readonly SeatedPlayer[], query: string): Seat
 export const seatLine = (entry: Pick<SeatedPlayer, "tableName" | "seatNumber">): string => `${entry.tableName} · Seat ${entry.seatNumber}`;
 
 /**
- * "Find your seat": a player types their name and sees their table and seat in large type. The box
- * takes focus when the page opens, as the page is for this one search (a QR code at the door leads
- * here).
+ * "Find your seat": a player types their name and sees their photo, their table and seat in large
+ * type, and "Show my seat" takes them to their table's drawing with their seat ringed. The box takes
+ * focus when the page opens, as the page is for this one search (a QR code at the door leads here).
  */
-export function SeatFinder({ players, unseatedCount, query, onQueryChange }: SeatFinderProps) {
+export function SeatFinder({ players, unseatedCount, query, onQueryChange, onShow }: SeatFinderProps) {
   const inputId = useId();
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -78,13 +81,19 @@ export function SeatFinder({ players, unseatedCount, query, onQueryChange }: Sea
           <ul role="list" className="space-y-3">
             {matches.map((entry) => (
               <li key={entry.player.id}>
-                <Card className="flex items-center gap-4 p-4">
+                <Card className="flex flex-wrap items-center gap-4 p-4">
                   <PlayerAvatar name={entry.player.name} imageUrl={entry.player.imageUrl} size="lg" />
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <p className="break-words font-semibold text-foreground">{entry.player.name}</p>
                     <p className="text-2xl font-bold tabular-nums text-primary sm:text-3xl">{seatLine(entry)}</p>
                     {entry.tableName !== `Table ${entry.tableNumber}` ? <p className="text-sm text-muted-foreground">Table {entry.tableNumber}</p> : null}
                   </div>
+                  {onShow ? (
+                    <Button type="button" variant="outline" className="min-h-11 w-full sm:w-auto" onClick={() => onShow(entry)} aria-label={`Show my seat: ${entry.player.name}, ${entry.tableName}`}>
+                      <MapPin aria-hidden="true" />
+                      Show my seat
+                    </Button>
+                  ) : null}
                 </Card>
               </li>
             ))}

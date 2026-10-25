@@ -226,7 +226,46 @@ describe("PUT /api/tournaments/:id/prize-pool/adjustment", () => {
     expect(response.status).toBe(200);
     expect(await row(tournament.id)).toMatchObject({ manualPrizePool: "250.00", rakeOverride: null });
     expect(response.body.prizePool.breakdown).toMatchObject({ net: 25_000, netSource: "manual_pool", impliedRake: -15_000 });
-    expect((await activity(tournament.id))[0].description).toBe("Prize pool set manually to $250 (calculated $90)");
+    expect((await activity(tournament.id))[0].description).toBe("Prize pool set manually to $250 (calculated $90); $160 added by the club");
+  });
+
+  it("stores where a manual pool's difference goes, pays it that way, and says so (round 5, item 16)", async () => {
+    // 8 buy-ins of $50 with 10% AP leave $360: a $300 pool leaves $60.
+    const { staff, tournament } = await poolTournament({ name: "Test Wednesday" }, 8);
+
+    const kept = await adjust(staff.owner.agent, tournament.id, { mode: "manual_pool", amount: "300.00" });
+    expect(kept.body.prizePool.breakdown).toMatchObject({ net: 30_000, impliedRake: 10_000, difference: { choice: "club", keptByClubCents: 6_000 } });
+    expect((await row(tournament.id)).prizeDifference).toBeNull();
+    expect((await activity(tournament.id))[0].description).toBe("Prize pool set manually to $300 (calculated $360); $60 left over: the club keeps it");
+
+    const first = await adjust(staff.owner.agent, tournament.id, { mode: "manual_pool", amount: "300.00", prizeDifference: "first", reason: "Promo" });
+    expect(first.status).toBe(200);
+    expect((await row(tournament.id)).prizeDifference).toBe("first");
+    expect(first.body.prizePool.breakdown).toMatchObject({ net: 36_000, impliedRake: 4_000, difference: { addedToPrizesCents: 6_000 } });
+    expect(first.body.prizePool.breakdown.payouts.map((payout: { amountCents: number }) => payout.amountCents)).toEqual([21_000, 9_000, 6_000]);
+    const line = (await activity(tournament.id)).sort((a, b) => (a.timestamp ?? "").localeCompare(b.timestamp ?? "")).at(-1);
+    if (!line) throw new Error("nothing logged");
+    expect(line.description).toBe("Prize pool set manually to $300 (calculated $360); $60 left over: it goes to 1st - Promo");
+    expect(JSON.parse(line.eventData ?? "{}")).toMatchObject({ mode: "manual_pool", prizeDifference: "first", difference: { cents: 6_000, addedToPrizesCents: 6_000 } });
+    const [audit] = (await audits(tournament.id)).filter((entry) => entry.action === "prize_pool.adjust").slice(-1);
+    expect(audit.data).toMatchObject({ prizeDifference: { before: null, after: "first" } });
+
+    // The same choice again changes nothing; another one is a change.
+    const logged = (await activity(tournament.id)).length;
+    await adjust(staff.owner.agent, tournament.id, { mode: "manual_pool", amount: "300.00", prizeDifference: "first" });
+    expect(await activity(tournament.id)).toHaveLength(logged);
+    const carried = await adjust(staff.owner.agent, tournament.id, { mode: "manual_pool", amount: "300.00", prizeDifference: "carry" });
+    expect(carried.body.prizePool).toMatchObject({ carryTarget: "the next tournament", breakdown: { net: 30_000, impliedRake: 4_000, difference: { carriedOverCents: 6_000 } } });
+    expect(await activity(tournament.id)).toHaveLength(logged + 1);
+  });
+
+  it("refuses a choice that is not one of the four", async () => {
+    const { staff, tournament } = await poolTournament({}, 2);
+
+    const response = await adjust(staff.owner.agent, tournament.id, { mode: "manual_pool", amount: "50.00", prizeDifference: "rest" });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe("VALIDATION");
   });
 
   it("goes back to the calculated pool, clearing both", async () => {

@@ -9,6 +9,7 @@ import type { PrizePoolAdjustmentInput } from "@shared/api/prize-pool";
 import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { centsToDecimalString, toCents, type Cents } from "@shared/domain/money";
+import type { PrizeDifferenceChoice } from "@shared/domain/prize-difference";
 import type { MergedRakeRates } from "@shared/domain/rake-rates";
 import { tournamentMoney, type TournamentMoney } from "@/lib/prize-pool";
 
@@ -22,18 +23,26 @@ export function typedCents(text: string): Cents | null {
 
 /**
  * The tournament's money with `mode` applied: a fixed AP total or a fixed pool of `amountCents` (the
- * other cleared, as the server does), or both cleared. Null when the mode needs an amount and none was typed.
+ * other cleared, as the server does), or both cleared; a fixed pool with where its difference from the
+ * money available goes (`prizeDifference`, sent with it). Null when the mode needs an amount and none
+ * was typed.
  */
 export function previewAdjustment(
   tournament: TournamentDetailDto,
   registrations: readonly PublicRegistration[],
   mode: AdjustmentMode,
   amountCents: Cents | null,
+  prizeDifference?: PrizeDifferenceChoice,
 ): TournamentMoney | null {
   if (mode !== "calculated" && amountCents === null) return null;
   const amount = amountCents === null ? null : centsToDecimalString(amountCents);
   return tournamentMoney(
-    { ...tournament, rakeOverride: mode === "ap_override" ? amount : null, manualPrizePool: mode === "manual_pool" ? amount : null },
+    {
+      ...tournament,
+      rakeOverride: mode === "ap_override" ? amount : null,
+      manualPrizePool: mode === "manual_pool" ? amount : null,
+      ...(mode === "manual_pool" && prizeDifference ? { prizeDifference } : {}),
+    },
     registrations,
   );
 }

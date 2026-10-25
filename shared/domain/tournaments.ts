@@ -72,6 +72,11 @@ export const ACTIVITY_EVENT_TYPES = [
   "clock_undone",
   "clock_structure_updated",
   "early_bird",
+  // Round 5
+  "payouts_changed", // the payout editor: "Payouts changed to Custom: 1st 50%, 2nd 30%, 3rd $200 (Short field)"
+  "deal", // finalize with a deal: "Deal: Alice $1,200, Bob $1,000 (Chip chop at 2 handed)"
+  "table_opened", // the advisor's Open Table: "Opened Table 3: 4 players seated, 2 moved" (can be undone)
+  "seat_waiting", // a new arrival auto-seat had no seat for: "Test Player 17 is waiting for a seat: every table is full"
 ] as const;
 export type ActivityEventType = (typeof ACTIVITY_EVENT_TYPES)[number];
 
@@ -88,4 +93,5 @@ export const STAFF_ONLY_ACTIVITY_TYPES = [
   "clock_undone",
   "clock_structure_updated",
   "early_bird",
+  "seat_waiting",
 ] as const satisfies readonly ActivityEventType[];

@@ -84,9 +84,9 @@ describe("issuing a clock key", () => {
     const forStranger = await stranger.agent.get(`/api/public/tournaments/${tournament.id}/display`);
     const forTv = await (await tv(key)).display(tournament);
 
-    expect(forStaff.body.viewer).toEqual({ canControl: true, clockKeyIssuedAt: issuedAt, clockKeyExpiresAt: expiresAt });
-    expect(forStranger.body.viewer).toEqual({ canControl: false, clockKeyIssuedAt: null, clockKeyExpiresAt: null });
-    expect(forTv.body.viewer).toEqual({ canControl: true, clockKeyIssuedAt: null, clockKeyExpiresAt: null });
+    expect(forStaff.body.viewer).toEqual({ canControl: true, canChangeDisplay: true, clockKeyIssuedAt: issuedAt, clockKeyExpiresAt: expiresAt });
+    expect(forStranger.body.viewer).toEqual({ canControl: false, canChangeDisplay: false, clockKeyIssuedAt: null, clockKeyExpiresAt: null });
+    expect(forTv.body.viewer).toEqual({ canControl: true, canChangeDisplay: false, clockKeyIssuedAt: null, clockKeyExpiresAt: null });
   });
 
   it("needs a clock (404 NO_CLOCK) and an open tournament (409 TOURNAMENT_CLOSED)", async () => {
@@ -113,7 +113,8 @@ describe("a screen holding the key", () => {
     const started = await screen.act(tournament, { action: "start" });
     const undone = await screen.act(tournament, { action: "undo" });
 
-    expect(display.body).toMatchObject({ viewer: { canControl: true }, clock: { status: "idle" } });
+    // It runs the clock, and is told it does not change the TV display (PATCH …/clock/display stays staff-only).
+    expect(display.body).toMatchObject({ viewer: { canControl: true, canChangeDisplay: false }, clock: { status: "idle" } });
     expect(started.status, JSON.stringify(started.body)).toBe(200);
     expect(started.body).toMatchObject({ clock: { status: "running", undo: { action: "start" } }, viewer: { canControl: true } });
     expect(undone.body.clock).toMatchObject({ status: "idle" });
@@ -171,7 +172,7 @@ describe("a screen holding the key", () => {
     expect((await screen.act(tournament, { action: "pause" })).status).toBe(401);
     expect((await screen.display(tournament)).body.viewer.canControl).toBe(false);
     const forStaff = await owner.agent.get(`/api/public/tournaments/${tournament.id}/display`);
-    expect(forStaff.body.viewer).toEqual({ canControl: true, clockKeyIssuedAt: null, clockKeyExpiresAt: null });
+    expect(forStaff.body.viewer).toEqual({ canControl: true, canChangeDisplay: true, clockKeyIssuedAt: null, clockKeyExpiresAt: null });
     expect((await clockRow(tournament)).status).toBe("running");
   });
 
@@ -221,7 +222,7 @@ describe("ending a key", () => {
     const again = await owner.agent.delete(`${base(tournament)}/clock/key`);
 
     expect([revoked.status, again.status]).toEqual([200, 200]);
-    expect(revoked.body.viewer).toEqual({ canControl: true, clockKeyIssuedAt: null, clockKeyExpiresAt: null });
+    expect(revoked.body.viewer).toEqual({ canControl: true, canChangeDisplay: true, clockKeyIssuedAt: null, clockKeyExpiresAt: null });
     expect((await (await tv(key)).act(tournament, { action: "start" })).status).toBe(401);
     const audit = await testDb().select().from(auditLog).where(eq(auditLog.targetId, tournament.id));
     expect(audit.map((entry) => entry.action).sort()).toEqual(["clock.key_issued", "clock.key_revoked"]);

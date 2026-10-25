@@ -7,6 +7,7 @@ import type { PrizePoolDto } from "@shared/api/prize-pool";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import type { Cents } from "@shared/domain/money";
 import { offersAddons, offersHighHand, offersRebuys } from "@shared/domain/player-actions";
+import { carryTargetName, differenceLines, type DifferenceLine } from "@shared/domain/prize-difference";
 import type { NetSource } from "@shared/domain/prize-pool";
 import { rateText } from "@shared/domain/rake-rates";
 
@@ -36,11 +37,15 @@ interface TakeLineProps {
   source: NetSource;
   label: string;
   note?: ReactNode;
+  /** Lines above say what the club kept of, or added to, the prizes as set: the result is then the club's take in all. */
+  inAll?: boolean;
 }
 
 /** What the club keeps (or adds) in the end, with where the pool comes from: the figure the pool card beside it takes off. */
-function TakeLine({ impliedCents, source, label, note }: TakeLineProps) {
-  const take = clubTake({ impliedCents, netSource: source }, label);
+function TakeLine({ impliedCents, source, label, note, inAll = false }: TakeLineProps) {
+  const take = inAll
+    ? { label: impliedCents < 0 ? "The club puts in, in all" : "The club keeps, in all", cents: Math.abs(impliedCents) }
+    : clubTake({ impliedCents, netSource: source }, label);
   return (
     <PoolLine
       label={
@@ -54,6 +59,26 @@ function TakeLine({ impliedCents, source, label, note }: TakeLineProps) {
       tone="result"
       testId="ap-take"
     />
+  );
+}
+
+/** The difference lines that change what the club keeps or adds (round 5, item 16); the rest are the prize pool card's. */
+const TAKE_LINES: Readonly<Partial<Record<DifferenceLine["kind"], { sign: string; note: string }>>> = {
+  kept_by_club: { sign: "+", note: "Left over from the prizes as set" },
+  carried_over: { sign: "", note: "Not the club's: a later tournament can add it to its prize pool" },
+  added_by_club: { sign: "−", note: "The prizes as set are more than the money available" },
+};
+
+function DifferenceTakeLines({ lines }: { lines: readonly DifferenceLine[] }) {
+  return (
+    <>
+      {lines.map((line) => {
+        const shown = TAKE_LINES[line.kind];
+        return shown ? (
+          <PoolLine key={line.kind} label={line.label} note={shown.note} value={`${shown.sign}${formatMoney(line.cents)}`} testId={`ap-${line.kind.replaceAll("_", "-")}`} />
+        ) : null;
+      })}
+    </>
   );
 }
 
@@ -109,6 +134,7 @@ export function LiveBreakdown({ tournament, prizePool, label, timeZone }: LiveBr
     breakdown.manualPrizePool !== null
       ? `The prize pool is fixed by hand at ${formatMoney(breakdown.manualPrizePool)} (the rates leave ${formatMoney(breakdown.netAfterAp)})`
       : undefined;
+  const lines = differenceLines(breakdown, prizePool.carryTarget).filter((line) => TAKE_LINES[line.kind]);
   return (
     <div className="space-y-5">
       <Group title={`${label} by rule`}>
@@ -121,7 +147,8 @@ export function LiveBreakdown({ tournament, prizePool, label, timeZone }: LiveBr
         ) : null}
         <PoolLine label={`Calculated ${label}`} value={formatMoney(rake.calculated)} tone="total" testId="ap-calculated" />
         {rake.override !== null ? <OverrideLine overrideCents={rake.override} calculatedCents={rake.calculated} label={label} grows /> : null}
-        <TakeLine impliedCents={breakdown.impliedRake} source={breakdown.netSource} label={label} note={fixedPool} />
+        <DifferenceTakeLines lines={lines} />
+        <TakeLine impliedCents={breakdown.impliedRake} source={breakdown.netSource} label={label} note={fixedPool} inAll={lines.length > 0} />
       </Group>
 
       {adjustment ? (
@@ -151,6 +178,8 @@ interface FrozenBreakdownProps {
  */
 export function FrozenBreakdown({ tournament, pool, highHand, label }: FrozenBreakdownProps) {
   const fixedPool = pool.manualPrizePoolCents !== null ? `The prize pool was fixed by hand at ${formatMoney(pool.manualPrizePoolCents)}` : undefined;
+  // Snapshots from before round 5 record no difference: their take line says it as it always has.
+  const lines = differenceLines(pool, pool.difference?.carryTarget ?? carryTargetName(null)).filter((line) => TAKE_LINES[line.kind]);
   return (
     <div className="space-y-5">
       <Group title="As finalized">
@@ -158,7 +187,8 @@ export function FrozenBreakdown({ tournament, pool, highHand, label }: FrozenBre
         {pool.rakeOverrideCents !== null ? (
           <OverrideLine overrideCents={pool.rakeOverrideCents} calculatedCents={pool.rakeCalculatedCents} label={label} grows={false} />
         ) : null}
-        <TakeLine impliedCents={pool.impliedRakeCents} source={pool.netSource} label={label} note={fixedPool} />
+        <DifferenceTakeLines lines={lines} />
+        <TakeLine impliedCents={pool.impliedRakeCents} source={pool.netSource} label={label} note={fixedPool} inAll={lines.length > 0} />
       </Group>
       <HighHandGroup tournament={tournament} highHand={highHand} label={label} />
     </div>

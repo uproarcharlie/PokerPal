@@ -53,6 +53,8 @@ export interface TournamentFormValues {
   trackPoints: boolean;
   minPlayers: string;
   maxPlayers: string;
+  /** Round 5: seats per table, 2 to 10 (blank: the club's default). */
+  seatsPerTable: string;
   useClubAddress: boolean;
   address: string;
 }
@@ -85,6 +87,7 @@ export const tournamentFormSchema = createTournamentSchema
     highHandPayouts: typedNumber(shape.highHandPayouts),
     minPlayers: typedNumber(shape.minPlayers),
     maxPlayers: typedNumber(shape.maxPlayers),
+    seatsPerTable: typedNumber(shape.seatsPerTable),
     enableRebuys: z.boolean(),
     enableAddons: z.boolean(),
   })
@@ -240,6 +243,7 @@ export const NEW_TOURNAMENT_VALUES: TournamentFormValues = {
   trackPoints: true,
   minPlayers: "8",
   maxPlayers: "",
+  seatsPerTable: "",
   useClubAddress: true,
   address: "",
 };
@@ -319,6 +323,7 @@ export function formValuesFromTournament(tournament: PublicTournament, timeZone:
     trackPoints: tournament.trackPoints !== false,
     minPlayers: text(tournament.minPlayers),
     maxPlayers: text(tournament.maxPlayers),
+    seatsPerTable: text(tournament.seatsPerTable),
     useClubAddress: tournament.useClubAddress !== false,
     address: text(tournament.address),
   };

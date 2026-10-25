@@ -35,6 +35,30 @@ describe("clubs", () => {
     expect(updateClubSchema.safeParse({ rakeLabel: "x".repeat(17) }).success).toBe(false);
   });
 
+  it("take the table defaults, the sign-up photo rule and the colours (round 5)", () => {
+    expect(updateClubSchema.parse({ defaultSeatsPerTable: 9, defaultTableShape: "rectangle", requireSignupPhoto: true })).toEqual({
+      defaultSeatsPerTable: 9,
+      defaultTableShape: "rectangle",
+      requireSignupPhoto: true,
+    });
+    expect(updateClubSchema.parse({ defaultSeatsPerTable: null, defaultTableShape: null, theme: null })).toEqual({
+      defaultSeatsPerTable: null,
+      defaultTableShape: null,
+      theme: null,
+    });
+    expect(updateClubSchema.parse({ theme: { v: 1, preset: null, colors: { primary: "#1e7bff", accent: "#f2c14e" } } })).toEqual({
+      theme: { v: 1, preset: null, colors: { primary: "#1E7BFF", accent: "#F2C14E" } },
+    });
+    const bad = updateClubSchema.safeParse({ theme: { v: 1, preset: "pink", colors: { primary: "blue", accent: "#F2C14E" } } });
+    expect(bad.error?.issues.map((issue) => [issue.path, issue.message])).toEqual([
+      [["theme", "preset"], "Unknown preset"],
+      [["theme", "colors", "primary"], "Main colour: use a colour like #1E7BFF"],
+    ]);
+    for (const wrong of [{ defaultSeatsPerTable: 11 }, { defaultTableShape: "square" }, { requireSignupPhoto: "yes" }, { theme: "blue" }]) {
+      expect(updateClubSchema.safeParse(wrong).success).toBe(false);
+    }
+  });
+
   it("an owner is set by user id or removed with userId null; never by email", () => {
     expect(setClubOwnerSchema.parse({ userId: null })).toEqual({ userId: null });
     expect(setClubOwnerSchema.parse({ userId: "u1" })).toEqual({ userId: "u1" });

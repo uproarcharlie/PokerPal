@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { AVATAR_IDS, avatarUrl } from "@shared/domain/avatars";
 import { imageVariantsFromUrl } from "@shared/domain/images";
 import { solidImage } from "../../../test/helpers/images";
+import { loadEnv } from "../../config/env";
 import { HttpError } from "../../http/errors";
 import type { ImageStore } from "./store";
-import { logOrphanedImages, noteReplacedImage, saveUploadedImage } from "./upload";
+import { assertOwnedImage, logOrphanedImages, noteDeletedImages, noteReplacedImage, saveUploadedImage } from "./upload";
 
 /** An ImageStore in memory, optionally failing for keys that match `failOn`. */
 function memoryStore(failOn?: RegExp) {
@@ -94,6 +96,44 @@ describe("orphaned images", () => {
     logOrphanedImages([], "nothing");
 
     expect(info).not.toHaveBeenCalled();
+    info.mockRestore();
+  });
+});
+
+describe("built-in avatars (round 5)", () => {
+  const env = loadEnv({ DATABASE_URL: "postgres://app@localhost:5432/pokerpal", NODE_ENV: "test" });
+  const UPLOAD = "/uploads/player_avatar/0b9e7c2a-5d1f-4c3e-9a8b-7f6e5d4c3b2a/256.webp";
+  const refusal = (next: string, previous: string | null = null) => {
+    try {
+      assertOwnedImage(env, next, previous, "Invalid player data");
+      return null;
+    } catch (error) {
+      return error;
+    }
+  };
+
+  it("accepts every avatar as a new picture without the own-storage check, and nothing that only looks like one", () => {
+    for (const id of AVATAR_IDS) expect(refusal(avatarUrl(id))).toBeNull();
+    expect(refusal(UPLOAD)).toBeNull();
+
+    for (const near of ["/avatars/unicorn.svg", "/avatars/shark.png", "https://evil.example/avatars/shark.svg", "/avatars/../uploads/x.svg"]) {
+      expect(refusal(near)).toMatchObject({ status: 400, code: "VALIDATION", details: [{ path: ["imageUrl"] }] });
+    }
+  });
+
+  it("never logs an avatar as an orphaned upload, when it is replaced or its row deleted", () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    noteReplacedImage(avatarUrl("shark"), UPLOAD, "player p1");
+    noteReplacedImage(avatarUrl("shark"), null, "player p1");
+    noteDeletedImages([avatarUrl("crown"), null], "player p2");
+    expect(info).not.toHaveBeenCalled();
+
+    // A photo replaced by an avatar is still an orphan, with every variant it has.
+    noteReplacedImage(UPLOAD, avatarUrl("spade"), "player p3");
+    expect(info.mock.calls).toEqual([
+      [`[images] orphaned, kept (replaced on player p3): ${["48", "96", "256"].map((width) => UPLOAD.replace("256", width)).join(" ")}`],
+    ]);
     info.mockRestore();
   });
 });

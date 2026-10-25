@@ -12,8 +12,9 @@ import { EmptyState, QueryState } from "@/components/shared/query-state";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { qk } from "@/lib/api/query-keys";
+import { ClubThemeScope } from "@/features/branding/components/public/club-theme-scope";
 import { findSeats, SeatFinder } from "../components/public/seat-finder";
-import { PublicTables, seatKey } from "../components/public/public-tables";
+import { PublicTables, seatKey, tableCardId } from "../components/public/public-tables";
 import { publicSeatingInterval, usePublicSeating } from "../hooks";
 
 /** A tournament that does not exist (any more): a mistyped link, or one the TD removed. */
@@ -42,6 +43,12 @@ function SeatsView({ seating }: { seating: PublicSeatingDto }) {
   const [query, setQuery] = useState("");
   const { tournament, club, tables } = seating;
   const highlighted = new Set(query.trim() === "" ? [] : findSeats(seating.players, query.trim()).map((entry) => seatKey(entry.tableNumber, entry.seatNumber)));
+  // To the player's table, its card focused so a screen reader says where they are.
+  const showSeat = ({ tableNumber }: { tableNumber: number }) => {
+    const card = document.getElementById(tableCardId(tableNumber));
+    card?.scrollIntoView({ behavior: "smooth", block: "start" });
+    card?.focus({ preventScroll: true });
+  };
 
   return (
     <div className="min-h-dvh bg-background">
@@ -71,7 +78,7 @@ function SeatsView({ seating }: { seating: PublicSeatingDto }) {
         ) : (
           <>
             <div className="mx-auto max-w-xl">
-              <SeatFinder players={seating.players} unseatedCount={seating.unseatedCount} query={query} onQueryChange={setQuery} />
+              <SeatFinder players={seating.players} unseatedCount={seating.unseatedCount} query={query} onQueryChange={setQuery} onShow={showSeat} />
             </div>
             <PublicTables tables={tables} highlighted={highlighted} />
           </>
@@ -83,15 +90,18 @@ function SeatsView({ seating }: { seating: PublicSeatingDto }) {
   );
 }
 
-/** "Find your seat" (/tournament/:id/seats): players type their name and see their table and seat; every table listed. */
+/** "Find your seat" (/tournament/:id/seats): players type their name and see their table and seat; every table drawn in its shape. */
 export default function PublicSeatsPage() {
   const { id = "" } = useParams<{ id: string }>();
   const seating = usePublicSeating(id);
   usePageMeta({ title: seating.data ? `Find your seat: ${seating.data.tournament.name}` : "Find your seat", noindex: true });
 
+  // In the club's own colours (round 5, item 13), which the seating's answer carries.
   return (
-    <QueryState query={seating} {...PAGE_STATES}>
-      {(loaded) => <SeatsView seating={loaded} />}
-    </QueryState>
+    <ClubThemeScope theme={seating.data?.club.theme ?? null} scheme="light">
+      <QueryState query={seating} {...PAGE_STATES}>
+        {(loaded) => <SeatsView seating={loaded} />}
+      </QueryState>
+    </ClubThemeScope>
   );
 }

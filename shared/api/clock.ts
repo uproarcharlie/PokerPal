@@ -13,6 +13,9 @@ import { z } from "zod";
 import {
   ANTE_MODES,
   CLOCK_LIMITS,
+  DEFAULT_EDGE_MARGIN,
+  DEFAULT_SOUND_VOLUME,
+  EDGE_MARGINS,
   LEVEL_ID_PATTERN,
   structureProblems,
   type ClockActionName,
@@ -73,34 +76,57 @@ export const clockStructureSchema = z.object({
   earlyBirdStack: stack,
 });
 
-/** What the TV shows, per clock. Stored as given; read back field by field (resolveDisplaySettings). */
+/**
+ * What the TV shows, per clock. Stored as given; read back field by field (resolveDisplaySettings), so
+ * a clock stored before a setting existed reads it as its default. The TV's figures beyond the core set
+ * (round 5, items 21, 25 and 26: the countdown, the blinds and ante, what comes next, the time to the
+ * break, the players left of those who entered, the average stack, the money and the QR code) are each
+ * off until the TD switches them on.
+ */
 export const clockDisplaySettingsSchema = z.object({
   /** The prize pool: always, only once the pool is locked (the default: no disputes over an estimate), or never. */
   showPrizePool: z.enum(["always", "when_locked", "never"]).default("when_locked"),
   showPayouts: z.boolean().default(true),
   /** The club's take, under its label ("AP"). */
   showAp: z.boolean().default(false),
+  /** The average stack; off, the chips in play are not counted either. */
   showAverageStack: z.boolean().default(true),
   /** Where the QR code leads: the season leaderboard (falls back to the tournament page), the tournament, seat finder, or no QR. */
   qrTarget: z.enum(["season", "tournament", "seats", "none"]).default("season"),
   /** A full-screen layer over the clock, e.g. the seat list after a draw. */
   overlay: z.enum(["none", "seating", "payouts"]).default("none"),
+  /** "LEVEL 3" over the countdown: off, the blinds are the headline under it. */
+  showLevel: z.boolean().default(false),
+  /** Entries: buy-ins and re-buys. */
+  showEntries: z.boolean().default(false),
+  showRebuys: z.boolean().default(false),
+  showAddons: z.boolean().default(false),
+  showEarlyBirds: z.boolean().default(false),
+  /** Counted only with the average stack (showAverageStack). */
+  showChipsInPlay: z.boolean().default(false),
+  showTables: z.boolean().default(false),
+  /** "Re-buys close in 1:16:30", for a tournament that sells re-buys or add-ons for a while. */
+  showRebuyWindow: z.boolean().default(false),
+  /** The TV's sounds (round 5, item 20): how loud (0–1), and each one on or off. */
+  soundVolume: z.number().min(0).max(1).default(DEFAULT_SOUND_VOLUME),
+  /** The alarm at one minute left. */
+  soundMinute: z.boolean().default(true),
+  /** A beep for each of the last ten seconds. */
+  soundCountdown: z.boolean().default(true),
+  /** "Blinds up" as a level starts. */
+  soundLevel: z.boolean().default(true),
+  /** A break starting and play resuming. */
+  soundBreak: z.boolean().default(true),
+  /** The TV's edge margin (TV overscan), in percent of the screen on each side (round 5, item 22). */
+  edgeMargin: z.union([z.literal(EDGE_MARGINS[0]), z.literal(EDGE_MARGINS[1]), z.literal(EDGE_MARGINS[2])]).default(DEFAULT_EDGE_MARGIN),
 });
 export type ClockDisplaySettings = z.infer<typeof clockDisplaySettingsSchema>;
 export type QrTarget = ClockDisplaySettings["qrTarget"];
 
 export const DEFAULT_DISPLAY_SETTINGS: Readonly<ClockDisplaySettings> = Object.freeze(clockDisplaySettingsSchema.parse({}));
 
-/** PATCH /api/tournaments/:id/clock/display: any of the settings; unknown keys refused. */
-export const clockDisplaySettingsPatchSchema = z
-  .object({
-    showPrizePool: clockDisplaySettingsSchema.shape.showPrizePool.removeDefault(),
-    showPayouts: z.boolean(),
-    showAp: z.boolean(),
-    showAverageStack: z.boolean(),
-    qrTarget: clockDisplaySettingsSchema.shape.qrTarget.removeDefault(),
-    overlay: clockDisplaySettingsSchema.shape.overlay.removeDefault(),
-  })
+/** PATCH /api/tournaments/:id/clock/display: any of the settings, only those sent (no defaults filled in); unknown keys refused. */
+export const clockDisplaySettingsPatchSchema = clockDisplaySettingsSchema
   .partial()
   .strict()
   .refine((patch) => Object.keys(patch).length > 0, "Nothing to update");

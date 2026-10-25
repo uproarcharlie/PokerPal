@@ -25,6 +25,7 @@ beforeEach(() => {
         tournamentItem({ id: "t1", name: "Friday Freezeout", registeredCount: 12, maxPlayers: 30 }),
         tournamentItem({ id: "t2", name: "Perth Monday", clubId: "c2", startDateTime: "2026-10-26T15:30:00.000Z" }),
         tournamentItem({ id: "t3", name: "Elsewhere", clubId: "c-unlisted" }),
+        tournamentItem({ id: "t4", name: "Full House", registeredCount: 20, waitingListCount: 2, maxPlayers: 18 }),
       ]);
     }),
     // A club past the first page of the list, asked for by id.
@@ -61,6 +62,14 @@ describe("PublicHomePage", () => {
     // A tournament whose club is past the clubs listed still names its own club, asked for by id (P3REV3-CQ-04).
     expect(await within(cardOf(screen.getByRole("heading", { name: "Elsewhere" }))).findByText("Hobart Hold'em")).toBeInTheDocument();
     expect(cardOf(screen.getByRole("heading", { name: "Elsewhere" }))).not.toHaveTextContent("Central Stars");
+  });
+
+  it("counts a full tournament's field against Max players, the waiting list apart, never \"20 / 18\" (round 5, item 15)", async () => {
+    renderPage();
+
+    const full = cardOf(await screen.findByRole("heading", { name: "Full House" }));
+    expect(full).toHaveTextContent("18 / 18 players · 2 waiting");
+    expect(full).not.toHaveTextContent("20 / 18");
   });
 
   it("lists the clubs with their whole logo (not cropped into a banner) and a plain-text excerpt (CC-21)", async () => {
