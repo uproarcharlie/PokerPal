@@ -8,6 +8,7 @@ import { clubTimeZone } from "@/lib/format";
 import type { RecordedEntries, TournamentFormValues } from "../../tournament-form";
 import { BasicInfoSection } from "./basic-info-section";
 import { BuyInSection, PrizePoolSection } from "./buy-in-section";
+import { FormatPresets } from "./format-presets";
 import { LimitsSection } from "./limits-section";
 import { OptionsSection } from "./options-section";
 
@@ -69,6 +70,7 @@ export function TournamentForm({
         ) : null}
         <fieldset disabled={moneyLocked} className="space-y-6">
           <legend className="sr-only">Money</legend>
+          {moneyLocked ? null : <FormatPresets form={form} />}
           <BuyInSection control={form.control} rakeLabel={label} recorded={recorded} />
           <PrizePoolSection control={form.control} rakeLabel={label} />
         </fieldset>

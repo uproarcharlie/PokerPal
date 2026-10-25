@@ -110,6 +110,18 @@ describe("invalidation helpers", () => {
     expect(invalidated(client, qk.tournaments.list())).toBe(true);
   });
 
+  it("invalidateClub reaches every tournament's prize pool and display when the club renamed its rake, and only then", async () => {
+    const client = clientWith([qk.tournaments.prizePool("t1"), qk.tournaments.display("t1"), qk.seasons.list()]);
+
+    await invalidateClub(client);
+    expect(invalidated(client, qk.tournaments.prizePool("t1"))).toBe(false);
+
+    await invalidateClub(client, { rakeRenamed: true });
+    expect(invalidated(client, qk.tournaments.prizePool("t1"))).toBe(true);
+    expect(invalidated(client, qk.tournaments.display("t1"))).toBe(true);
+    expect(invalidated(client, qk.seasons.list())).toBe(false);
+  });
+
   it("invalidateSeason covers points systems; invalidatePlayers covers the lists that show players", async () => {
     const client = clientWith([qk.pointsSystems.allocations("p1"), qk.tournaments.registrations("t1"), qk.seasons.leaderboard("s1")]);
 

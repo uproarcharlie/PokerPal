@@ -1,11 +1,11 @@
 import type { RefObject } from "react";
 import { Link } from "wouter";
-import { ExternalLink, ListOrdered, MoreHorizontal, Pause, Pencil, Play, Square, Trash2, UserPlus } from "lucide-react";
+import { ExternalLink, ListOrdered, MonitorPlay, MoreHorizontal, Pencil, Play, RotateCcw, Square, Trash2, UserPlus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useMediaQuery } from "@/components/shared/use-media-query";
-import { routes } from "@/app/routes";
+import { routes, VENUE_SCREEN } from "@/app/routes";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { isClosedStatus } from "@shared/domain/tournaments";
 import type { WaitingCount } from "./desk-actions";
@@ -30,11 +30,11 @@ interface TournamentActionsBarProps {
 
 /**
  * Below this width the other screens and the settings go in one "More" menu. Beside a usual title,
- * these four and the TD's own actions (Register Player, Pause, End Tournament with its count) need
- * some 1,700 px on one row: narrower, they wrapped onto a second row even on a 1280 px laptop, and on
- * a phone they pinned a third of the screen (lead's visual review, item 3).
+ * these five and the TD's own actions (Register Player, Reopen registration, End Tournament with its
+ * count) need some 1,900 px on one row: narrower, they wrapped onto a second row even on a 1280 px
+ * laptop, and on a phone they pinned a third of the screen (lead's visual review, item 3).
  */
-const MORE_MENU_QUERY = "(max-width: 1799px)";
+const MORE_MENU_QUERY = "(max-width: 1999px)";
 
 /** The other screens and the settings: in the "More" menu, or as buttons on a screen wide enough for one row. */
 function SecondaryActions({ tournament, onOpen, moreMenuRef }: Pick<TournamentActionsBarProps, "tournament" | "onOpen" | "moreMenuRef">) {
@@ -63,6 +63,12 @@ function SecondaryActions({ tournament, onOpen, moreMenuRef }: Pick<TournamentAc
               <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
               Public View
             </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <a href={routes.clockDisplay(tournament.id, VENUE_SCREEN)} target="_blank" rel="noreferrer" data-testid="open-tv-clock">
+              <MonitorPlay className="mr-2 h-4 w-4" aria-hidden="true" />
+              TV clock
+            </a>
           </DropdownMenuItem>
           {canManage ? (
             <DropdownMenuItem onSelect={() => onOpen("edit")} data-testid="edit-tournament">
@@ -98,6 +104,12 @@ function SecondaryActions({ tournament, onOpen, moreMenuRef }: Pick<TournamentAc
           <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
           Public View
         </Link>
+      </Button>
+      <Button asChild variant="outline" size="sm">
+        <a href={routes.clockDisplay(tournament.id, VENUE_SCREEN)} target="_blank" rel="noreferrer" data-testid="open-tv-clock">
+          <MonitorPlay className="mr-2 h-4 w-4" aria-hidden="true" />
+          TV clock
+        </a>
       </Button>
       {canManage ? (
         <Button variant="outline" size="sm" onClick={() => onOpen("edit")} data-testid="edit-tournament">
@@ -158,9 +170,10 @@ export function TournamentActionsBar({
         </Button>
       ) : null}
       {running ? (
+        // Back to open for sign-ups (what "Pause" always did): the clock has its own pause (phase4-contracts §8.1).
         <Button variant="outline" onClick={() => onStatusChange("registration")} busy={statusChanging} data-testid="pause-tournament">
-          <Pause className="mr-2 h-4 w-4" aria-hidden="true" />
-          Pause
+          <RotateCcw className="mr-2 h-4 w-4" aria-hidden="true" />
+          Reopen registration
         </Button>
       ) : null}
       {running ? (

@@ -288,6 +288,20 @@ describe("POST /api/pending-actions/:id/confirm", () => {
     expect((await registrationRow(aliceRegistration.id)).rebuys).toBe(1);
   });
 
+  it("refuses a player who already took their one life line: a second add-on, or a re-buy after the add-on (TDN3-HOUSE-RULES)", async () => {
+    const { tournament, alice, bob } = await liveTournament({ maxRebuys: 1, maxAddons: 1, rebuyOrAddon: true });
+    await testDb().update(tournamentRegistrations).set({ addons: 1 }).where(eq(tournamentRegistrations.playerId, alice.id));
+
+    const secondAddon = await request(tournament.id, { playerId: alice.id, actionType: "addon" });
+    const rebuy = await request(tournament.id, { playerId: alice.id, actionType: "rebuy" });
+    const bobsAddon = await request(tournament.id, { playerId: bob.id, actionType: "addon" });
+
+    expect([secondAddon.status, secondAddon.body.code]).toEqual([409, "MAX_ADDONS_REACHED"]);
+    expect(rebuy.status).toBe(409);
+    expect(rebuy.body).toEqual({ error: "Already took an add-on: this tournament allows one re-buy OR one add-on per player", code: "REBUY_OR_ADDON" });
+    expect(bobsAddon.status).toBe(201);
+  });
+
   it("refuses what the rules no longer allow and keeps the request pending", async () => {
     const { tournament, alice, bob, agent } = await liveTournament({ maxRebuys: 1 });
     const carol = await createPlayer({ name: "Carol" });

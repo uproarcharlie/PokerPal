@@ -12,6 +12,7 @@ import type request from "supertest";
 import { beforeAll, describe, expect, it } from "vitest";
 import { PUBLIC_SNAPSHOT_FIELDS } from "@shared/api/finalize";
 import { findForbiddenKeys } from "@shared/api/public";
+import { presetStructure } from "@shared/domain/blind-structures";
 import { users, type Club, type Player, type PointsSystem, type Season, type Tournament } from "@shared/schema";
 import { createPlayer, createSeason, createUser } from "../factories";
 import { getApp, testDb } from "../helpers";
@@ -50,6 +51,15 @@ const PROBES: Record<string, Probe> = {
   "GET /api/points-systems/:id": ({ pointsSystem }) => [`/api/points-systems/${pointsSystem.id}`],
   "GET /api/points-systems/:pointsSystemId/allocations": ({ pointsSystem }) => [`/api/points-systems/${pointsSystem.id}/allocations`],
   "GET /api/public/tournaments/:id/players": ({ live }) => [`/api/public/tournaments/${live.id}/players?q=PII`],
+  "GET /api/public/tournaments/:id/display": ({ live, finished }) => [
+    `/api/public/tournaments/${live.id}/display`,
+    `/api/public/tournaments/${finished.id}/display`,
+  ],
+  "GET /api/public/tournaments/:id/seating": ({ live, finished }) => [
+    `/api/public/tournaments/${live.id}/seating`,
+    `/api/public/tournaments/${finished.id}/seating`,
+  ],
+  "GET /api/public/seasons/:id/leaderboard": ({ season }) => [`/api/public/seasons/${season.id}/leaderboard`],
   "GET /api/tournaments": ({ club }) => ["/api/tournaments", `/api/tournaments?clubId=${club.id}`],
   "GET /api/tournaments/counts": () => ["/api/tournaments/counts"],
   "GET /api/tournaments/:id": ({ live, finished }) => [`/api/tournaments/${live.id}`, `/api/tournaments/${finished.id}`],
@@ -159,6 +169,19 @@ async function buildWorld(): Promise<World> {
   await ok(
     owner.agent.put(`/api/tournaments/${live.id}/prize-pool/adjustment`).send({ mode: "ap_override", amount: "20.00", reason: "Low turnout" }),
   );
+  // Seated players, a running clock showing the money and an early bird, so the TV and seat finder have them all to show.
+  await ok(manager.agent.post(`/api/tournaments/${live.id}/seating/setup`).send({}), 201);
+  await ok(
+    manager.agent.put(`/api/tournaments/${live.id}/clock`).send({
+      structure: presetStructure("central_stars_one_life_line"),
+      presetKey: "central_stars_one_life_line",
+      displaySettings: { showPrizePool: "always", showAp: true, qrTarget: "seats" },
+      baseHash: null,
+    }),
+    201,
+  );
+  await ok(manager.agent.post(`/api/tournaments/${live.id}/clock/actions`).send({ action: "start" }));
+  await ok(manager.agent.post(`/api/tournaments/${live.id}/early-birds`).send({ registrationIds: [liveRegistrations[1].id], earlyBird: true }));
 
   // The finished tournament: three players, two knocked out, finalized by the owner.
   const finished = await newTournament("PII Finished");

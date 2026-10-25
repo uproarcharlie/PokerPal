@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { server } from "@test/msw/server";
 import { apiError, mockSignedIn, renderWithApp } from "@test/helpers/web";
 import { clubDto, pendingActionDto, phoneLayout, tournamentDto } from "@test/helpers/f1-tournaments";
+import { seatingDto } from "@test/helpers/seating-dto";
 import { DESK_REFRESH_MS } from "../staff-hooks";
 import AdminActionsPage from "./admin-actions";
 
@@ -83,6 +84,26 @@ describe("AdminActionsPage (TN2-02)", () => {
     await user.click(screen.getByTestId("reentry-record-only"));
     await waitFor(() => expect(bodies).toEqual([undefined, { reenter: false }]));
     await waitFor(() => expect(screen.queryByTestId("reentry-question")).not.toBeInTheDocument());
+  });
+
+  it("says a re-entry whose old seat was taken is waiting for a seat, with a way to seat them (TDN2-WAITING-NOT-FLAGGED)", async () => {
+    server.use(
+      http.get("/api/tournaments/t1", () => HttpResponse.json(tournament)),
+      http.get("/api/tournaments/t1/pending-actions", () => HttpResponse.json([action])),
+      http.post("/api/pending-actions/a1/confirm", () =>
+        HttpResponse.json({ success: true, registration: { id: "r1", player: { id: "p1", name: "Ann", imageUrl: null } }, reentered: true, target: null }),
+      ),
+      http.get("/api/tournaments/t1/seating", () =>
+        HttpResponse.json(seatingDto({ tables: [{ id: "tb1", number: 1, seats: 9, seated: { 3: { id: "r2", name: "Bob" } } }], unseated: [{ id: "r1", name: "Ann" }] })),
+      ),
+    );
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(within(await screen.findByRole("table")).getByRole("button", { name: /Confirm/ }));
+    const notifications = within(screen.getByTestId("notifications"));
+    expect(await notifications.findByText("Ann is back in with the re-buy, waiting for a seat.")).toBeInTheDocument();
+    expect(notifications.getByRole("button", { name: "Seat now" })).toBeInTheDocument();
   });
 
   it("handles each request's own answer when a second one is confirmed before the first answer came (P3REV0-PARITY-03)", async () => {

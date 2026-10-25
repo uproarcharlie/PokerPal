@@ -1,0 +1,166 @@
+/**
+ * Seating bodies for the web tests (U-SEAT): a seating described by its tables and who sits where, and
+ * built into SeatingDto / PublicSeatingDto with every derived figure (counts, open seats, the Seat column)
+ * worked out as the server does, so a test states only the scenario. MSW helpers record what the panel
+ * sent.
+ */
+import { http, HttpResponse } from "msw";
+import type { PublicPlayer } from "@shared/api/public";
+import type { PublicSeatingDto, SeatingDto, SeatingMutationDto, SeatMoveDto, SeatRefDto, TableDto } from "@shared/api/seating";
+import type { SeatReason } from "@shared/domain/seating";
+import { suggestTables } from "@shared/domain/seating";
+import type { TournamentStatus } from "@shared/domain/tournaments";
+import { server } from "../msw/server";
+import { recordRequests } from "./requests";
+
+/** Someone in a seat (or waiting): their registration, name, and whether they have paid (default yes). */
+export interface EntrySpec {
+  id: string;
+  name: string;
+  paid?: boolean;
+  imageUrl?: string | null;
+}
+
+export interface TableSpec {
+  id: string;
+  number: number;
+  name?: string | null;
+  seats?: number;
+  status?: "active" | "broken";
+  /** Who sits where: seat number → entry (empty seats left out). */
+  seated?: Partial<Record<number, EntrySpec>>;
+}
+
+export interface SeatingSpec {
+  tournamentId?: string;
+  tables?: TableSpec[];
+  unseated?: EntrySpec[];
+  readOnly?: boolean;
+  tournamentStatus?: TournamentStatus;
+  version?: string;
+  suggestions?: Partial<SeatingDto["suggestions"]>;
+  lastChange?: SeatingDto["lastChange"];
+}
+
+export const seatPlayer = (entry: EntrySpec): PublicPlayer => ({ id: `p-${entry.id}`, name: entry.name, imageUrl: entry.imageUrl ?? null });
+
+const displayName = (table: TableSpec) => table.name ?? `Table ${table.number}`;
+
+export function tableDto(table: TableSpec): TableDto {
+  const seatCount = table.seats ?? 9;
+  const status = table.status ?? "active";
+  const seated = table.seated ?? {};
+  const seats =
+    status === "active"
+      ? Array.from({ length: seatCount }, (_, i) => {
+          const entry = seated[i + 1];
+          return entry
+            ? { seatNumber: i + 1, registrationId: entry.id, player: seatPlayer(entry), paymentConfirmed: entry.paid ?? true }
+            : { seatNumber: i + 1, registrationId: null, player: null, paymentConfirmed: null };
+        })
+      : [];
+  return {
+    id: table.id,
+    tableNumber: table.number,
+    name: table.name ?? null,
+    displayName: displayName(table),
+    seatCount,
+    status,
+    occupied: seats.filter((seat) => seat.registrationId !== null).length,
+    seats,
+  };
+}
+
+/** The TD's seating for `spec`: active tables by number, then archived; the unseated by name; the figures. */
+export function seatingDto(spec: SeatingSpec = {}): SeatingDto {
+  const tables = (spec.tables ?? []).map(tableDto).sort((a, b) => (a.status === b.status ? a.tableNumber - b.tableNumber : a.status === "active" ? -1 : 1));
+  const active = tables.filter((table) => table.status === "active");
+  const unseated = [...(spec.unseated ?? [])]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((entry) => ({ registrationId: entry.id, player: seatPlayer(entry), paymentConfirmed: entry.paid ?? true }));
+  const seated = active.reduce((sum, table) => sum + table.occupied, 0);
+  const capacity = active.reduce((sum, table) => sum + table.seatCount, 0);
+  const counts = active.map((table) => table.occupied);
+  const activePlayers = seated + unseated.length;
+  const seatByRegistrationId: SeatingDto["seatByRegistrationId"] = {};
+  for (const table of active) {
+    for (const seat of table.seats) if (seat.registrationId) seatByRegistrationId[seat.registrationId] = { tableNumber: table.tableNumber, seatNumber: seat.seatNumber };
+  }
+  const setup = active.length === 0 ? { seatCount: 9, ...suggestTables(activePlayers, 9) } : null;
+  return {
+    tournamentId: spec.tournamentId ?? "t1",
+    tournamentStatus: spec.tournamentStatus ?? (spec.readOnly ? "completed" : "in_progress"),
+    readOnly: spec.readOnly ?? false,
+    version: spec.version ?? "0badc0de",
+    tables,
+    unseated,
+    stats: {
+      activePlayers,
+      seated,
+      unseated: unseated.length,
+      unconfirmedUnseated: unseated.filter((entry) => !entry.paymentConfirmed).length,
+      openSeats: capacity - seated,
+      capacity,
+      activeTables: active.length,
+      maxDiff: counts.length > 1 ? Math.max(...counts) - Math.min(...counts) : 0,
+    },
+    suggestions: { balance: [], breakTable: null, finalTable: null, setup, ...spec.suggestions },
+    seatByRegistrationId,
+    lastChange: spec.lastChange ?? null,
+  };
+}
+
+/** A seat as moves name it. */
+export const seatRef = (tableId: string, tableNumber: number, seatNumber: number, tableName = `Table ${tableNumber}`): SeatRefDto => ({
+  tableId,
+  tableNumber,
+  tableName,
+  seatNumber,
+});
+
+export const seatMove = (registrationId: string, playerName: string, from: SeatRefDto | null, to: SeatRefDto | null, reason: SeatReason): SeatMoveDto => ({
+  registrationId,
+  playerName,
+  from,
+  to,
+  reason,
+});
+
+export const seatingMutation = (seating: SeatingDto, moves: SeatMoveDto[] = [], extra: Partial<SeatingMutationDto> = {}): SeatingMutationDto => ({ seating, moves, ...extra });
+
+/** What anyone sees of `spec` on the seat finder: active tables, and every seated player by name. */
+export function publicSeatingDto(spec: SeatingSpec & { tournamentName?: string } = {}): PublicSeatingDto {
+  const seating = seatingDto(spec);
+  const active = seating.tables.filter((table) => table.status === "active");
+  return {
+    tournament: { id: seating.tournamentId, name: spec.tournamentName ?? "Friday Freezeout", status: seating.tournamentStatus },
+    club: { id: "c1", name: "Central Stars", slug: "central-stars", imageUrl: null },
+    tables: active.map((table) => ({
+      tableNumber: table.tableNumber,
+      displayName: table.displayName,
+      seatCount: table.seatCount,
+      seats: table.seats.map((seat) => ({ seatNumber: seat.seatNumber, player: seat.player })),
+    })),
+    players: active
+      .flatMap((table) =>
+        table.seats.flatMap((seat) =>
+          seat.player ? [{ player: seat.player, tableNumber: table.tableNumber, tableName: table.displayName, seatNumber: seat.seatNumber }] : [],
+        ),
+      )
+      .sort((a, b) => a.player.name.localeCompare(b.player.name)),
+    unseatedCount: seating.stats.unseated,
+  };
+}
+
+/** GET /api/tournaments/:id/seating answers `seating` (staff). */
+export function mockSeating(seating: SeatingDto, tournamentId = "t1"): void {
+  server.use(http.get(`/api/tournaments/${tournamentId}/seating`, () => HttpResponse.json(seating)));
+}
+
+/**
+ * A seating write at `path` answers `respond()` (each time it is asked), and records the bodies sent,
+ * in order. A DELETE records `null`.
+ */
+export function recordWrite(method: "post" | "patch" | "delete", path: string, respond: () => Response | Promise<Response>): unknown[] {
+  return recordRequests([[method, path]], () => respond(), (sent) => sent.body ?? null);
+}

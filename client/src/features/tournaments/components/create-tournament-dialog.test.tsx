@@ -85,6 +85,30 @@ describe("CreateTournamentDialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it("fills in Central Stars' One Life Line format in one tap: $100 in, one $25 re-buy and a $25 add-on", async () => {
+    const created = mockForm();
+    const { user } = await renderDialog();
+
+    await user.type(screen.getByTestId("tournament-name"), "One Life Line #21");
+    await choose(user, screen.getByTestId("club-select"), "Central Stars");
+    fireEvent.change(screen.getByTestId("start-datetime"), { target: { value: "2026-10-30T19:00" } });
+    await user.type(screen.getByTestId("max-players"), "40");
+    const formats = screen.getByTestId("format-presets");
+    expect(formats).toHaveTextContent("One life line: one $25 re-buy or one $25 add-on (120,000), not both · Early-bird bonus 25,000 · Cash entry");
+    await user.click(within(formats).getByRole("button", { name: "Use the Central Stars · One Life Line format" }));
+
+    expect(await screen.findByText("Central Stars · One Life Line format filled in")).toBeInTheDocument();
+    expect(screen.getByTestId("buyin-amount")).toHaveValue("100.00");
+    expect(screen.getByTestId("rebuy-amount")).toHaveValue("25.00");
+    expect(screen.getByTestId("max-rebuys")).toHaveValue("1");
+    expect(screen.getByTestId("rebuy-period")).toHaveValue("135");
+    expect(screen.getByTestId("addon-amount")).toHaveValue("25.00");
+    await user.click(screen.getByTestId("create-tournament-final"));
+
+    await waitFor(() => expect(created).toHaveLength(1));
+    expect(created[0]).toMatchObject({ buyInAmount: "100.00", rebuyAmount: "25.00", maxRebuys: 1, rebuyPeriodMinutes: 135, addonAmount: "25.00" });
+  });
+
   it("saves a draft as scheduled", async () => {
     const created = mockForm();
     const { user } = await renderDialog();
@@ -123,7 +147,7 @@ describe("CreateTournamentDialog", () => {
     const { user } = await renderDialog();
     await fillRequired(user);
 
-    await choose(user, screen.getByTestId("rake-type"), "Percentage (%)");
+    await user.selectOptions(screen.getByTestId("rake-type"), "Percentage (%)");
     expect(screen.getByText("AP Type")).toBeInTheDocument();
     await user.type(screen.getByTestId("rake-amount"), "120");
     await user.click(screen.getByTestId("create-tournament-final"));

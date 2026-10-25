@@ -23,6 +23,8 @@ export function PoolCard({ title, description, children }: { title: string; desc
 interface PoolLineProps {
   label: ReactNode;
   value: ReactNode;
+  /** A line under the label, e.g. "Fixed at $20 (calculated $35)". */
+  note?: ReactNode;
   testId?: string;
   /** "total" for a subtotal, "deduction" for money taken off, "result" for the net pool. */
   tone?: "plain" | "total" | "deduction" | "result" | "accent";
@@ -45,12 +47,15 @@ const LABEL_CLASSES = {
   accent: "text-sm font-medium text-foreground",
 } as const;
 
-/** One line of the calculation: what it is, and the amount. */
-export function PoolLine({ label, value, testId, tone = "plain", className }: PoolLineProps) {
+/** One line of a money breakdown (the prize pool calculator, the AP panel): what it is, and the amount. */
+export function PoolLine({ label, value, note, testId, tone = "plain", className }: PoolLineProps) {
   return (
-    <div className={cn("flex items-center justify-between gap-4 py-2", className)}>
-      <span className={LABEL_CLASSES[tone]}>{label}</span>
-      <span className={cn("tabular-nums", VALUE_CLASSES[tone])} data-testid={testId}>
+    <div className={cn("flex justify-between gap-4 py-2", note ? "items-start" : "items-center", className)}>
+      <span className={cn("min-w-0", LABEL_CLASSES[tone])}>
+        {label}
+        {note ? <span className="mt-0.5 block text-xs font-normal text-muted-foreground">{note}</span> : null}
+      </span>
+      <span className={cn("shrink-0 tabular-nums", VALUE_CLASSES[tone])} data-testid={testId}>
         {value}
       </span>
     </div>

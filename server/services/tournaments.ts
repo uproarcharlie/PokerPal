@@ -20,19 +20,28 @@ import { RAKE_RATE_KEYS, type RakeAmountKey, type RakeRates, type RakeTypeKey } 
 import type { Tournament } from "@shared/schema";
 import type { AppEnv } from "../config/env";
 import { db, type Executor } from "../db";
-import { clubScope, viewerFor } from "../http/authz";
+import { actingUserId, clubScope, viewerFor } from "../http/authz";
 import { badRequest, conflict, notFound } from "../http/errors";
 import { insertActivity } from "../repositories/activity";
 import * as pointsRepo from "../repositories/points";
 import * as seasonsRepo from "../repositories/seasons";
 import * as tournamentsRepo from "../repositories/tournaments";
 import { recordAudit } from "./audit";
+import { stopClockForCancel } from "./clock";
 import { assertOwnedImage, noteDeletedImages, noteReplacedImage } from "./images/upload";
-import { applyPrizePoolAdjustment, applyRakeRates, assertApWithinGross, loadPrizePoolContext, mergedRatesOrThrow } from "./prize-pool";
+import {
+  applyPrizePoolAdjustment,
+  applyRakeRates,
+  assertApWithinGross,
+  assertRatesWithinPrices,
+  loadPrizePoolContext,
+  mergedRatesOrThrow,
+} from "./prize-pool";
 import {
   assertHighHandAwardsFit,
   closedMessage,
   isClosed,
+  statusChangeDescription,
   toPublicTournament,
   toTournamentDetail,
   type TournamentDetail,
@@ -122,6 +131,7 @@ export async function createTournament(env: AppEnv, req: Request, input: CreateT
   assertOwnedImage(env, input.imageUrl, undefined, INVALID_MESSAGE);
   const { rates, others } = splitRates(input);
   const merged = mergedRatesOrThrow(NO_RATES, rates);
+  assertRatesWithinPrices({ ...input, ...merged });
   const row = await db.transaction(async (tx) => {
     await assertSeasonAndPoints(tx, input.clubId, input.seasonId, input.pointsSystemId);
     await tournamentsRepo.lockClubTournamentCreates(tx, input.clubId);
@@ -135,14 +145,6 @@ export async function createTournament(env: AppEnv, req: Request, input: CreateT
   });
   return toTournamentDetail(row, await viewerFor(req, row.clubId));
 }
-
-const STATUS_LABELS: Readonly<Record<TournamentStatus, string>> = {
-  scheduled: "Scheduled",
-  registration: "Registration Open",
-  in_progress: "In Progress",
-  completed: "Completed",
-  cancelled: "Cancelled",
-};
 
 /**
  * Only finalize completes a tournament, and a completed one keeps its status. A cancelled one can be
@@ -298,7 +300,7 @@ export async function updateTournament(env: AppEnv, req: Request, id: string, in
     const current = await tournamentsRepo.lockTournamentForUpdate(tx, id);
     if (!current) throw notFound("Tournament not found");
     previousImageUrl = current.imageUrl;
-    const { clubId, status, prizePoolLocked, manualPrizePool, repriceEntries = false, ...allConfig } = input;
+    const { clubId, status, prizePoolLocked, manualPrizePool, repriceEntries = false, keepRakeOverride = false, ...allConfig } = input;
     const { rates, others: config } = splitRates(allConfig);
 
     if (clubId !== undefined && clubId !== current.clubId) {
@@ -338,8 +340,10 @@ export async function updateTournament(env: AppEnv, req: Request, id: string, in
       await insertActivity(tx, {
         tournamentId: id,
         eventType: "status_change",
-        description: `Tournament status changed to ${STATUS_LABELS[status]}`,
+        description: statusChangeDescription(status),
       });
+      // Its clock would run on out of reach: every clock write is refused once it is cancelled.
+      if (status === "cancelled") await stopClockForCancel(tx, id, actingUserId(req));
     }
     if (locking) {
       await insertActivity(tx, {
@@ -359,7 +363,7 @@ export async function updateTournament(env: AppEnv, req: Request, id: string, in
       }
       const repriced = repricedEntries(current, updated, computePrizePool(current, context.registrations).counts);
       if (ratesSent) {
-        const change = { changes: rates, keepOverride: false, clearOverrideWhenUnchanged: false, reason: null };
+        const change = { changes: rates, keepOverride: keepRakeOverride, clearOverrideWhenUnchanged: false, reason: null };
         updated = await applyRakeRates(tx, req, { ...context, tournament: updated }, change);
       }
       // Clearing a manual pool that is not set is not a change, and must not clear an AP override.
@@ -370,6 +374,8 @@ export async function updateTournament(env: AppEnv, req: Request, id: string, in
           adjustment: manualPrizePool === null ? { mode: "calculated" } : { mode: "manual_pool", amount: manualPrizePool },
         });
       }
+      // A fixed rate per entry must not take more than the entry: a new price is checked against it too.
+      assertRatesWithinPrices(updated, current);
       // A manual AP total is a fixed amount: new entry prices must not leave it above what is taken in.
       if (isAmountSet(updated.rakeOverride) && ENTRY_AMOUNTS.some((key) => !sameValue(updated[key], current[key]))) {
         const { gross } = computePrizePool(updated, context.registrations);

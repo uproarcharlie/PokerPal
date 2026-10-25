@@ -161,6 +161,8 @@ describe("PublicRegisterPage: new player", () => {
 
     expect(await screen.findByText(sentence)).toBeInTheDocument();
     expect(screen.getByText("Step 2 of 3")).toBeInTheDocument();
+    // Said once, on the field: not above the form as well.
+    expect(screen.queryByTestId("sign-up-problem")).not.toBeInTheDocument();
   });
 
   it("puts every refusal the server names a field for on that field, not only the first (P3REV2-CQ-06)", async () => {

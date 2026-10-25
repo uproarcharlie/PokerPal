@@ -4,7 +4,7 @@ import { clubSlugSchema, createClubSchema, updateClubSchema } from "@shared/api/
 import type { ClubDto } from "@shared/api/public";
 import { DEFAULT_TIME_ZONE } from "@/lib/format";
 
-const PROFILE_FIELDS = { name: true, slug: true, description: true, imageUrl: true, address: true, timezone: true } as const;
+const PROFILE_FIELDS = { name: true, slug: true, description: true, imageUrl: true, address: true, timezone: true, rakeLabel: true } as const;
 const SOCIAL_FIELDS = { discordUrl: true, twitterUrl: true, facebookUrl: true, instagramUrl: true, websiteUrl: true } as const;
 
 /** What the create form and the settings' Profile tab edit. */
@@ -16,6 +16,8 @@ export interface ClubProfileValues {
   imageUrl: string | null;
   address: string;
   timezone: string;
+  /** The club's name for its rake, e.g. "AP"; "" for the default ("Rake"). */
+  rakeLabel: string;
 }
 
 export type ClubSocialField = keyof typeof SOCIAL_FIELDS;
@@ -53,6 +55,7 @@ export function profileValues(club?: ClubDto): ClubProfileValues {
     address: club?.address ?? "",
     // A club without one has always been shown in DEFAULT_TIME_ZONE; the select says so.
     timezone: club?.timezone?.trim() || DEFAULT_TIME_ZONE,
+    rakeLabel: club?.rakeLabel ?? "",
   };
 }
 

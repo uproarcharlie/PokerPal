@@ -17,6 +17,9 @@ describe("routes", () => {
       [paths.publicClub, routes.publicClub("central-stars")],
       [paths.tournamentQr, routes.tournamentQr("t1")],
       [paths.playerActions, routes.playerActions("t1")],
+      [paths.clockDisplay, routes.clockDisplay("t1")],
+      [paths.publicSeats, routes.publicSeats("t1")],
+      [paths.publicSeason, routes.publicSeason("s1")],
       [paths.clubDetails, routes.clubDetails("c1")],
       [paths.clubSettings, routes.clubSettings("c1")],
       [paths.seasonSettings, routes.seasonSettings("s1")],
@@ -31,6 +34,21 @@ describe("routes", () => {
     expect(routes.publicClub("central-stars")).toBe("/club/central-stars");
     expect(routes.playerActions("t1")).toBe("/tournaments/t1/actions");
     expect(routes.tournamentAdmin("t1")).toBe("/admin/tournaments/t1");
+  });
+
+  it("keep the TD's desk tab in the address, so a reload opens the same tab", () => {
+    expect(routes.tournamentAdmin("t1", "clock")).toBe("/admin/tournaments/t1?tab=clock");
+    expect(routes.tournamentAdmin("t1", undefined)).toBe("/admin/tournaments/t1");
+  });
+
+  it("serve the live screens where the TV clock's QR code and the seat finder links point", () => {
+    expect(routes.clockDisplay("t1")).toBe("/clock/t1");
+    expect(routes.clockDisplay("t1", "tv")).toBe("/clock/t1?screen=tv");
+    expect(routes.publicSeats("t1")).toBe("/tournament/t1/seats");
+    expect(routes.publicSeason("s1")).toBe("/season/s1");
+    const { result } = renderHook(() => useRouter());
+    // The tournament page's pattern does not swallow its seat finder.
+    expect(matchRoute(result.current.parser, paths.publicTournament, routes.publicSeats("t1"))[0]).toBe(false);
   });
 
   it("encode ids and carry a sign-in's way back", () => {

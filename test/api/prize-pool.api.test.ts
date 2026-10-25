@@ -350,6 +350,23 @@ describe("PUT /api/tournaments/:id/prize-pool/rates", () => {
     expect(await row(tournament.id)).toMatchObject({ rakeAmount: "5.00", rakeOverride: "20.00" });
   });
 
+  it("keeps the AP total when Edit Tournament changes an AP rate with keepRakeOverride, and clears it without (P4REV2-MONEY-01)", async () => {
+    const kept = await poolTournament({ rakeOverride: "20.00" }, 2);
+    const cleared = await poolTournament({ rakeOverride: "20.00" }, 2);
+    const edit = { rakeAmount: "5" };
+
+    const keeping = await kept.staff.owner.agent.put(`/api/tournaments/${kept.tournament.id}`).send({ ...edit, keepRakeOverride: true });
+    const clearing = await cleared.staff.owner.agent.put(`/api/tournaments/${cleared.tournament.id}`).send(edit);
+
+    expect([keeping.status, clearing.status]).toEqual([200, 200]);
+    expect(keeping.body).toMatchObject({ rakeAmount: "5.00", rakeOverride: "20.00" });
+    expect(await row(kept.tournament.id)).toMatchObject({ rakeAmount: "5.00", rakeOverride: "20.00" });
+    expect(await row(cleared.tournament.id)).toMatchObject({ rakeAmount: "5.00", rakeOverride: null });
+    expect((await activity(kept.tournament.id)).map((entry) => entry.description)).toEqual(["AP rates changed: buy-ins 10% → 5%"]);
+    expect((await activity(cleared.tournament.id)).map((entry) => entry.description)).toEqual(["AP rates changed: buy-ins 10% → 5%; the manual AP total is cleared"]);
+    expect((await audits(kept.tournament.id)).map((entry) => entry.data)).toMatchObject([{ clearedOverride: false }]);
+  });
+
   it('stores "0.00" for a rate switched to none', async () => {
     const { staff, tournament } = await poolTournament({}, 1);
 
@@ -368,6 +385,25 @@ describe("PUT /api/tournaments/:id/prize-pool/rates", () => {
     expect(over.body).toMatchObject({ code: "PERCENT_OVER_100", details: { field: "rebuyRakeAmount" } });
     expect(missing.body).toMatchObject({ code: "AMOUNT_REQUIRED", details: { field: "addonRakeAmount" } });
     expect(await activity(tournament.id)).toEqual([]);
+  });
+
+  it("refuses a fixed rate above the price of its entry, which would take the pool below zero (P4REV2R2-MONEY-01)", async () => {
+    const { staff, tournament } = await poolTournament({ rebuyAmount: "25.00", addonAmount: "25.00" }, 1);
+    const agent = staff.owner.agent;
+
+    const overRebuy = await rates(agent, tournament.id, { rebuyRakeType: "fixed", rebuyRakeAmount: "30.00" });
+    const overBuyIn = await rates(agent, tournament.id, { rakeType: "fixed", rakeAmount: "50.01" });
+    const atPrice = await rates(agent, tournament.id, { addonRakeType: "fixed", addonRakeAmount: "25.00" });
+
+    expect(overRebuy.status).toBe(400);
+    expect(overRebuy.body).toEqual({
+      error: "$30 per re-buy is more than a re-buy costs ($25): the prize pool would go below zero",
+      code: "AMOUNT_OVER_PRICE",
+      details: { field: "rebuyRakeAmount" },
+    });
+    expect(overBuyIn.body).toMatchObject({ code: "AMOUNT_OVER_PRICE", details: { field: "rakeAmount" } });
+    expect(atPrice.status).toBe(200);
+    expect(await row(tournament.id)).toMatchObject({ rebuyRakeType: "none", rakeType: "percentage", addonRakeType: "fixed", addonRakeAmount: "25.00" });
   });
 
   it("answers 400 for a request with no rate in it, and writes nothing for rates resent unchanged", async () => {

@@ -8,6 +8,7 @@ import {
   describeDatabaseTarget,
   isConnectionError,
   loadMigrationFiles,
+  lockConflictCode,
   MigrationError,
   resolveMigrationsDir,
   retryWhileUnreachable,
@@ -678,4 +679,38 @@ describe("retryWhileUnreachable", () => {
     await expect(retryWhileUnreachable(work, { waitMs: 60_000, logger: logger() })).rejects.toThrow("Refusing to run migrations");
     expect(work).toHaveBeenCalledTimes(1);
   });
+});
+
+describe("lockConflictCode (P4REV3-PROD-01)", () => {
+  const pgError = (code: string) => Object.assign(new Error("lost"), { code });
+
+  it("finds a deadlock or a lock timeout, also as the cause of the runner's own error", () => {
+    expect(lockConflictCode(pgError("40P01"))).toBe("40P01");
+    expect(lockConflictCode(new MigrationError("0005_x.sql:3 failed", { cause: pgError("55P03") }))).toBe("55P03");
+  });
+
+  it("leaves every other failure alone, so it fails the boot at once", () => {
+    expect(lockConflictCode(pgError("23505"))).toBeNull();
+    expect(lockConflictCode(new MigrationError("0005_x.sql:3 failed", { cause: pgError("42P01") }))).toBeNull();
+    expect(lockConflictCode("40P01")).toBeNull();
+    expect(lockConflictCode(undefined)).toBeNull();
+  });
+});
+
+describe("the shipped migrations' locks (P4REV3-PROD-01)", () => {
+  /** Files before this one ran on every database before the rule; they never run again unless edited. */
+  const RULE_FROM = "0005";
+  const shipped = loadMigrationFiles(resolveMigrationsDir()).filter((file) => file.name >= RULE_FROM);
+  const altered = (sql: string) => Array.from(sql.matchAll(/\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?"?([a-z_]+)"?/gi), (match) => match[1].toLowerCase());
+  const referenced = (sql: string) => Array.from(sql.matchAll(/\bREFERENCES\s+"?([a-z_]+)"?/gi), (match) => match[1].toLowerCase());
+
+  it.each(shipped.map((file) => [file.name, file] as const))(
+    "%s alters at most one existing table, and then locks no other in the same transaction",
+    (_name, file) => {
+      const sql = file.statements.map((statement) => statement.sql).join("\n");
+      const tables = new Set(altered(sql));
+      expect(tables.size).toBeLessThanOrEqual(1);
+      expect(tables.size === 1 ? referenced(sql) : []).toEqual([]);
+    },
+  );
 });

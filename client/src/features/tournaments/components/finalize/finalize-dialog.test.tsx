@@ -4,7 +4,20 @@ import { http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { server } from "@test/msw/server";
 import { apiError, mockSignedOut, renderWithApp } from "@test/helpers/web";
-import { alice, bob, carl, finalizeResultDto, HASH_A, HASH_B, HASH_C, mockFinalize, mockPreview, planRow as row, previewOf as preview } from "@test/helpers/f1-tournaments";
+import {
+  alice,
+  bob,
+  carl,
+  finalizeResultDto,
+  HASH_A,
+  HASH_B,
+  HASH_C,
+  mockFinalize,
+  mockPreview,
+  planRow as row,
+  previewOf as preview,
+  previewPrizePool,
+} from "@test/helpers/f1-tournaments";
 import { FinalizeDialog } from "./finalize-dialog";
 
 const warnings = ["The prize pool is not locked"];
@@ -42,6 +55,23 @@ beforeEach(() => {
 });
 
 describe("FinalizeDialog", () => {
+  it("shows beside a pool fixed by hand what the club keeps or adds, not the rates' AP the fixed pool overrides (MONEY-AP-03)", async () => {
+    // $500 in, $25 AP by the rates, the pool fixed at $600: the club adds $100.
+    const breakdown = { ...previewPrizePool.breakdown, manualPrizePool: 60_000, net: 60_000, netSource: "manual_pool" as const, impliedRake: -10_000 };
+    mockPreview(() => preview({ planHash: HASH_A, prizePool: { ...previewPrizePool, breakdown } }));
+    const { unmount } = renderWithApp(<FinalizeDialog open onOpenChange={() => undefined} tournamentId="t1" />);
+    expect(await screen.findByTestId("finalize-pool")).toHaveTextContent("$600");
+    expect(screen.getByTestId("finalize-ap")).toHaveTextContent("$100");
+    expect(screen.getByText("Added by the club")).toBeInTheDocument();
+    unmount();
+
+    // The pool fixed at $450: the club keeps $50.
+    mockPreview(() => preview({ planHash: HASH_A, prizePool: { ...previewPrizePool, breakdown: { ...breakdown, manualPrizePool: 45_000, net: 45_000, impliedRake: 5_000 } } }));
+    renderWithApp(<FinalizeDialog open onOpenChange={() => undefined} tournamentId="t1" />);
+    expect(await screen.findByTestId("finalize-ap")).toHaveTextContent("$50");
+    expect(screen.getByText("AP the club keeps")).toBeInTheDocument();
+  });
+
   it("asks for the finishing order, previews it, and finalizes the plan it showed", async () => {
     const previews = mockPreview((order) => (!order ? needsOrder : order[0] === "r1" ? aliceFirst : bobFirst));
     const finalizes = mockFinalize(finalized);

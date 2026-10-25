@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { dismissToast, useToasts, type ToasterToast } from "@/hooks/use-toast";
 import { NOTIFICATIONS_REGION_ATTRIBUTE } from "@/lib/notifications-region";
 import { cn } from "@/lib/utils";
@@ -59,6 +60,19 @@ function ToastItem({ toast, onDismiss }: { toast: ToasterToast; onDismiss: () =>
     >
       {toast.title ? <p className="text-sm font-semibold">{toast.title}</p> : null}
       {toast.description ? <div className={cn("text-sm opacity-90", toast.title ? "mt-1" : null)}>{toast.description}</div> : null}
+      {toast.action ? (
+        <Button
+          size="sm"
+          variant="outline"
+          className="mt-2 text-foreground"
+          onClick={() => {
+            onDismiss();
+            toast.action?.onClick();
+          }}
+        >
+          {toast.action.label}
+        </Button>
+      ) : null}
       <button
         type="button"
         aria-label="Dismiss notification"

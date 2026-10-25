@@ -48,6 +48,8 @@ export const qk = {
     membersCount: (id: string) => ["clubs", "detail", id, "members-count"] as const,
     /** GET /api/clubs/:id/managers (owner or admin): staff and open invitations */
     staff: (id: string) => ["clubs", "detail", id, "staff"] as const,
+    /** GET /api/clubs/:id/blind-structures (staff): structures of recent tournaments, to copy */
+    blindStructures: (id: string) => ["clubs", "detail", id, "blind-structures"] as const,
   },
 
   seasons: {
@@ -61,6 +63,8 @@ export const qk = {
     leaderboard: (id: string) => ["seasons", "detail", id, "leaderboard"] as const,
     /** GET /api/seasons/:id/points-systems */
     pointsSystems: (id: string) => ["seasons", "detail", id, "points-systems"] as const,
+    /** GET /api/public/seasons/:id/leaderboard (the season page the TV clock's QR code opens) */
+    publicLeaderboard: (id: string) => ["seasons", "detail", id, "public-leaderboard"] as const,
   },
 
   pointsSystems: {
@@ -100,6 +104,12 @@ export const qk = {
     pendingActions: (id: string) => ["tournaments", "detail", id, "pending-actions"] as const,
     /** GET /api/public/tournaments/:id/players?q= (the QR page's "find yourself" search) */
     playerSearch: (id: string, q: string) => ["tournaments", "detail", id, "player-search", q.trim().toLowerCase()] as const,
+    /** GET /api/public/tournaments/:id/display: the clock and live figures (TV, clock panel, clock chip) */
+    display: (id: string) => ["tournaments", "detail", id, "display"] as const,
+    /** GET /api/tournaments/:id/seating (staff) */
+    seating: (id: string) => ["tournaments", "detail", id, "seating"] as const,
+    /** GET /api/public/tournaments/:id/seating ("find your seat", the TV's seating overlay) */
+    publicSeating: (id: string) => ["tournaments", "detail", id, "public-seating"] as const,
   },
 
   /**

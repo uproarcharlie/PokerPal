@@ -59,6 +59,8 @@ export const ERROR_CODES = [
   "HIGH_HAND_NOT_AVAILABLE",
   "PRIZE_POOL_LOCKED",
   "MAX_REBUYS_REACHED",
+  "MAX_ADDONS_REACHED", // 409, past the tournament's add-ons per player (maxAddons)
+  "REBUY_OR_ADDON", // 409, a re-buy and an add-on for one player where the format allows one or the other (rebuyOrAddon)
   "PLAYER_NOT_REGISTERED",
   "PLAYER_ELIMINATED",
   "ALREADY_ELIMINATED",
@@ -82,12 +84,44 @@ export const ERROR_CODES = [
   "AP_EXCEEDS_GROSS",
   "PERCENT_OVER_100",
   "AMOUNT_REQUIRED",
+  "AMOUNT_OVER_PRICE", // 400, a fixed AP rate above the price of its entry (details.field): the pool would go below zero
   "ALREADY_FINALIZED",
   "TOURNAMENT_CANCELLED",
   "ACTIVE_PLAYERS_NEED_ORDER",
   "INVALID_FINISH_ORDER",
   "PLAN_CHANGED",
   "PLAN_HASH_REQUIRED",
+  // tables and seating (phase4-contracts §2)
+  "TABLE_NOT_FOUND", // 404, a table that is not this tournament's
+  "TABLE_LIMIT", // 409, more than 50 active tables
+  "TABLE_NUMBER_TAKEN", // 409
+  "TABLE_OCCUPIED", // 409, removing a table someone sits at (break it or move them first)
+  "SEATS_OCCUPIED", // 409, shrinking a table below an occupied seat (details.seatNumbers)
+  "TABLES_EXIST", // 409, one-tap setup when a table is already active
+  "TABLE_NOT_ACTIVE", // 409, an archived table
+  "LAST_TABLE", // 409, breaking the only active table
+  "NO_TABLES", // 409
+  "INSUFFICIENT_SEATS", // 409, details { needed, available }
+  "SEAT_TAKEN", // 409, details { occupantRegistrationId }
+  "SEAT_OUT_OF_RANGE", // 400
+  "NOT_SEATED", // 409, a swap for a player with no seat
+  "PLAYER_NOT_ACTIVE", // 409, eliminated, or not this tournament's (details { registrationId })
+  "STALE_PLAN", // 409, balance/break/redraw/final table/move/undo against a seating that changed (details { seating })
+  "SEAT_CONFLICT", // 409, a concurrent change took the seat first: refresh and retry
+  // clock (phase4-contracts §3); every 409 carries details { display: LiveDisplayDto }
+  "NO_CLOCK", // 404
+  "CLOCK_EXISTS",
+  "STRUCTURE_CHANGED",
+  "CURRENT_LEVEL_REMOVED",
+  "CLOCK_FINISHED",
+  "LEVEL_CHANGED",
+  "LEVEL_OUT_OF_RANGE",
+  "NO_NEXT_LEVEL", // 409, next on the final level (the structure ran out): add levels to go on
+  "NO_PREVIOUS_LEVEL", // 409, prev on the first level
+  "NOTHING_TO_UNDO", // also seating's undo, with details { seating }: the change was undone already or is no longer the last
+  "NO_LEVELS",
+  "VERSION_CONFLICT", // 409, the clock changed on every one of the server's retries
+  "CLOCK_IN_USE", // 409, removing a clock that is running or paused: reset it first
   // images
   "NO_FILE",
   "FILE_TOO_LARGE",

@@ -38,7 +38,9 @@ export type PrizePoolAdjustmentInput = z.infer<typeof prizePoolAdjustmentSchema>
 /**
  * PUT /api/tournaments/:id/prize-pool/rates: change the AP rates after creation. The request is merged
  * over the stored rates per component, then checked: a percentage over 100 is 400 PERCENT_OVER_100
- * and a percentage or fixed type without an amount is 400 AMOUNT_REQUIRED (details: { field }).
+ * and a percentage or fixed type without an amount is 400 AMOUNT_REQUIRED (details: { field }); a
+ * fixed rate above the price of its entry is 400 AMOUNT_OVER_PRICE (details: { field }), since the
+ * prize pool would go below zero.
  * "none" stores amount "0.00". Unless keepOverride, the AP override is cleared (the manual pool is not).
  */
 export const rakeRatesSchema = z

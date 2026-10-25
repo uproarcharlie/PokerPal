@@ -9,6 +9,8 @@ import { clubDto, mockTournamentPages, registrationDto, tournamentDto } from "@t
 import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { apiError, mockSignedOut, renderWithApp } from "@test/helpers/web";
+import { clockDto, liveDisplayDto } from "@test/helpers/clock-dto";
+import { publicSeatingDto } from "@test/helpers/seating-dto";
 import { PODIUM } from "@/components/shared/podium";
 import { qk } from "@/lib/api/query-keys";
 import { CLOSED_REFRESH_MS, LIVE_REFRESH_MS } from "@/lib/live-refresh";
@@ -36,8 +38,27 @@ function renderView() {
   return renderWithApp(<PublicTournamentView />, { path: "/tournament/t1", route: "/tournament/:id" });
 }
 
+/** The seat finder and the clock as the page checks them: nobody seated and no clock unless a test says so. */
+function mockLiveScreens({ seated = false, clock = false }: { seated?: boolean; clock?: boolean } = {}) {
+  const asked = { seating: 0, display: 0 };
+  server.use(
+    http.get("/api/public/tournaments/t1/seating", () => {
+      asked.seating += 1;
+      return HttpResponse.json(
+        publicSeatingDto(seated ? { tables: [{ id: "tb1", number: 1, seats: 9, seated: { 3: { id: "r1", name: "Ann" } } }] } : {}),
+      );
+    }),
+    http.get("/api/public/tournaments/t1/display", () => {
+      asked.display += 1;
+      return HttpResponse.json(liveDisplayDto({ clock: clock ? clockDto() : null }));
+    }),
+  );
+  return asked;
+}
+
 beforeEach(() => {
   mockSignedOut();
+  mockLiveScreens();
 });
 
 describe("PublicTournamentView prize pool", () => {
@@ -659,5 +680,78 @@ describe("PublicTournamentView on patchy venue Wi-Fi", () => {
     await vi.advanceTimersByTimeAsync(LIVE_REFRESH_MS + 100);
     await waitFor(() => expect(screen.getByText("2/40")).toBeInTheDocument());
     expect(screen.queryByText(/Not updated since/)).not.toBeInTheDocument();
+  });
+});
+
+describe("PublicTournamentView links to the night's other screens", () => {
+  it("offers nothing before seats are drawn or the clock is set up, in a game outside any season", async () => {
+    mockPage();
+    renderView();
+
+    expect(await screen.findByText("Total prize pool: $475")).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Tournament screens" })).not.toBeInTheDocument();
+  });
+
+  it("offers Find your seat once anyone is seated, the live clock once it is set up, and the season's leaderboard", async () => {
+    mockPage({ seasonId: "s1" });
+    server.use(http.get("/api/seasons/s1", () => HttpResponse.json(seasonDto({ id: "s1" }))));
+    mockLiveScreens({ seated: true, clock: true });
+    renderView();
+
+    const links = await screen.findByRole("navigation", { name: "Tournament screens" });
+    expect(await within(links).findByRole("link", { name: "Find your seat" })).toHaveAttribute("href", "/tournament/t1/seats");
+    expect(await within(links).findByRole("link", { name: "Live clock" })).toHaveAttribute("href", "/clock/t1");
+    expect(within(links).getByRole("link", { name: "Season leaderboard" })).toHaveAttribute("href", "/season/s1");
+  });
+
+  it("checks again while the game is open, so the seat finder appears once seats are drawn", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockPage();
+      const asked = mockLiveScreens();
+      renderView();
+      expect(await screen.findByText("Total prize pool: $475")).toBeInTheDocument();
+      await waitFor(() => expect(asked.seating).toBe(1));
+
+      mockLiveScreens({ seated: true });
+      await vi.advanceTimersByTimeAsync(60_000 + 100);
+
+      expect(await screen.findByRole("link", { name: "Find your seat" })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops checking for a screen once it is there, and checks a game only scheduled once (P4REV3-LOAD-03)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockPage();
+      const asked = mockLiveScreens({ seated: true, clock: true });
+      const { unmount } = renderView();
+      expect(await screen.findByRole("link", { name: "Live clock" })).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Find your seat" })).toBeInTheDocument();
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+      expect(asked).toEqual({ seating: 1, display: 1 });
+      unmount();
+
+      mockPage({ status: "scheduled" });
+      const scheduled = mockLiveScreens();
+      renderView();
+      await waitFor(() => expect(scheduled).toEqual({ seating: 1, display: 1 }));
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+      expect(scheduled).toEqual({ seating: 1, display: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks for neither once the tournament is over", async () => {
+    mockPage({ status: "completed" });
+    const asked = mockLiveScreens({ seated: true, clock: true });
+    renderView();
+
+    expect(await screen.findByRole("heading", { name: "Friday Freezeout", level: 1 })).toBeInTheDocument();
+    expect(asked).toEqual({ seating: 0, display: 0 });
+    expect(screen.queryByRole("link", { name: "Find your seat" })).not.toBeInTheDocument();
   });
 });

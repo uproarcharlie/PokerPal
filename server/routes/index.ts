@@ -4,6 +4,7 @@ import type { RateLimiters } from "../http/rate-limits";
 import { activityRoutes } from "./activity";
 import { adminRoutes } from "./admin";
 import { authRoutes } from "./auth";
+import { clockRoutes } from "./clock";
 import { clubManagersRoutes } from "./club-managers";
 import { clubsRoutes } from "./clubs";
 import { dashboardRoutes } from "./dashboard";
@@ -17,6 +18,7 @@ import { prizePoolRoutes } from "./prize-pool";
 import { publicRoutes } from "./public";
 import { registrationsRoutes } from "./registrations";
 import { seasonsRoutes } from "./seasons";
+import { seatingRoutes } from "./seating";
 import { tournamentsRoutes } from "./tournaments";
 import { uploadsRoutes } from "./uploads";
 
@@ -47,6 +49,8 @@ const ROUTE_MODULES: ReadonlyArray<(deps: RouteDeps) => Router> = [
   tournamentsRoutes,
   prizePoolRoutes,
   finalizeRoutes,
+  seatingRoutes,
+  clockRoutes,
   registrationsRoutes,
   pendingActionsRoutes,
   activityRoutes,

@@ -155,7 +155,7 @@ describe("Create New Club", () => {
     await user.click(within(form).getByTestId("create-club-final"));
 
     expect(await screen.findByText("Club created successfully!")).toBeInTheDocument();
-    expect(sent).toEqual({ name: "Club 2020", slug: "club-2020", description: null, imageUrl: null, address: null, timezone: "Pacific/Auckland" });
+    expect(sent).toEqual({ name: "Club 2020", slug: "club-2020", description: null, imageUrl: null, address: null, timezone: "Pacific/Auckland", rakeLabel: null });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Create New Club" })).not.toBeInTheDocument());
     expect(await card("c3")).toHaveTextContent("Club 2020");
     expect(clubListRequests).toBeGreaterThan(listed);

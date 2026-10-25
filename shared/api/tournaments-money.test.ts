@@ -92,6 +92,8 @@ describe("updateTournamentSchema", () => {
   it("accepts today's status, lock and manual-pool updates", () => {
     expect(updateTournamentSchema.parse({ status: "in_progress" })).toEqual({ status: "in_progress" });
     expect(updateTournamentSchema.parse({ prizePoolLocked: true })).toEqual({ prizePoolLocked: true });
+    expect(updateTournamentSchema.parse({ rakeAmount: "5", keepRakeOverride: true })).toEqual({ rakeAmount: "5.00", keepRakeOverride: true });
+    expect(updateTournamentSchema.safeParse({ keepRakeOverride: "yes" }).success).toBe(false);
     expect(updateTournamentSchema.parse({ manualPrizePool: "" })).toEqual({ manualPrizePool: null });
     expect(updateTournamentSchema.parse({ manualPrizePool: "300" })).toEqual({ manualPrizePool: "300.00" });
   });

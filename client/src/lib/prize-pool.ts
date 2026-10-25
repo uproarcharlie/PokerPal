@@ -40,6 +40,17 @@ export function tournamentMoney(
 }
 
 /**
+ * What the club keeps of what came in, as every money screen names it (the AP panel, the finalize
+ * confirmation): its AP, under the club's label; under a prize pool fixed by hand, what that leaves the
+ * club ("AP the club keeps"), or "Added by the club" when the pool is more than came in. Always the
+ * implied take (gross less the pool paid), never the rates' figure a fixed pool overrides (MONEY-AP-03).
+ */
+export function clubTake(pool: { impliedCents: Cents; netSource: PrizePoolBreakdown["netSource"] }, rakeLabel: string): { label: string; cents: Cents } {
+  if (pool.impliedCents < 0) return { label: "Added by the club", cents: -pool.impliedCents };
+  return { label: pool.netSource === "manual_pool" ? `${rakeLabel} the club keeps` : rakeLabel, cents: pool.impliedCents };
+}
+
+/**
  * Why part of the pool is not paid out, in one wording for every screen that says so (the TD's and the
  * players' prize structure, the paid pool): fewer players than paid places. Null when all of it is
  * paid. `entrants` is how many players are entered (for a game still running).

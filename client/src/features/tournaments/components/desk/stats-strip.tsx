@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { ApAdjustDialog } from "@/features/prize-pool/components/ap-adjust-dialog";
 import { formatMoney } from "@/lib/format";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import type { TournamentMoney } from "@/lib/prize-pool";
@@ -43,6 +44,10 @@ function poolNote({ display, breakdown }: TournamentMoney, rakeLabel: string): s
 /** The figures the TD reads out: players, the pool, and the entries it is made of. */
 export function StatsStrip({ tournament, money, totalPlayers, rakeLabel, canEditPlayers, canEditPool }: StatsStripProps) {
   const [editing, setEditing] = useState<"players" | "pool" | null>(null);
+  // While an AP total is fixed, a pool typed here would replace it (and its "Low turnout" reason) without a
+  // word, and a blank one would change nothing: the AP dialog, which says so, sets the pool then (MONEY-AP-04).
+  const [adjusting, setAdjusting] = useState(false);
+  const apFixed = money.breakdown.netSource === "ap_override";
   const counts = money.breakdown.counts;
   const note = poolNote(money, rakeLabel);
   const toggle = (which: "players" | "pool") => setEditing((open) => (open === which ? null : which));
@@ -97,8 +102,8 @@ export function StatsStrip({ tournament, money, totalPlayers, rakeLabel, canEdit
               variant="ghost"
               size="sm"
               className="-my-2 h-10 px-3"
-              onClick={() => toggle("pool")}
-              aria-expanded={editing === "pool"}
+              onClick={() => (apFixed ? setAdjusting(true) : toggle("pool"))}
+              aria-expanded={apFixed ? undefined : editing === "pool"}
               aria-label={editing === "pool" ? "Cancel editing the prize pool" : "Edit prize pool"}
               data-testid="edit-prize-pool"
             >
@@ -107,7 +112,7 @@ export function StatsStrip({ tournament, money, totalPlayers, rakeLabel, canEdit
           ) : null
         }
       >
-        {editing === "pool" && canEditPool ? (
+        {editing === "pool" && canEditPool && !apFixed ? (
           <ManualPoolEditor
             tournamentId={tournament.id}
             current={tournament.manualPrizePool}
@@ -121,6 +126,10 @@ export function StatsStrip({ tournament, money, totalPlayers, rakeLabel, canEdit
           </p>
         )}
       </StatTile>
+
+      {canEditPool ? (
+        <ApAdjustDialog tournament={tournament} label={rakeLabel} startMode="manual_pool" open={adjusting} onOpenChange={setAdjusting} />
+      ) : null}
 
       <StatTile label="Buy-ins">
         <p className={STAT} data-testid="total-buyins">

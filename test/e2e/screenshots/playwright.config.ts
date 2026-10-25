@@ -7,6 +7,7 @@
  *     npx playwright test -c test/e2e/screenshots/playwright.config.ts
  *
  * The PNGs land in SCREENSHOTS_DIR (default tmp/screenshots), named <page>-<width>x<height>.png.
+ * capture.ts takes the main pages; phase4.ts the tables, clock, TV and AP screens (name it to run one).
  */
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "@playwright/test";
@@ -19,7 +20,7 @@ if (!server || Array.isArray(server)) throw new Error("playwright.config.ts star
 export default defineConfig({
   ...base,
   testDir: ".",
-  testMatch: "capture.ts",
+  testMatch: ["capture.ts", "phase4.ts"],
   fullyParallel: false,
   workers: 1,
   retries: 0,

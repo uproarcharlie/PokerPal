@@ -51,6 +51,15 @@ export const db: Database = new Proxy({} as Database, {
   getPrototypeOf: () => Reflect.getPrototypeOf(getDb()),
 });
 
+/**
+ * Runs `read` in one read-only REPEATABLE READ transaction, so all its statements see one snapshot: a
+ * write that commits between them never shows half done (P4REV1-R3-02). For an unlocked read built
+ * from several queries; on the transaction's one connection they run one after another.
+ */
+export function readSnapshot<T>(read: (tx: Transaction) => Promise<T>): Promise<T> {
+  return db.transaction(read, { isolationLevel: "repeatable read", accessMode: "read only" });
+}
+
 /** Drain and close the pool (graceful shutdown, test teardown). Safe to call when unused. */
 export async function closePool(): Promise<void> {
   const current = pool;

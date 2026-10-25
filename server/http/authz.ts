@@ -82,6 +82,18 @@ export interface ClubResolver {
   resolve(req: Request): Promise<string | null>;
 }
 
+/**
+ * A credential other than a staff session that may stand in for a club manager on a route that names
+ * it (requireClubManagerOr), e.g. the venue TV's clock key, which runs one tournament's clock and
+ * nothing else.
+ */
+export interface StandInCredential {
+  /** How the route inventory names it: "club-manager:<Resource> or <name>". */
+  name: string;
+  /** Whether the request carries it, valid for what the route acts on. */
+  accepts(req: Request): Promise<boolean>;
+}
+
 /** What a guard middleware enforces, read by the route-inventory test (every write must have one). */
 export interface GuardInfo {
   kind: "public" | "auth" | "admin" | "club-manager" | "club-owner" | "player-manager";
@@ -131,6 +143,16 @@ export function createAuthz(store: AuthzStore) {
   async function canManageClub(user: AuthUser | undefined, clubId: string): Promise<boolean> {
     if (!user) return false;
     return isAdmin(user) || (await clubRoleOf(user, clubId)) !== null;
+  }
+
+  /**
+   * Whether account `userId` may manage the club right now: it exists, is active, and is an admin, the
+   * owner or a manager, as a request of theirs would be authorized. For a credential someone issued
+   * that must stop working once they lose access (the TV's clock key).
+   */
+  async function canUserManageClub(userId: string, clubId: string): Promise<boolean> {
+    const user = await store.findActiveUser(userId);
+    return user !== null && (await canManageClub(user, clubId));
   }
 
   /** Admin or owner of the club (not a manager). */
@@ -229,6 +251,19 @@ export function createAuthz(store: AuthzStore) {
   /** 401 anonymous, 404 when the resource is missing, 403 unless admin/owner/manager of its club. */
   const requireClubManager = (resolver: ClubResolver): RequestHandler => clubGuard(resolver, "club-manager");
 
+  /**
+   * As requireClubManager, but a request that carries `credential` passes without a session. One
+   * without it meets requireClubManager exactly (401 before looking, 404, 403).
+   */
+  function requireClubManagerOr(credential: StandInCredential, resolver: ClubResolver): RequestHandler {
+    const manager = clubGuard(resolver, "club-manager");
+    const handler = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+      if (await credential.accepts(req)) next();
+      else manager(req, res, next);
+    });
+    return tagged(handler, { kind: "club-manager", detail: `${resolver.resource} or ${credential.name}` });
+  }
+
   /** As requireClubManager, but managers are refused: for deletes and for changing the club's staff. */
   const requireClubOwner = (resolver: ClubResolver): RequestHandler => clubGuard(resolver, "club-owner");
 
@@ -275,10 +310,12 @@ export function createAuthz(store: AuthzStore) {
     requireAuth,
     requireAdmin,
     requireClubManager,
+    requireClubManagerOr,
     requireClubOwner,
     requirePlayerManager,
     clubFrom,
     canManageClub,
+    canUserManageClub,
     canOwnClub,
     canManagePlayer,
     viewersFor,
@@ -400,10 +437,12 @@ export const {
   requireAuth,
   requireAdmin,
   requireClubManager,
+  requireClubManagerOr,
   requireClubOwner,
   requirePlayerManager,
   clubFrom,
   canManageClub,
+  canUserManageClub,
   canOwnClub,
   canManagePlayer,
   viewersFor,

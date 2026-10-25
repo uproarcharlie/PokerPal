@@ -1,6 +1,7 @@
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import type { Cents } from "@shared/domain/money";
 import type { TournamentMoney } from "@/lib/prize-pool";
+import { ApPanel } from "@/features/prize-pool/components/ap-panel";
 import { PrizePoolCalculator } from "../prize-pool/prize-pool-calculator";
 import { PrizeStructureCard } from "../prize-pool/prize-structure-card";
 import { TournamentInfoCard } from "./tournament-info-card";
@@ -15,7 +16,7 @@ interface OverviewTabProps {
   timeZone: string;
 }
 
-/** What the tournament pays and how the pool is worked out, then its details. */
+/** What the tournament pays, how the pool is worked out and the AP taken from it, then its details. */
 export function OverviewTab({ tournament, money, entrants, rakeLabel, highHandAwardsCents, timeZone }: OverviewTabProps) {
   return (
     <div className="space-y-6">
@@ -24,13 +25,17 @@ export function OverviewTab({ tournament, money, entrants, rakeLabel, highHandAw
         entrants={entrants}
         highHandAmount={offersHighHand(tournament) ? tournament.highHandAmount : null}
       />
-      <PrizePoolCalculator
-        tournament={tournament}
-        breakdown={money.breakdown}
-        display={money.display}
-        rakeLabel={rakeLabel}
-        highHandAwardsCents={highHandAwardsCents}
-      />
+      {/* Side by side on a wide screen: how the pool is worked out, and the AP the club takes (and adjusts) from it. */}
+      <div className="grid items-start gap-6 xl:grid-cols-2">
+        <PrizePoolCalculator
+          tournament={tournament}
+          breakdown={money.breakdown}
+          display={money.display}
+          rakeLabel={rakeLabel}
+          highHandAwardsCents={highHandAwardsCents}
+        />
+        <ApPanel tournament={tournament} />
+      </div>
       <TournamentInfoCard tournament={tournament} timeZone={timeZone} />
     </div>
   );

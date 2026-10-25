@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import type { AuditAction, AuditData } from "@shared/api/admin";
 
 /**
  * Boot-time data seeds, run by every boot (runBootMigrations: after the migrations, or on their own
@@ -16,6 +17,27 @@ export interface SeedLogger {
 }
 
 export type SeedOutcome = { applied: true; detail: string } | { applied: false; reason: string };
+
+/** The audit actions the seeds write: in shared/api/admin's AUDIT_ACTIONS, each with its AuditData. */
+type SeedAuditAction = Extract<AuditAction, `seed_${string}`>;
+
+/**
+ * Records what a seed changed (no actor). The action and its data are typed by shared/api/admin, so a
+ * new seed cannot write an action, or a payload, the audit vocabulary does not know (P4REV3-SEED-01).
+ */
+async function recordSeedAudit<A extends SeedAuditAction>(
+  client: PoolClient,
+  action: A,
+  target: { type: "club" | "player"; id: string | null },
+  data: AuditData[A],
+): Promise<void> {
+  await client.query("INSERT INTO audit_log (actor_user_id, action, target_type, target_id, data) VALUES (NULL, $1, $2, $3, $4)", [
+    action,
+    target.type,
+    target.id,
+    JSON.stringify(data),
+  ]);
+}
 
 /** The account that owns the Central Stars club, as its owner asked. */
 export const CENTRAL_STARS_OWNER_EMAIL = "charlie@eccuity.com";
@@ -47,35 +69,48 @@ async function inTransaction<T>(pool: Pool, work: (client: PoolClient) => Promis
 }
 
 /**
+ * The one club that is Central Stars (slug `central-stars`, or that name in any case and spacing),
+ * locked; or why there is none to act on. Locking it first means two boots at once cannot both write.
+ */
+async function lockCentralStars(client: PoolClient): Promise<{ club: CentralStarsRow } | { reason: string }> {
+  const clubs = await client.query<CentralStarsRow>(
+    `SELECT id, owner_id, rake_label FROM clubs
+      WHERE slug = $1 OR lower(trim(name)) = $2
+      ORDER BY id
+        FOR UPDATE`,
+    [CENTRAL_STARS_SLUG, CENTRAL_STARS_NAME],
+  );
+  if (clubs.rows.length === 0) return { reason: "no club is Central Stars" };
+  if (clubs.rows.length > 1) return { reason: `${clubs.rows.length} clubs look like Central Stars (${clubs.rows.map((c) => c.id).join(", ")})` };
+  return { club: clubs.rows[0] };
+}
+
+interface CentralStarsRow {
+  id: string;
+  owner_id: string | null;
+  rake_label: string | null;
+}
+
+/**
  * Makes the account charlie@eccuity.com the owner of the Central Stars club (production has none),
  * but only when exactly one club is Central Stars (slug `central-stars`, or that name in any case),
  * that club has no owner and never had one set (no `seed_club_owner` or `club.owner_set` audit row: so
  * the seed runs at most once per club, and an admin's later choice, even "no owner", is never undone),
  * and exactly one active account created before CENTRAL_STARS_OWNER_CREATED_BEFORE signs in with that
  * email (in any case). Anything else changes nothing. Like setting an owner by hand, it removes that
- * account's manager row, since owning implies managing. The club row is locked first, so two boots
- * at once cannot both write.
+ * account's manager row, since owning implies managing.
  */
 export async function seedCentralStarsOwner(pool: Pool): Promise<SeedOutcome> {
   return inTransaction(pool, async (client) => {
-    const clubs = await client.query<{ id: string; owner_id: string | null }>(
-      `SELECT id, owner_id FROM clubs
-        WHERE slug = $1 OR lower(trim(name)) = $2
-        ORDER BY id
-          FOR UPDATE`,
-      [CENTRAL_STARS_SLUG, CENTRAL_STARS_NAME],
-    );
-    if (clubs.rows.length === 0) return { applied: false, reason: "no club is Central Stars" };
-    if (clubs.rows.length > 1) {
-      return { applied: false, reason: `${clubs.rows.length} clubs look like Central Stars (${clubs.rows.map((c) => c.id).join(", ")})` };
-    }
-    const [club] = clubs.rows;
+    const found = await lockCentralStars(client);
+    if ("reason" in found) return { applied: false, reason: found.reason };
+    const { club } = found;
     if (club.owner_id !== null) return { applied: false, reason: `club ${club.id} already has an owner` };
     const history = await client.query(
       `SELECT 1 FROM audit_log
-        WHERE target_type = 'club' AND target_id = $1 AND action IN ('seed_club_owner', 'club.owner_set')
+        WHERE target_type = 'club' AND target_id = $1 AND action IN ($2, $3)
         LIMIT 1`,
-      [club.id],
+      [club.id, "seed_club_owner" satisfies SeedAuditAction, "club.owner_set" satisfies AuditAction],
     );
     if (history.rows.length > 0) {
       return { applied: false, reason: `club ${club.id}'s owner was set before (by this seed or an admin), so it is left as it is` };
@@ -101,12 +136,38 @@ export async function seedCentralStarsOwner(pool: Pool): Promise<SeedOutcome> {
     const updated = await client.query("UPDATE clubs SET owner_id = $1 WHERE id = $2 AND owner_id IS NULL", [user.id, club.id]);
     if (updated.rowCount !== 1) return { applied: false, reason: `club ${club.id} already has an owner` };
     await client.query("DELETE FROM club_managers WHERE club_id = $1 AND user_id = $2", [club.id, user.id]);
-    await client.query(
-      `INSERT INTO audit_log (actor_user_id, action, target_type, target_id, data)
-       VALUES (NULL, 'seed_club_owner', 'club', $1, $2)`,
-      [club.id, JSON.stringify({ previousOwnerId: null, ownerId: user.id, email: CENTRAL_STARS_OWNER_EMAIL })],
-    );
+    await recordSeedAudit(client, "seed_club_owner", { type: "club", id: club.id }, { previousOwnerId: null, ownerId: user.id, email: CENTRAL_STARS_OWNER_EMAIL });
     return { applied: true, detail: `club ${club.id} is now owned by ${CENTRAL_STARS_OWNER_EMAIL} (user ${user.id})` };
+  });
+}
+
+/** What Central Stars calls its rake: their "AP" (administration fee). */
+export const CENTRAL_STARS_RAKE_LABEL = "AP";
+
+/**
+ * Gives the Central Stars club the rake label "AP" (clubs.rake_label, display only: it never changes
+ * an amount), but only when exactly one club is Central Stars, its label is NULL (it shows "Rake"),
+ * and this seed never set it before (no `seed_club_rake_label` audit row): so it runs at most once per
+ * club, and an owner who later clears the label, or picks another, keeps their choice. Anything else
+ * changes nothing. Audited like the owner seed.
+ */
+export async function seedCentralStarsRakeLabel(pool: Pool): Promise<SeedOutcome> {
+  return inTransaction(pool, async (client) => {
+    const found = await lockCentralStars(client);
+    if ("reason" in found) return { applied: false, reason: found.reason };
+    const { club } = found;
+    if (club.rake_label !== null) return { applied: false, reason: `club ${club.id} already calls its rake "${club.rake_label}"` };
+    const history = await client.query("SELECT 1 FROM audit_log WHERE target_type = 'club' AND target_id = $1 AND action = $2 LIMIT 1", [
+      club.id,
+      "seed_club_rake_label" satisfies SeedAuditAction,
+    ]);
+    if (history.rows.length > 0) {
+      return { applied: false, reason: `club ${club.id}'s label was set by this seed before and has since been cleared, so it is left as it is` };
+    }
+    // The row is locked and its label read as NULL in this transaction, so this updates it.
+    await client.query("UPDATE clubs SET rake_label = $1 WHERE id = $2 AND rake_label IS NULL", [CENTRAL_STARS_RAKE_LABEL, club.id]);
+    await recordSeedAudit(client, "seed_club_rake_label", { type: "club", id: club.id }, { previousRakeLabel: null, rakeLabel: CENTRAL_STARS_RAKE_LABEL });
+    return { applied: true, detail: `club ${club.id} now calls its rake "${CENTRAL_STARS_RAKE_LABEL}"` };
   });
 }
 
@@ -131,11 +192,7 @@ export async function seedPlayerHomeClubs(pool: Pool): Promise<SeedOutcome> {
     );
     const recorded = inserted.rowCount ?? 0;
     if (recorded === 0) return { applied: false, reason: "every registered player already has one" };
-    await client.query(
-      `INSERT INTO audit_log (actor_user_id, action, target_type, target_id, data)
-       VALUES (NULL, 'seed_player_home_clubs', 'player', NULL, $1)`,
-      [JSON.stringify({ recorded })],
-    );
+    await recordSeedAudit(client, "seed_player_home_clubs", { type: "player", id: null }, { recorded });
     return { applied: true, detail: `recorded the home club of ${recorded} player${recorded === 1 ? "" : "s"}` };
   });
 }
@@ -143,6 +200,7 @@ export async function seedPlayerHomeClubs(pool: Pool): Promise<SeedOutcome> {
 /** Every boot seed, in order, with the name each logs under and the tables it reads or writes. */
 const BOOT_SEEDS: ReadonlyArray<{ name: string; tables: readonly string[]; run: (pool: Pool) => Promise<SeedOutcome> }> = [
   { name: "Central Stars owner", tables: ["clubs", "users", "club_managers", "audit_log"], run: seedCentralStarsOwner },
+  { name: "Central Stars AP label", tables: ["clubs", "audit_log"], run: seedCentralStarsRakeLabel },
   {
     name: "Player home clubs",
     tables: ["player_home_clubs", "tournament_registrations", "tournaments", "audit_log"],

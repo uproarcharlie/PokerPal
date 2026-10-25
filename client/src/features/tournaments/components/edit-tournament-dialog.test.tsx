@@ -77,8 +77,7 @@ describe("EditTournamentDialog (CA-14)", () => {
     const saved = mockSave();
     const { user } = renderEdit();
 
-    await user.click(screen.getByTestId("rake-type"));
-    await user.click(await screen.findByRole("option", { name: "Percentage (%)" }));
+    await user.selectOptions(screen.getByTestId("rake-type"), "Percentage (%)");
     await user.clear(screen.getByTestId("rake-amount"));
     await user.type(screen.getByTestId("rake-amount"), "10");
     await user.click(screen.getByTestId("save-tournament"));

@@ -10,6 +10,7 @@ import {
   identifyVisitor,
   isCloudflareIp,
   isLiveApiRequest,
+  isLiveOpsRequest,
   RATE_LIMIT_KEYS,
   RATE_LIMIT_WINDOWS,
   RATE_LIMITS,
@@ -151,6 +152,7 @@ describe("createRateLimiters", () => {
       signInAccount: 20,
       passwordChange: 10,
       live: 10_000,
+      liveOps: 1_500,
     });
     const hour = 60 * 60 * 1000;
     expect(RATE_LIMIT_WINDOWS).toEqual({
@@ -412,6 +414,15 @@ describe("isLiveApiRequest", () => {
     expect(live("GET", "/tournaments/t1")).toBe(true);
   });
 
+  it("is the Phase 4 live screens: the TV display, seating, the seat finder and the season leaderboard", () => {
+    expect(live("GET", "/public/tournaments/t1/display")).toBe(true);
+    expect(live("GET", "/public/tournaments/t1/seating")).toBe(true);
+    expect(live("GET", "/public/seasons/s1/leaderboard")).toBe(true);
+    expect(live("GET", "/tournaments/t1/seating")).toBe(true);
+    expect(live("GET", "/public/tournaments/t1/players")).toBe(false);
+    expect(live("GET", "/seasons/s1/leaderboard")).toBe(false);
+  });
+
   it("is never a write, nor any other read", () => {
     expect(live("POST", "/tournaments/t1/registrations")).toBe(false);
     expect(live("POST", "/tournaments/t1/pending-actions")).toBe(false);
@@ -477,3 +488,76 @@ describe("live polling", () => {
   });
 });
 
+
+describe("isLiveOpsRequest", () => {
+  const ops = (method: string, path: string) => isLiveOpsRequest({ method, baseUrl: "/api", path });
+
+  it("is the TD's live writes: clock, tables, seating and early birds", () => {
+    expect(ops("POST", "/tournaments/t1/clock/actions")).toBe(true);
+    expect(ops("PUT", "/tournaments/t1/clock")).toBe(true);
+    expect(ops("DELETE", "/tournaments/t1/clock")).toBe(true);
+    expect(ops("PATCH", "/tournaments/t1/clock/display")).toBe(true);
+    expect(ops("POST", "/tournaments/t1/clock/key")).toBe(true);
+    expect(ops("DELETE", "/tournaments/t1/clock/key")).toBe(true);
+    expect(ops("POST", "/tournaments/t1/tables")).toBe(true);
+    expect(ops("PATCH", "/tournaments/t1/tables/tb1")).toBe(true);
+    expect(ops("DELETE", "/tournaments/t1/tables/tb1")).toBe(true);
+    expect(ops("POST", "/tournaments/t1/tables/tb1/break")).toBe(true);
+    for (const action of ["setup", "draw", "assign", "unseat", "balance", "final-table", "undo"]) {
+      expect(ops("POST", `/tournaments/t1/seating/${action}`)).toBe(true);
+    }
+    expect(ops("POST", "/tournaments/t1/early-birds")).toBe(true);
+  });
+
+  it("is never a read, nor any other write", () => {
+    expect(ops("GET", "/tournaments/t1/seating")).toBe(false);
+    expect(ops("GET", "/tournaments/t1/clock")).toBe(false);
+    expect(ops("PUT", "/tournaments/t1")).toBe(false);
+    expect(ops("PUT", "/tournaments/t1/prize-pool/adjustment")).toBe(false);
+    expect(ops("POST", "/tournaments/t1/registrations")).toBe(false);
+    expect(ops("POST", "/tournaments/t1/seating/explode")).toBe(false);
+    expect(ops("OPTIONS", "/tournaments/t1/clock/actions")).toBe(false);
+  });
+});
+
+describe("the TD's live writes", () => {
+  /** The app's three /api limiters in its order; x-user signs a request in. */
+  function opsApp(limits: { globalApi: number; live: number; liveOps: number }) {
+    const { globalApi, live, liveOps } = createRateLimiters({ NODE_ENV: "production" }, { limits });
+    const app = express();
+    app.set("trust proxy", 1);
+    app.use("/api", globalApi);
+    app.use("/api", (req, _res, next) => {
+      const id = req.get("x-user");
+      if (id) req.user = { id, email: `${id}@x`, name: id, role: "full_member" };
+      next();
+    });
+    app.use("/api", live, liveOps);
+    app.post("/api/tournaments/:id/clock/actions", (_req, res) => res.json({}));
+    app.get("/api/clubs/:id", (_req, res) => res.json({}));
+    app.use(errorHandler);
+    return app;
+  }
+  const pause = (app: Express, headers: Record<string, string> = {}) =>
+    request(app).post("/api/tournaments/t1/clock/actions").set({ ...viaCloudflare(VISITOR), ...headers }).send({ action: "pause" });
+
+  it("still go through when the venue's shared budget is spent", async () => {
+    const app = opsApp({ globalApi: 1, live: 100, liveOps: 100 });
+
+    expect((await request(app).get("/api/clubs/c1").set(viaCloudflare(VISITOR))).status).toBe(200);
+    expect((await request(app).get("/api/clubs/c1").set(viaCloudflare(VISITOR))).status).toBe(429);
+    for (let i = 0; i < 3; i++) expect((await pause(app, { "x-user": "td" })).status).toBe(200);
+  });
+
+  it("have their own limit per signed-in user, apart from the venue's address", async () => {
+    const app = opsApp({ globalApi: 100, live: 100, liveOps: 1 });
+
+    expect((await pause(app, { "x-user": "td" })).status).toBe(200);
+    const limited = await pause(app, { "x-user": "td" });
+    expect(limited.status).toBe(429);
+    expect(limited.body.code).toBe("RATE_LIMITED");
+    expect((await pause(app, { "x-user": "manager" })).status).toBe(200);
+    expect((await pause(app)).status).toBe(200);
+    expect((await pause(app)).status).toBe(429);
+  });
+});

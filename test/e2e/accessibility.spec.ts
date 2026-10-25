@@ -2,13 +2,15 @@
  * Accessibility: axe-core finds no serious or critical problem on the pages players and TDs use most,
  * on a phone and on a laptop, in every tab and step: sign-in, the public club and tournament pages and
  * the player requests page, the QR poster and sign-up (a new player, an existing one, the
- * confirmation) and the TD's tournament page (in light and dark). Every rule axe has runs, WCAG 2.2
+ * confirmation), the TD's tournament page (in light and dark), and the night's screens for players:
+ * the seat finder, the season leaderboard and the TV clock. Every rule axe has runs, WCAG 2.2
  * A/AA and its best practices alike; the moderate and minor ones are left to review.
  */
 import AxeBuilder from "@axe-core/playwright";
-import { devices, type Page } from "@playwright/test";
-import { createPlayer, registerPlayer, signUp, uniquePhone } from "./support/api";
-import { buildDemoClub } from "./support/demo";
+import { devices, type APIRequestContext, type Page } from "@playwright/test";
+import { presetStructure } from "../../shared/domain/blind-structures";
+import { createPlayer, expectJson, registerPlayer, signUp, uniquePhone } from "./support/api";
+import { buildDemoClub, type DemoClub } from "./support/demo";
 import { expect, test } from "./support/fixtures";
 
 const { defaultBrowserType: _browser, ...pixel7 } = devices["Pixel 7"];
@@ -47,6 +49,19 @@ async function expectEveryTabAccessible(page: Page, where: string): Promise<void
     await expect(tabs.filter({ hasText: name })).toHaveAttribute("aria-selected", "true");
     await expectAccessible(page, `${where}, ${name} tab`);
   }
+}
+
+/** Tonight's game with its seats drawn and the Central Stars clock running, the TV showing the money. */
+async function seatedAndTimed(request: APIRequestContext, demo: DemoClub): Promise<void> {
+  await expectJson(await request.post(`/api/tournaments/${demo.live.id}/seating/setup`, { data: {} }), 201);
+  const clock = {
+    structure: presetStructure("central_stars_one_life_line"),
+    presetKey: "central_stars_one_life_line",
+    displaySettings: { showPrizePool: "always", showAp: true },
+    baseHash: null,
+  };
+  await expectJson(await request.put(`/api/tournaments/${demo.live.id}/clock`, { data: clock }), 201);
+  await expectJson(await request.post(`/api/tournaments/${demo.live.id}/clock/actions`, { data: { action: "start" } }), 200);
 }
 
 for (const [device, use] of [
@@ -94,6 +109,29 @@ for (const [device, use] of [
       await page.goto(`/tournaments/${demo.live.id}/actions`);
       await expect(page.getByRole("button", { name: /^Re-buy/ })).toBeVisible();
       await expectAccessible(page, "player requests page");
+    });
+
+    test("the seat finder, the season leaderboard and the TV clock", async ({ page, request }) => {
+      // The owner sets the night up on their own device; the page is a visitor, signed out.
+      await signUp(request, "Mere Owner");
+      const demo = await buildDemoClub(request);
+      await seatedAndTimed(request, demo);
+
+      await page.goto(`/tournament/${demo.live.id}/seats`);
+      await expect(page.getByRole("heading", { name: "Find your seat", level: 1 })).toBeVisible();
+      await expectAccessible(page, "seat finder");
+      await page.getByTestId("seat-search").fill(demo.players[0]!.name.split(" ")[0]!);
+      await expect(page.getByTestId("seat-results")).toContainText(/Table \d+ · Seat \d+/);
+      await expectAccessible(page, "seat finder, a player found");
+
+      await page.goto(`/season/${demo.season.id}`);
+      await expect(page.getByRole("heading", { name: demo.season.name, level: 1 })).toBeVisible();
+      await expectAccessible(page, "season leaderboard");
+
+      await page.goto(`/clock/${demo.live.id}`);
+      await expect(page.getByRole("timer", { name: "Time left" })).toBeVisible();
+      await expect(page.getByTestId("display-qr")).toBeVisible();
+      await expectAccessible(page, "TV clock");
     });
 
     test("QR sign-up, as a new player and as an existing one", async ({ page, request }) => {
@@ -192,6 +230,28 @@ test.describe("on a 320 px phone (WCAG 1.4.10, reflow)", () => {
       await page.goto(path);
       await expect(ready).toBeVisible();
       const widths = await page.locator("main").evaluate((main) => ({ scroll: main.scrollWidth, client: main.clientWidth }));
+      expect.soft(widths.scroll, `${path} is wider than the screen`).toBeLessThanOrEqual(widths.client);
+    }
+  });
+});
+
+test.describe("on a 320 px phone, the players' screens of the night", () => {
+  test.use({ ...pixel7, viewport: { width: 320, height: 740 } });
+
+  test("fit the screen: nothing scrolls sideways", async ({ page, request }) => {
+    await signUp(request, "Mere Owner");
+    const demo = await buildDemoClub(request);
+    await seatedAndTimed(request, demo);
+
+    for (const [path, ready] of [
+      [`/tournament/${demo.live.id}`, page.getByTestId("find-your-seat")],
+      [`/tournament/${demo.live.id}/seats`, page.getByTestId("seat-search")],
+      [`/season/${demo.season.id}`, page.getByRole("heading", { name: demo.season.name, level: 1 })],
+      [`/clock/${demo.live.id}`, page.getByRole("timer", { name: "Time left" })],
+    ] as const) {
+      await page.goto(path);
+      await expect(ready).toBeVisible();
+      const widths = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
       expect.soft(widths.scroll, `${path} is wider than the screen`).toBeLessThanOrEqual(widths.client);
     }
   });

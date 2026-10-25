@@ -19,23 +19,27 @@ import path from "node:path";
 import express from "express";
 import type request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { clubStaffInvites, pendingActions, type Club, type Tournament } from "@shared/schema";
+import { clubStaffInvites, pendingActions, type Club } from "@shared/schema";
 import { clubFrom, requireAuth, requireClubManager } from "../../server/http/authz";
-import {
-  createClub,
-  createPlayer,
-  createPointsSystem,
-  createRegistration,
-  createSeason,
-  createTournament,
-  createUser,
-  FACTORY_PASSWORD,
-  uniqueSuffix,
-  type NewTournament,
-} from "../factories";
+import { createClub, createPlayer, createPointsSystem, createSeason, createUser, FACTORY_PASSWORD, uniqueSuffix } from "../factories";
 import { createClubManager } from "../factories/club-managers";
-import { getApp, signIn, testDb, UNKNOWN_ID, type SignedInUser } from "../helpers";
-import { agentFor, clubWithStaff, VISITORS, type ClubStaffAgents, type Visitor } from "../helpers/club-staff";
+import { getApp, signIn, testDb, UNKNOWN_ID } from "../helpers";
+import {
+  adminOnly,
+  everyone,
+  ownerOf,
+  registeredPlayer,
+  signedIn,
+  single,
+  staffOf,
+  tournamentIn,
+  type Call,
+  type Context,
+  type RouteRow,
+} from "../helpers/authz-matrix";
+import { CLOCK_ROUTE_ROWS } from "../helpers/authz-rows-clock";
+import { SEATING_ROUTE_ROWS } from "../helpers/authz-rows-seating";
+import { agentFor, clubWithStaff, VISITORS, type ClubStaffAgents } from "../helpers/club-staff";
 import { solidImage } from "../helpers/images";
 import { appRoutes, isWrite, type HttpMethod } from "../helpers/routes";
 import { signUpTokenFor } from "../helpers/sign-up";
@@ -52,70 +56,11 @@ const PUBLIC_WRITES = [
   "POST /api/upload/public",
 ];
 
-type Statuses = Readonly<Record<Visitor, number>>;
-
-const everyone = (ok: number): Statuses => ({ anonymous: ok, stranger: ok, manager: ok, owner: ok, admin: ok, deactivated: ok });
-/** Any active, signed-in user: a deactivated account's session counts for nothing. */
-const signedIn = (ok: number): Statuses => ({ ...everyone(ok), anonymous: 401, deactivated: 401 });
-/** A platform admin, the club's owner or one of its managers. */
-const staffOf = (ok: number): Statuses => ({ ...signedIn(ok), stranger: 403 });
-/** A platform admin or the club's owner. */
-const ownerOf = (ok: number): Statuses => ({ ...staffOf(ok), manager: 403 });
-const adminOnly = (ok: number): Statuses => ({ ...signedIn(403), admin: ok });
-
-interface Context {
-  staff: ClubStaffAgents;
-  /** A club of this request's own, owned by `staff.owner` and managed by `staff.manager` (and the deactivated manager). */
-  club: Club;
-  visitor: Visitor;
-  /** The visitor's own account; null when anonymous. */
-  user: SignedInUser | null;
-  agent: request.Agent;
-}
-
-interface Call {
-  path: string;
-  json?: object;
-  /** Sends a small PNG as the multipart `image`, with these fields. */
-  upload?: Record<string, string>;
-}
-
-interface Case {
-  /** Names the case when a route has more than one. */
-  name?: string;
-  expect: Statuses;
-  call(ctx: Context): Promise<Call> | Call;
-}
-
-interface RouteRow {
-  /** What the route must mount, as test/helpers/routes.ts names guards. */
-  guards: string[];
-  cases: Case[];
-  /** The same request on an id that nothing has, for routes acting on one resource. */
-  missing?(): Promise<Call> | Call;
-}
-
-const single = (expect: Statuses, call: Case["call"]): Case[] => [{ expect, call }];
-
 async function clubRunBy(staff: ClubStaffAgents): Promise<Club> {
   const club = await createClub({ ownerId: staff.owner.user.id });
   await createClubManager({ clubId: club.id, userId: staff.manager.user.id });
   await createClubManager({ clubId: club.id, userId: staff.deactivated.user.id });
   return club;
-}
-
-const tournamentIn = (club: Club, overrides: Partial<NewTournament> = {}) =>
-  createTournament({ clubId: club.id, status: "registration", rebuyAmount: "50.00", addonAmount: "25.00", ...overrides });
-
-async function registeredPlayer(tournament: Tournament, overrides: { isEliminated?: boolean; minutesIn?: number } = {}) {
-  const player = await createPlayer();
-  const registration = await createRegistration({
-    tournamentId: tournament.id,
-    playerId: player.id,
-    isEliminated: overrides.isEliminated ?? false,
-    eliminationTime: overrides.isEliminated ? new Date(Date.UTC(2026, 2, 1, 19, overrides.minutesIn ?? 30)) : null,
-  });
-  return { player, registration };
 }
 
 async function registrationIn(club: Club) {
@@ -472,6 +417,10 @@ const ROUTES: Record<string, RouteRow> = {
   },
 
   "GET /api/dashboard/stats": { guards: ["auth"], cases: single(signedIn(200), () => ({ path: "/api/dashboard/stats" })) },
+
+  // Phase 4: each domain keeps its rows beside its routes' contract.
+  ...SEATING_ROUTE_ROWS,
+  ...CLOCK_ROUTE_ROWS,
 };
 
 let uploadDir: string;

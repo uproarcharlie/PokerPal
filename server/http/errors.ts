@@ -40,6 +40,9 @@ const UNIQUE_VIOLATIONS: Readonly<Record<string, { code: ErrorCode; message: str
   clubs_slug_unique: { code: "SLUG_TAKEN", message: "That club URL is already taken" },
   users_email_unique: { code: "EMAIL_TAKEN", message: "An account with that email already exists" },
   uq_club_managers_club_user: { code: "ALREADY_MANAGER", message: "That person already manages this club" },
+  uq_tournament_tables_number: { code: "TABLE_NUMBER_TAKEN", message: "Another table already has that number" },
+  uq_tournament_seats_active_seat: { code: "SEAT_CONFLICT", message: "Seating changed while you were editing: refresh and try again" },
+  uq_tournament_seats_active_registration: { code: "SEAT_CONFLICT", message: "Seating changed while you were editing: refresh and try again" },
 };
 
 interface PgErrorLike {

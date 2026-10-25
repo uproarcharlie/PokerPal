@@ -5,9 +5,11 @@
  */
 import sharp from "sharp";
 import type { ApiErrorBody } from "../../shared/api/errors";
+import type { LiveDisplayDto } from "../../shared/api/live-display";
 import type { PendingActionDto } from "../../shared/api/pending-actions";
 import type { StaffPlayer } from "../../shared/api/players";
 import type { ClubDto, PublicRegistration } from "../../shared/api/public";
+import type { SeatingDto } from "../../shared/api/seating";
 import type { TournamentDetailDto } from "../../shared/api/tournaments";
 import {
   createClub,
@@ -98,6 +100,21 @@ test("anonymous calls to staff endpoints are refused with 401 and change nothing
     { method: "PATCH", path: `/api/registrations/${registration.id}/confirm-payment` },
     { method: "POST", path: `/api/pending-actions/${action.id}/confirm` },
     { method: "DELETE", path: `/api/pending-actions/${action.id}` },
+    // Phase 4: the TD's tables, seats, clock and early birds.
+    { method: "GET", path: `/api/tournaments/${tournament.id}/seating` },
+    { method: "POST", path: `/api/tournaments/${tournament.id}/seating/setup`, data: {} },
+    { method: "POST", path: `/api/tournaments/${tournament.id}/tables`, data: { count: 1 } },
+    { method: "POST", path: `/api/tournaments/${tournament.id}/seating/draw`, data: { scope: "all" } },
+    { method: "POST", path: `/api/tournaments/${tournament.id}/seating/unseat`, data: { registrationId: registration.id } },
+    { method: "POST", path: `/api/tournaments/${tournament.id}/seating/undo`, data: { activityId: registration.id } },
+    { method: "PUT", path: `/api/tournaments/${tournament.id}/clock`, data: { structure: { levels: [] }, baseHash: null } },
+    { method: "POST", path: `/api/tournaments/${tournament.id}/clock/actions`, data: { action: "start" } },
+    { method: "PATCH", path: `/api/tournaments/${tournament.id}/clock/display`, data: { showAp: true } },
+    { method: "DELETE", path: `/api/tournaments/${tournament.id}/clock` },
+    { method: "POST", path: `/api/tournaments/${tournament.id}/clock/key` },
+    { method: "DELETE", path: `/api/tournaments/${tournament.id}/clock/key` },
+    { method: "POST", path: `/api/tournaments/${tournament.id}/early-birds`, data: { registrationIds: [registration.id], earlyBird: true } },
+    { method: "GET", path: `/api/clubs/${club.id}/blind-structures` },
     { method: "POST", path: "/api/images/club_logo", multipart: { image } },
     { method: "POST", path: "/api/upload", multipart: { image, entityType: "clubs" } },
   ];
@@ -127,7 +144,12 @@ test("anonymous calls to staff endpoints are refused with 401 and change nothing
     isEliminated: false,
     rebuys: 0,
     paymentConfirmed: false,
+    earlyBird: false,
   });
+  const seating = await expectJson<SeatingDto>(await request.get(`/api/tournaments/${tournament.id}/seating`), 200);
+  expect(seating.tables).toEqual([]);
+  const display = await expectJson<LiveDisplayDto>(await request.get(`/api/public/tournaments/${tournament.id}/display`), 200);
+  expect(display.clock).toBeNull();
   const pending = await expectJson<PendingActionDto[]>(await request.get(`/api/tournaments/${tournament.id}/pending-actions`), 200);
   expect(pending.map((row) => row.id)).toEqual([action.id]);
   await expectJson(await request.get(`/api/seasons/${season.id}`), 200);

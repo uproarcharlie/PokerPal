@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage, hasErrorCode } from "@/lib/api/http";
 import { formatMoney } from "@/lib/format";
+import { clubTake } from "@/lib/prize-pool";
 import type { FinalizePreviewDto, FinalizePreviewInput } from "@shared/api/finalize";
 import { tournamentDeskQueries } from "../../staff-api";
 import { useFinalizeTournament } from "../../staff-hooks";
@@ -136,10 +137,7 @@ function FinalizeDialogBody({ tournamentId, onClose }: { tournamentId: string; o
                 {formatMoney(plan.prizePool.breakdown.net)}
               </p>
             </div>
-            <div className="rounded-lg bg-muted/40 p-3">
-              <p className="text-xs uppercase tracking-wide text-muted-foreground">{plan.prizePool.rakeLabel}</p>
-              <p className="text-xl font-bold tabular-nums">{formatMoney(plan.prizePool.breakdown.rake.applied)}</p>
-            </div>
+            <ClubTakeTile prizePool={plan.prizePool} />
           </div>
 
           {picking && !alreadyFinalized ? (
@@ -184,5 +182,19 @@ function FinalizeDialogBody({ tournamentId, onClose }: { tournamentId: string; o
         ) : null}
       </DialogFooter>
     </>
+  );
+}
+
+/** Beside the pool: what the club keeps (or adds), so the two tiles add up to what came in, as the AP panel and the snapshot say. */
+function ClubTakeTile({ prizePool }: { prizePool: FinalizePreviewDto["prizePool"] }) {
+  const { breakdown } = prizePool;
+  const take = clubTake({ impliedCents: breakdown.impliedRake, netSource: breakdown.netSource }, prizePool.rakeLabel);
+  return (
+    <div className="rounded-lg bg-muted/40 p-3">
+      <p className="text-xs uppercase tracking-wide text-muted-foreground">{take.label}</p>
+      <p className="text-xl font-bold tabular-nums" data-testid="finalize-ap">
+        {formatMoney(take.cents)}
+      </p>
+    </div>
   );
 }

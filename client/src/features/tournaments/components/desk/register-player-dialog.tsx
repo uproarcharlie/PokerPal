@@ -9,6 +9,7 @@ import { FormSlideout } from "@/components/ui/form-slideout";
 import { Input } from "@/components/ui/input";
 import { RequiredNote } from "@/components/shared/required-note";
 import { MIN_SEARCH_LENGTH, PlayerSearch, type PlayerSearchWording } from "@/features/public-tournament/components/player-search";
+import { useWaitingSeat } from "@/features/seating/waiting-seat";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/api/http";
 import { routes } from "@/app/routes";
@@ -59,6 +60,7 @@ export function RegisterPlayerDialog({ open, onOpenChange, tournamentId }: Regis
 function RegisterPlayerSheet({ tournamentId, onClose }: { tournamentId: string; onClose: () => void }) {
   const { toast } = useToast();
   const register = useRegisterPlayer(tournamentId);
+  const waitingSeat = useWaitingSeat(tournamentId);
   const [player, setPlayer] = useState<PublicPlayer | null>(null);
   const playerLabelId = useId();
   const form = useForm<RegisterValues>({
@@ -69,8 +71,11 @@ function RegisterPlayerSheet({ tournamentId, onClose }: { tournamentId: string; 
   const submit = form.handleSubmit(async (values) => {
     try {
       const registration = await register.mutateAsync(registerSchema.parse(values));
-      toast({ title: "Player registered", description: `${registration.player?.name ?? "The player"} is in.` });
       onClose();
+      // A late walk-in while the tables are in play gets no seat by itself: the toast offers one.
+      const name = registration.player?.name ?? "The player";
+      const seatNow = await waitingSeat(registration.id, name);
+      toast({ title: "Player registered", description: seatNow ? `${name} is in, waiting for a seat.` : `${name} is in.`, action: seatNow ?? undefined });
     } catch (error) {
       if (!showServerFieldErrors(form.setError, error, { fields: ["buyIns", "rebuys", "addons", "playerId"] })) {
         toast({ title: "Could not register the player", description: errorMessage(error), variant: "destructive" });

@@ -13,6 +13,10 @@ export const CLOSED_STATUSES: readonly TournamentStatus[] = ["completed", "cance
 /** Taking entries or being played: what the club and dashboard pages count as "active". */
 export const ACTIVE_STATUSES: readonly TournamentStatus[] = ["registration", "in_progress"];
 
+/** Not started yet: a clock started with "also start the tournament" moves these to in_progress. */
+export const UPCOMING_STATUSES = ["scheduled", "registration"] as const satisfies readonly TournamentStatus[];
+export type UpcomingStatus = (typeof UPCOMING_STATUSES)[number];
+
 const isOneOf = (statuses: readonly TournamentStatus[], status: string | null | undefined) =>
   status !== null && status !== undefined && (statuses as readonly string[]).includes(status);
 
@@ -21,6 +25,9 @@ export const isClosedStatus = (status: string | null | undefined): boolean => is
 
 /** Taking entries or in progress. */
 export const isActiveStatus = (status: string | null | undefined): boolean => isOneOf(ACTIVE_STATUSES, status);
+
+/** Scheduled or open for registration. */
+export const isUpcomingStatus = (status: string | null | undefined): status is UpcomingStatus => isOneOf(UPCOMING_STATUSES, status);
 
 /**
  * Every activity_log.event_type the app writes, so writers, the staff-only filter and the client's
@@ -43,6 +50,28 @@ export const ACTIVITY_EVENT_TYPES = [
   "prize_pool_adjusted",
   "rake_rates_changed",
   "tournament_refinalized",
+  // Phase 4 seating (one event per operation; a bust's release and the server's self-heal write none)
+  "tables_added",
+  "table_updated",
+  "table_removed",
+  "table_broken",
+  "seating_drawn",
+  "seat_assigned",
+  "seats_swapped",
+  "seat_released",
+  "seating_balanced",
+  "final_table",
+  "seating_undone", // the last table break, draw, balance or final table taken back
+  // Phase 4 clock (manual actions only: auto-advance writes nothing), shared/domain/clock CLOCK_EVENT_TYPES
+  "clock_started",
+  "clock_paused",
+  "clock_resumed",
+  "clock_level_changed",
+  "clock_time_adjusted",
+  "clock_reset",
+  "clock_undone",
+  "clock_structure_updated",
+  "early_bird",
 ] as const;
 export type ActivityEventType = (typeof ACTIVITY_EVENT_TYPES)[number];
 
@@ -50,4 +79,13 @@ export type ActivityEventType = (typeof ACTIVITY_EVENT_TYPES)[number];
  * Activity that is staff bookkeeping rather than part of the game: shown only to people who can
  * manage the tournament's club. Everyone else's feed leaves these entries out.
  */
-export const STAFF_ONLY_ACTIVITY_TYPES = ["payment_confirmed", "rake_rates_changed"] as const satisfies readonly ActivityEventType[];
+export const STAFF_ONLY_ACTIVITY_TYPES = [
+  "payment_confirmed",
+  "rake_rates_changed",
+  "table_updated",
+  "clock_time_adjusted",
+  "clock_reset",
+  "clock_undone",
+  "clock_structure_updated",
+  "early_bird",
+] as const satisfies readonly ActivityEventType[];

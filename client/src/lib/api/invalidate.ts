@@ -58,11 +58,14 @@ export function invalidateTournamentLists(queryClient: QueryClient, { deleted = 
 
 /**
  * A club changed, was created or deleted, or its staff changed: every club query (by id and by slug
- * alike) and the dashboard. A deleted club also takes its seasons and tournaments with it.
+ * alike) and the dashboard. A deleted club also takes its seasons and tournaments with it. A renamed
+ * rake ("AP") heads every one of its tournaments' prize pools and live displays, so they refresh too
+ * (P4REV4-CQ-04).
  */
-export function invalidateClub(queryClient: QueryClient, { deleted = false }: { deleted?: boolean } = {}): Promise<void> {
+export function invalidateClub(queryClient: QueryClient, { deleted = false, rakeRenamed = false }: { deleted?: boolean; rakeRenamed?: boolean } = {}): Promise<void> {
   const keys: QueryKey[] = [qk.clubs.all(), qk.dashboard.stats()];
   if (deleted) keys.push(qk.seasons.all(), qk.tournaments.all());
+  else if (rakeRenamed) keys.push(qk.tournaments.all());
   return invalidateAll(queryClient, keys);
 }
 

@@ -25,9 +25,15 @@ import { runBootSeeds } from "./seeds";
  * - Each file runs in its own transaction with `lock_timeout = 5s` and
  *   `statement_timeout = 60s` (the guard refuses SET, so a file cannot lift
  *   them), together with its ledger row, so a recorded sha256 means the whole
- *   file applied. A file whose first line is `-- runner:no-transaction` (e.g.
- *   for CREATE INDEX CONCURRENTLY) runs statement by statement instead and is
- *   recorded at the end. If one of those fails part-way it can leave an
+ *   file applied. A transaction that loses a lock conflict with the old
+ *   instance still serving (a deadlock, 40P01, or the lock timeout, 55P03) is
+ *   rolled back whole and tried again after a jittered backoff, up to
+ *   `lockRetry.attempts` times, before the boot gives up (P4REV3-PROD-01): no
+ *   order of locks is free of cycles against every app transaction, and a TD
+ *   editing a tournament during a deploy must not fail it. A file whose first
+ *   line is `-- runner:no-transaction` (e.g. for CREATE INDEX CONCURRENTLY)
+ *   runs statement by statement instead, is never retried, and is recorded at
+ *   the end. If one of those fails part-way it can leave an
  *   INVALID index behind, which `IF NOT EXISTS` would skip: later boots refuse
  *   to run the file until that index is dropped, rather than record it as
  *   applied. It can also leave a table without the UNIQUE index meant for it,
@@ -89,6 +95,29 @@ export interface MigrationReport {
   durationMs: number;
 }
 
+/** How often a file's transaction is tried when it loses a lock conflict, and the backoff before each retry. */
+export interface LockRetry {
+  /** Attempts in all (1: no retry). */
+  attempts: number;
+  /** The first backoff; each later one doubles, and each is jittered to between half and one and a half times it. */
+  baseDelayMs: number;
+}
+
+/** Default for `ApplyMigrationsOptions.lockRetry`: three attempts, about 1s and then 2s apart. */
+export const DEFAULT_LOCK_RETRY: Readonly<LockRetry> = Object.freeze({ attempts: 3, baseDelayMs: 1_000 });
+
+/** deadlock_detected and lock_not_available (lock_timeout): a lock conflict with the live app, worth another try. */
+const LOCK_CONFLICT_CODES: ReadonlySet<string> = new Set(["40P01", "55P03"]);
+
+/** The SQLSTATE of a lock conflict anywhere in `error`'s cause chain, or null for any other failure. */
+export function lockConflictCode(error: unknown): string | null {
+  for (let current: unknown = error, depth = 0; current instanceof Error && depth < 5; current = current.cause, depth++) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "string" && LOCK_CONFLICT_CODES.has(code)) return code;
+  }
+  return null;
+}
+
 export interface ApplyMigrationsOptions {
   pool: Pool;
   dir: string;
@@ -97,6 +126,8 @@ export interface ApplyMigrationsOptions {
   dryRun?: boolean;
   /** Give up if another session holds the migration lock for longer than this. */
   lockWaitMs?: number;
+  /** Retries of a transactional file that loses a lock conflict (default DEFAULT_LOCK_RETRY). */
+  lockRetry?: LockRetry;
 }
 
 export class MigrationError extends Error {
@@ -427,11 +458,36 @@ async function applyFile(client: PoolClient, file: MigrationFile): Promise<void>
   }
 }
 
+/**
+ * applyFile, tried again after a jittered backoff while a transactional file loses a lock conflict
+ * (lockConflictCode). Its transaction rolled back whole each time, so every try starts clean. A
+ * `-- runner:no-transaction` file is never retried here: one that failed part-way may have left an
+ * INVALID index, which only the checks before the run catch.
+ */
+async function applyFileRetrying(client: PoolClient, file: MigrationFile, logger: MigrationLogger, retry: LockRetry): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await applyFile(client, file);
+      return;
+    } catch (error) {
+      const code = lockConflictCode(error);
+      if (!file.transactional || code === null || attempt >= retry.attempts) throw error;
+      const delayMs = Math.round(retry.baseDelayMs * 2 ** (attempt - 1) * (0.5 + Math.random()));
+      logger.warn(
+        `${file.name}.sql lost a lock conflict with the running app [${code}] on attempt ${attempt} of ${retry.attempts}; ` +
+          `rolled back, trying again in ${delayMs}ms`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
 async function runMigrations(
   client: PoolClient,
   files: readonly MigrationFile[],
   logger: MigrationLogger,
   startedAt: number,
+  lockRetry: LockRetry,
 ): Promise<MigrationReport> {
   const before = await snapshotSchema(client);
   await client.query(CREATE_LEDGER);
@@ -461,7 +517,7 @@ async function runMigrations(
       );
     }
     const fileStartedAt = performance.now();
-    await applyFile(client, file);
+    await applyFileRetrying(client, file, logger, lockRetry);
     const durationMs = Math.round(performance.now() - fileStartedAt);
     results.push({ ...result, durationMs });
     logger.info(`${file.name}: ok in ${durationMs}ms${status === "new" ? " (first run)" : ""}`);
@@ -524,6 +580,7 @@ export async function applyMigrations({
   logger = console,
   dryRun = false,
   lockWaitMs = DEFAULT_LOCK_WAIT_MS,
+  lockRetry = DEFAULT_LOCK_RETRY,
 }: ApplyMigrationsOptions): Promise<MigrationReport> {
   const startedAt = performance.now();
   const files = loadMigrationFiles(dir);
@@ -541,7 +598,7 @@ export async function applyMigrations({
 
     await acquireLock(client, logger, lockWaitMs);
     try {
-      return await runMigrations(client, files, logger, startedAt);
+      return await runMigrations(client, files, logger, startedAt, lockRetry);
     } finally {
       await client
         .query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY])

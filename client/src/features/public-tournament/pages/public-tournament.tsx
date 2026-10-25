@@ -17,6 +17,7 @@ import { clubTimeZone } from "@/lib/format";
 import { liveRegistrationsInterval, liveTournamentInterval } from "@/lib/live-refresh";
 import { tournamentMoney } from "@/lib/prize-pool";
 import { EntryDetails } from "../components/entry-details";
+import { TournamentLiveLinks } from "../components/live-links";
 import { TOURNAMENT_PAGE_STATES } from "../components/page-shell";
 import { PrizeStructureCard, type PointsRulesFigure } from "../components/prize-structure-card";
 import { StandingsPanel } from "../components/standings-panel";
@@ -76,6 +77,7 @@ function TournamentView({ tournament, registrationsQuery }: TournamentViewProps)
           timeZone={clubTimeZone(club)}
           className="mb-4"
         />
+        <TournamentLiveLinks tournament={tournament} />
         <TournamentStats tournament={tournament} registrations={registrationsQuery} timeZone={clubTimeZone(club)} />
 
         <TabHost

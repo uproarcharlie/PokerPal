@@ -1,17 +1,17 @@
 import { useRef, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
-import { useLocation, useParams } from "wouter";
+import { useLocation, useParams, useSearch } from "wouter";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { LiveStatus } from "@/components/shared/live-status";
-import { TabHost } from "@/components/shared/tab-host";
 import { LoadingRows, PAGE_STATE_CLASS, QueryState } from "@/components/shared/query-state";
 import { useToast } from "@/hooks/use-toast";
 import { routes } from "@/app/routes";
 import { usePageMeta } from "@/app/page-meta";
 import { useClub } from "@/features/clubs/hooks";
 import { useSeason } from "@/features/seasons/hooks";
+import { ClockStatusChip, type ClockOpenRequest } from "@/features/clock/components/clock-status-chip";
 import { errorMessage } from "@/lib/api/http";
 import { clubTimeZone } from "@/lib/format";
 import { liveRegistrationsInterval, liveTournamentInterval } from "@/lib/live-refresh";
@@ -21,18 +21,16 @@ import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { toCents } from "@shared/domain/money";
 import { nextHighHandAward, rakeLabel } from "@shared/domain/prize-pool";
 import { isClosedStatus } from "@shared/domain/tournaments";
-import { ActivityFeed } from "../components/activity-feed";
 import { EditTournamentDialog } from "../components/edit-tournament-dialog";
 import { AwardHighHandDialog } from "../components/desk/award-high-hand-dialog";
-import { DeskActions, type WaitingCount } from "../components/desk/desk-actions";
+import type { WaitingCount } from "../components/desk/desk-actions";
+import { DeskTabs, deskTabOf, type DeskTab } from "../components/desk/desk-tabs";
 import { LockPoolDialog } from "../components/desk/lock-pool-dialog";
-import { OverviewTab } from "../components/desk/overview-tab";
 import { RegisterPlayerDialog } from "../components/desk/register-player-dialog";
 import { StatsStrip } from "../components/desk/stats-strip";
 import { TournamentActionsBar, type DeskDialog } from "../components/desk/tournament-actions-bar";
 import { CorrectResultsDialog } from "../components/finalize/correct-results-dialog";
 import { FinalizeDialog } from "../components/finalize/finalize-dialog";
-import { StandingsTable } from "../components/standings/standings-table";
 import { TournamentNotFound } from "../components/tournament-not-found";
 import { finishersOf } from "../components/standings/standings-order";
 import { useRegistrations, useTournament } from "../hooks";
@@ -71,6 +69,12 @@ function TournamentDesk({ tournament, registrations }: TournamentDeskProps) {
   const { toast } = useToast();
   const [, navigate] = useLocation();
   const [dialog, setDialog] = useState<DeskDialog | null>(null);
+  // The tab lives in the address (?tab=clock), so a reload, or a phone bringing a dropped page back,
+  // reopens the Clock or the seating, not the Overview (P4REV0-TAB-RESET).
+  const tab = deskTabOf(new URLSearchParams(useSearch()).get("tab"));
+  const setTab = (next: DeskTab) => navigate(routes.tournamentAdmin(tournament.id, next === "overview" ? undefined : next), { replace: true });
+  // The last tap on the header's clock chip (a new one each tap): the Clock tab brings Start / Pause into view.
+  const [clockOpen, setClockOpen] = useState<ClockOpenRequest | null>(null);
   // Edit and Delete are chosen from the header's More menu below the one-row width: focus goes back to it after.
   const moreMenu = useRef<HTMLButtonElement>(null);
   const closed = isClosedStatus(tournament.status);
@@ -119,6 +123,16 @@ function TournamentDesk({ tournament, registrations }: TournamentDeskProps) {
           <>
             {/* Beside the title, not among the actions: they keep to one row on a laptop (lead's visual review, item 3). */}
             <StatusBadge status={tournament.status} className="mr-2 align-middle" />
+            {/* The clock at a glance (nothing until it is set up): tapping it opens the Clock tab. */}
+            <span className="mr-2 inline-flex align-middle empty:hidden">
+              <ClockStatusChip
+                tournamentId={tournament.id}
+                onOpen={(request) => {
+                  setTab("clock");
+                  setClockOpen(request);
+                }}
+              />
+            </span>
             <span>{club.data?.name ?? ""}</span>
             {season.data ? <span className="hidden sm:inline"> • Season: {season.data.name}</span> : null}
           </>
@@ -159,6 +173,9 @@ function TournamentDesk({ tournament, registrations }: TournamentDeskProps) {
               dialog={dialog}
               onOpen={openDialog}
               onClose={() => setDialog(null)}
+              tab={tab}
+              onTabChange={setTab}
+              clockOpenRequest={clockOpen}
             />
           )}
         </QueryState>
@@ -194,10 +211,27 @@ interface DeskBodyProps {
   dialog: DeskDialog | null;
   onOpen: (dialog: DeskDialog) => void;
   onClose: () => void;
+  tab: DeskTab;
+  onTabChange: (tab: DeskTab) => void;
+  clockOpenRequest: ClockOpenRequest | null;
 }
 
 /** Everything worked out from the players: the figures, the tabs, and the dialogs that need the players. */
-function DeskBody({ tournament, registrations, rakeLabel: label, timeZone, waitingRequests, potCheck, onCheckPot, dialog, onOpen, onClose }: DeskBodyProps) {
+function DeskBody({
+  tournament,
+  registrations,
+  rakeLabel: label,
+  timeZone,
+  waitingRequests,
+  potCheck,
+  onCheckPot,
+  dialog,
+  onOpen,
+  onClose,
+  tab,
+  onTabChange,
+  clockOpenRequest,
+}: DeskBodyProps) {
   const closed = isClosedStatus(tournament.status);
   const canManage = tournament.viewer.canManage;
   // The same shared functions finalize pays with: what the TD sees here is what is paid.
@@ -216,49 +250,19 @@ function DeskBody({ tournament, registrations, rakeLabel: label, timeZone, waiti
         canEditPlayers={canManage && !closed}
         canEditPool={canManage && !closed && tournament.prizePoolLocked !== true}
       />
-      <TabHost
-        tabs={[
-          {
-            value: "overview",
-            label: "Overview",
-            content: (
-              <OverviewTab
-                tournament={tournament}
-                money={money}
-                entrants={registrations.length}
-                rakeLabel={label}
-                highHandAwardsCents={highHandAwards}
-                timeZone={timeZone}
-              />
-            ),
-          },
-          {
-            value: "standings",
-            label: "Standings",
-            content: (
-              <StandingsTable
-                tournamentId={tournament.id}
-                registrations={registrations}
-                canManage={canManage}
-                closed={closed}
-                completed={tournament.status === "completed"}
-              />
-            ),
-          },
-          { value: "activity", label: "Activity", content: <ActivityFeed tournamentId={tournament.id} live={!closed} /> },
-          {
-            value: "actions",
-            label: "Actions",
-            content: (
-              <DeskActions
-                tournament={tournament}
-                waitingRequests={waitingRequests}
-                onAwardHighHand={() => onOpen("highHand")}
-                onLockPool={() => onOpen("lock")}
-              />
-            ),
-          },
-        ]}
+      <DeskTabs
+        tournament={tournament}
+        registrations={registrations}
+        money={money}
+        rakeLabel={label}
+        timeZone={timeZone}
+        highHandAwardsCents={highHandAwards}
+        waitingRequests={waitingRequests}
+        tab={tab}
+        onTabChange={onTabChange}
+        clockOpenRequest={clockOpenRequest}
+        onAwardHighHand={() => onOpen("highHand")}
+        onLockPool={() => onOpen("lock")}
       />
 
       <AwardHighHandDialog

@@ -4,6 +4,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ClubStaffDto, CreateStaffInviteInput, UpdateClubInput } from "@shared/api/clubs";
+import type { ClubDto } from "@shared/api/public";
 import { invalidateClub } from "@/lib/api/invalidate";
 import { qk } from "@/lib/api/query-keys";
 import {
@@ -24,13 +25,18 @@ export function useCreateClub() {
   return useMutation({ mutationFn: createClub, onSuccess: () => invalidateClub(queryClient) });
 }
 
+/**
+ * Saves the club's settings, from club settings or the AP panel's rename alike. When the save changed
+ * its name for the rake, every one of its tournaments' prize pools and live displays shows the new one.
+ */
 export function useUpdateClub(id: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: UpdateClubInput) => updateClub(id, input),
-    onSuccess: (club) => {
+    onSuccess: (club, input) => {
+      const before = queryClient.getQueryData<ClubDto>(qk.clubs.detail(id));
       queryClient.setQueryData(qk.clubs.detail(id), club);
-      return invalidateClub(queryClient);
+      return invalidateClub(queryClient, { rakeRenamed: input.rakeLabel !== undefined && before?.rakeLabel !== club.rakeLabel });
     },
   });
 }

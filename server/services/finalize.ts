@@ -36,6 +36,7 @@ import { pointsRules } from "../repositories/points";
 import { registrationsOf } from "../repositories/registrations";
 import { getTournament, lockTournamentForUpdate, setTournamentColumns } from "../repositories/tournaments";
 import { recordAudit } from "./audit";
+import { finishClock } from "./clock";
 import { displayWithNames, toPrizePoolDto, type PrizePoolContext } from "./prize-pool";
 
 interface PlanContext extends PrizePoolContext {
@@ -193,6 +194,7 @@ export async function finalizeTournament(req: Request, id: string, input: Finali
       finalizedBy: actingUserId(req),
       prizePoolSnapshot: plan.snapshot,
     });
+    await finishClock(tx, id);
     await insertActivity(tx, {
       tournamentId: id,
       eventType: again ? "tournament_refinalized" : "status_change",

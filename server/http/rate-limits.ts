@@ -155,21 +155,41 @@ export function userOrVisitorKey(req: Request): string {
 /**
  * The GET endpoints the client polls: the public tournament view (the tournament, so a phone sees
  * the TD's pool changes and the lock (MONEY-P2REV-02), its registrations and activity every 5 s, and
- * the prize pool that changes with them) and the TD's desk pages (pending and confirmed
- * registrations, pending actions every 3 s). They are counted by `live`, not `globalApi`, so polling
+ * the prize pool that changes with them), the TD's desk pages (pending and confirmed registrations,
+ * pending actions every 3 s), and Phase 4's live screens: the TV clock and the TD's clock panel
+ * (the display, every 3–5 s), the TD's seating (10 s), the seat finder (15 s) and the season
+ * leaderboard behind the TV's QR code (60 s). They are counted by `live`, not `globalApi`, so polling
  * never uses up the budget that page loads, sign-ins and QR sign-ups draw on. Any endpoint the client
- * starts polling belongs here; Phase 4 adds the TV display, seating and clock endpoints.
- * Case-insensitive, as Express's routing is.
+ * starts polling belongs here. Case-insensitive, as Express's routing is.
  */
 const LIVE_API_PATHS: readonly RegExp[] = [
   /^\/api\/tournaments\/[^/]+\/?$/i,
-  /^\/api\/tournaments\/[^/]+\/(?:registrations|activity|prize-pool|pending-registrations|confirmed-registrations|pending-actions)\/?$/i,
+  /^\/api\/tournaments\/[^/]+\/(?:registrations|activity|prize-pool|pending-registrations|confirmed-registrations|pending-actions|seating)\/?$/i,
+  /^\/api\/public\/tournaments\/[^/]+\/(?:display|seating)\/?$/i,
+  /^\/api\/public\/seasons\/[^/]+\/leaderboard\/?$/i,
 ];
 
 export function isLiveApiRequest(req: Pick<Request, "method" | "baseUrl" | "path">): boolean {
   if (req.method !== "GET" && req.method !== "HEAD") return false;
   const path = req.baseUrl + req.path;
   return LIVE_API_PATHS.some((pattern) => pattern.test(path));
+}
+
+/**
+ * The TD's live writes during play (phase4-contracts §5): clock actions, the clock's structure,
+ * display and TV key, tables, seating (and its undo) and early birds. Counted by `liveOps`, per
+ * signed-in user, not by `globalApi`: a room of phones on the venue's address must never leave the TD
+ * unable to pause the clock or move a player. Anyone not signed in (a TV running the clock with its
+ * clock key) is still counted, per visitor.
+ */
+const LIVE_OPS_PATHS: readonly RegExp[] = [
+  /^\/api\/tournaments\/[^/]+\/(?:clock(?:\/(?:actions|display|key))?|seating\/(?:setup|draw|assign|unseat|balance|final-table|undo)|tables(?:\/[^/]+(?:\/break)?)?|early-birds)\/?$/i,
+];
+
+export function isLiveOpsRequest(req: Pick<Request, "method" | "baseUrl" | "path">): boolean {
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return false;
+  const path = req.baseUrl + req.path;
+  return LIVE_OPS_PATHS.some((pattern) => pattern.test(path));
 }
 
 export const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
@@ -230,6 +250,11 @@ export const RATE_LIMITS = {
    * RATE_LIMIT_LIVE overrides it.
    */
   live: 10_000,
+  /**
+   * The TD's live writes (isLiveOpsRequest), per signed-in user or else per visitor. A busy night is a
+   * few hundred clock and seating actions; this still stops a runaway client (under 2 a second).
+   */
+  liveOps: 1_500,
 } as const;
 
 export type RateLimiterName = keyof typeof RATE_LIMITS;
@@ -362,9 +387,11 @@ const FAILED_ATTEMPTS = "Too many failed attempts. Please wait 15 minutes and tr
  * One set per app (each limiter keeps its own in-memory counts, which reset when the process
  * restarts). The app mounts two of them on /api itself:
  * - `globalApi` ahead of the session middleware, so a flood is turned away before it reaches the
- *   session store. It skips live polling.
+ *   session store. It skips live polling and the TD's live writes.
  * - `live` after the signed-in user is attached, so each user has their own bucket. It counts only
  *   live polling. Route modules never mount it.
+ * - `liveOps` beside it, counting only the TD's live writes (clock, seating), per user. Route modules
+ *   never mount it either.
  * Route modules mount the rest: `passwordVisitor`, `authVisitor`, `auth`, `authAccount` and
  * `signInAccount` on sign-in, `passwordVisitor`, `signUp`, `authVisitor` and `auth` on sign-up, and
  * `passwordVisitor` and `passwordChange` on change-password, in that order (after express.json: some
@@ -395,7 +422,7 @@ export function createRateLimiters(env: RateLimitEnv, options: RateLimiterOption
   return {
     globalApi: rateLimit({
       ...common("globalApi"),
-      skip: isLiveApiRequest,
+      skip: (req) => isLiveApiRequest(req) || isLiveOpsRequest(req),
       keyGenerator: RATE_LIMIT_KEYS.visitor,
       handler: refuse("globalApi", "Too many requests, please try again later."),
     }),
@@ -488,6 +515,12 @@ export function createRateLimiters(env: RateLimitEnv, options: RateLimiterOption
       skip: (req) => !isLiveApiRequest(req),
       keyGenerator: RATE_LIMIT_KEYS.userOrVisitor,
       handler: refuse("live", "Too many requests, please try again later."),
+    }),
+    liveOps: rateLimit({
+      ...common("liveOps"),
+      skip: (req) => !isLiveOpsRequest(req),
+      keyGenerator: RATE_LIMIT_KEYS.userOrVisitor,
+      handler: refuse("liveOps", "Too many changes, please try again in a moment."),
     }),
   };
 }

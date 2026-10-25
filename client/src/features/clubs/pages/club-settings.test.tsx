@@ -124,6 +124,28 @@ describe("ClubSettingsPage: Profile", () => {
     expect(screen.getByLabelText("Time zone")).toHaveValue("Pacific/Chatham");
   });
 
+  it("names the club's rake (\"AP\") with one tap, and saves it with the profile", async () => {
+    const user = userEvent.setup();
+    const { queryClient } = renderSettings();
+    // A tournament's prize pool and TV display seen earlier carry the old name (P4REV4-CQ-04).
+    queryClient.setQueryData(qk.tournaments.prizePool("t1"), { rakeLabel: "Rake" });
+    queryClient.setQueryData(qk.tournaments.display("t1"), { money: { rakeLabel: "Rake" } });
+    const label = await screen.findByLabelText("Name for the rake");
+    expect(label).toHaveValue("");
+    expect(label).toHaveAccessibleDescription(/Leave it blank for .Rake./);
+
+    await user.click(screen.getByRole("button", { name: "AP" }));
+    expect(label).toHaveValue("AP");
+    expect(screen.getByRole("button", { name: "AP" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(save());
+
+    expect(await screen.findByText("Club updated successfully!")).toBeInTheDocument();
+    expect(sent).toMatchObject({ rakeLabel: "AP" });
+    expect(screen.getByLabelText("Name for the rake")).toHaveValue("AP");
+    expect(queryClient.getQueryState(qk.tournaments.prizePool("t1"))?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(qk.tournaments.display("t1"))?.isInvalidated).toBe(true);
+  });
+
   it("saves the profile fields only, says so, and shows what the server stored", async () => {
     const user = userEvent.setup();
     renderSettings();
@@ -145,6 +167,7 @@ describe("ClubSettingsPage: Profile", () => {
       imageUrl: LOGO_URL,
       address: "Club 2020, Onehunga",
       timezone: "Pacific/Auckland",
+      rakeLabel: null,
     });
     await waitFor(() => expect(clubReads).toBeGreaterThan(reads));
     expect(screen.getByRole("heading", { level: 1, name: "Central Stars NZ Settings" })).toBeInTheDocument();

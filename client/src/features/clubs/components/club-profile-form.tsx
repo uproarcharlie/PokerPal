@@ -14,7 +14,7 @@ import { useUpdateClub } from "../staff-hooks";
 import { ClubProfileFields } from "./club-profile-fields";
 import { formResolver, showServerFieldErrors } from "@/lib/forms";
 
-const FIELDS = ["name", "slug", "description", "imageUrl", "address", "timezone"] as const;
+const FIELDS = ["name", "slug", "description", "imageUrl", "address", "timezone", "rakeLabel"] as const;
 
 /**
  * The settings' Profile tab. It starts from the club as loaded and is mounted once per club (the page

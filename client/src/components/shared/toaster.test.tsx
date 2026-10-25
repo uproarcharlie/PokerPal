@@ -35,6 +35,15 @@ describe("Toaster", () => {
     expect(failed.parentElement).toHaveAttribute("aria-live", "assertive");
   });
 
+  it("offers the next step a toast names, and closes once it is taken", async () => {
+    render(<Toaster />);
+    const seatNow = vi.fn();
+    act(() => void toast({ title: "Player registered", description: "Ann is in, waiting for a seat.", action: { label: "Seat now", onClick: seatNow } }));
+    await userEvent.click(notifications().getByRole("button", { name: "Seat now" }));
+    expect(seatNow).toHaveBeenCalledOnce();
+    expect(notifications().queryByRole("listitem")).not.toBeInTheDocument();
+  });
+
   it("closes from its labelled button", async () => {
     render(<Toaster />);
     act(() => void toast({ title: "Payment confirmed" }));

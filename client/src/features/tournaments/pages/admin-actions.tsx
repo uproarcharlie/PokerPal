@@ -16,6 +16,7 @@ import { errorMessage } from "@/lib/api/http";
 import { clubTimeZone } from "@/lib/format";
 import type { RebuyBeforeEliminationDetails } from "@shared/api/pending-actions";
 import { useClub } from "@/features/clubs/hooks";
+import { useWaitingSeat } from "@/features/seating/waiting-seat";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { PendingActionsTable } from "../components/request-desk/pending-actions-table";
 import { ReentryDialog } from "../components/request-desk/reentry-dialog";
@@ -67,6 +68,7 @@ function RequestDesk({ tournament }: { tournament: TournamentDetailDto }) {
   const waitingCount = figureOf(actions, (list) => list.length);
   const confirmAction = useConfirmPendingAction(tournament.id);
   const dismissAction = useDismissPendingAction(tournament.id);
+  const waitingSeat = useWaitingSeat(tournament.id);
   // Each request's buttons wait for its own answer, and each answer is handled for its own request.
   const rows = useBusyRows();
   // Why the server last refused to confirm each request: shown beside it until it is confirmed or dismissed.
@@ -80,9 +82,13 @@ function RequestDesk({ tournament }: { tournament: TournamentDetailDto }) {
       const data = await rows.run(actionId, () => confirmAction.mutateAsync({ actionId, reenter }));
       forget(actionId);
       setQuestion((open) => (open?.actionId === actionId ? null : open));
+      const name = data.registration.player?.name ?? "The player";
+      // A re-entry gets their old seat back only while it is free: otherwise they wait, and the toast offers a seat.
+      const seatNow = data.reentered ? await waitingSeat(data.registration.id, name) : null;
       toast({
         title: "Action Confirmed",
-        description: data.reentered ? `${data.registration.player?.name ?? "The player"} is back in with the re-buy.` : "Player action has been confirmed.",
+        description: data.reentered ? `${name} is back in with the re-buy${seatNow ? ", waiting for a seat" : ""}.` : "Player action has been confirmed.",
+        action: seatNow ?? undefined,
       });
     } catch (error) {
       const details = rebuyBeforeEliminationDetails(error);

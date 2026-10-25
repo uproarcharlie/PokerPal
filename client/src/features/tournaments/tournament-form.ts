@@ -7,7 +7,7 @@ import { z } from "zod";
 import { RAKE_TYPES, type RakeType } from "@shared/api/common";
 import type { ClubDto, PublicRegistration, PublicTournament } from "@shared/api/public";
 import { createTournamentSchema, type CreateTournamentInput, type UpdateTournamentInput } from "@shared/api/tournaments";
-import { toCents } from "@shared/domain/money";
+import { centsToDecimalString, isAmountSet, toBasisPoints, toCents, type MoneyInput } from "@shared/domain/money";
 import { offersAddons, offersHighHand, offersRebuys } from "@shared/domain/player-actions";
 import { PAYOUT_STRUCTURE_KEYS, type PayoutStructureKey } from "@shared/domain/payouts";
 import { mergeRakeRates, RAKE_COMPONENTS } from "@shared/domain/rake-rates";
@@ -242,9 +242,18 @@ export function startingClubId(choices: readonly Pick<ClubDto, "id">[], clubId: 
   return choices.length === 1 ? choices[0].id : "";
 }
 
-/** A stored rate type the form offers; anything older reads as none. */
-function rakeType(value: string | null | undefined): RakeType {
+/** A stored rate type the forms offer (the tournament form, the AP rates sheet); anything older reads as none. */
+export function rakeTypeOf(value: string | null | undefined): RakeType {
   return (RAKE_TYPES as readonly string[]).includes(value ?? "") ? (value as RakeType) : "none";
+}
+
+/**
+ * A stored rate's amount as every form's box shows it: "10" for 10%, "5.00" for $5, blank for no rate
+ * (P4REV4-CQ-03: one rule for the tournament form and the AP rates sheet).
+ */
+export function rateAmountText(type: RakeType, amount: MoneyInput): string {
+  if (type === "none" || !isAmountSet(amount)) return "";
+  return type === "percentage" ? String(toBasisPoints(amount) / 100) : centsToDecimalString(toCents(amount));
 }
 
 /** A stored payout structure the form offers; anything older reads as Standard, which is what it pays. */
@@ -257,8 +266,8 @@ const text = (value: string | number | null | undefined) => (value === null || v
 /** The form as a tournament stands, its start on the club's wall clock (`timeZone`): what an edit starts from. */
 export function formValuesFromTournament(tournament: PublicTournament, timeZone: string): TournamentFormValues {
   const rate = (type: string | null | undefined, amount: string | null | undefined) => {
-    const kind = rakeType(type);
-    return { type: kind, amount: kind === "none" ? "" : text(amount) };
+    const kind = rakeTypeOf(type);
+    return { type: kind, amount: rateAmountText(kind, amount) };
   };
   const buyIn = rate(tournament.rakeType, tournament.rakeAmount);
   const rebuy = rate(tournament.rebuyRakeType, tournament.rebuyRakeAmount);

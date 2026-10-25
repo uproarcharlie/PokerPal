@@ -435,9 +435,12 @@ describe("applyMigrations: the runner's timeouts", () => {
     await reader.query("SELECT count(*) FROM t");
     try {
       const startedAt = Date.now();
-      const failure = await migrate(
-        migrationsDir({ "0000_t.sql": "CREATE TABLE IF NOT EXISTS t (id int);", "0001_z.sql": "ALTER TABLE t ADD COLUMN IF NOT EXISTS z int;" }),
-      ).catch((error: unknown) => error);
+      const failure = await applyMigrations({
+        pool: db().pool,
+        dir: migrationsDir({ "0000_t.sql": "CREATE TABLE IF NOT EXISTS t (id int);", "0001_z.sql": "ALTER TABLE t ADD COLUMN IF NOT EXISTS z int;" }),
+        logger: recordingLogger(),
+        lockRetry: { attempts: 1, baseDelayMs: 0 },
+      }).catch((error: unknown) => error);
 
       expect((failure as Error).message).toBe("0001_z.sql:1 failed: canceling statement due to lock timeout [55P03]");
       expect(Date.now() - startedAt).toBeLessThan(10_000);
@@ -448,6 +451,95 @@ describe("applyMigrations: the runner's timeouts", () => {
       await reader.end();
     }
   });
+});
+
+describe("applyMigrations: a lock conflict with the instance still serving (P4REV3-PROD-01)", () => {
+  /** Waits (up to 10s) until `count` sessions of the scratch database are waiting for a table lock. */
+  async function untilWaitingForLocks(count: number): Promise<void> {
+    await vi.waitFor(
+      async () => {
+        const { rows } = await db().pool.query<{ n: number }>(
+          "SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted AND locktype = 'relation' AND database = (SELECT oid FROM pg_database WHERE datname = current_database())",
+        );
+        expect(rows[0].n).toBeGreaterThanOrEqual(count);
+      },
+      { timeout: 10_000, interval: 20 },
+    );
+  }
+
+  it("rolls a deadlocked file back and runs it again, rather than failing the deploy", async () => {
+    // The shape of 0005 before the fix against a TD editing a tournament: the migration alters the
+    // child table (ACCESS EXCLUSIVE) and then needs the parent for a foreign key, while the app's
+    // transaction has updated the parent and goes on to read the child.
+    const base = { "0000_base.sql": "CREATE TABLE IF NOT EXISTS parent (id int PRIMARY KEY);\nCREATE TABLE IF NOT EXISTS child (id int);" };
+    await migrate(migrationsDir(base));
+    await db().pool.query("INSERT INTO parent VALUES (1)");
+    const holder = await otherSession("pokerpal-test-reader");
+    const app = await otherSession("pokerpal-test-app");
+    const logger = recordingLogger();
+    try {
+      await holder.query("BEGIN");
+      await holder.query("SELECT count(*) FROM child");
+      await app.query("BEGIN");
+      await app.query("UPDATE parent SET id = id");
+      const migrating = applyMigrations({
+        pool: db().pool,
+        dir: migrationsDir({
+          ...base,
+          "0001_tables.sql":
+            "ALTER TABLE child ADD COLUMN IF NOT EXISTS flag boolean NOT NULL DEFAULT false;\nCREATE TABLE IF NOT EXISTS seats (id int, parent_id int REFERENCES parent (id));",
+        }),
+        logger,
+        lockRetry: { attempts: 3, baseDelayMs: 50 },
+      });
+      // The ALTER queues behind a reader, and the app's read of the child queues behind the ALTER. Once
+      // the app has waited past deadlock_timeout (1s), the reader goes: the migration takes the child and
+      // waits for the parent, closing the cycle, so its own deadlock check is the one that finds it.
+      await untilWaitingForLocks(1);
+      const appRead = app.query("SELECT count(*) FROM child");
+      await untilWaitingForLocks(2);
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await holder.query("ROLLBACK");
+      await waitForLine(logger.lines.warn, /^0001_tables\.sql lost a lock conflict with the running app \[40P01\] on attempt 1 of 3; rolled back/);
+      await appRead;
+      await app.query("COMMIT");
+
+      const report = await migrating;
+      expect(report.files.map((file) => [file.name, file.status])).toEqual([
+        ["0000_base", "unchanged"],
+        ["0001_tables", "new"],
+      ]);
+      expect(await tables()).toEqual(["_app_migrations", "child", "parent", "seats"]);
+      expect(await ledger()).toEqual(["0000_base", "0001_tables"]);
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      await app.query("ROLLBACK").catch(() => undefined);
+      await Promise.all([holder.end(), app.end()]);
+    }
+  }, 20_000);
+
+  it("gives up after its last attempt, naming the conflict", async () => {
+    await migrate(migrationsDir({ "0000_t.sql": "CREATE TABLE IF NOT EXISTS t (id int);" }));
+    const reader = await otherSession();
+    const logger = recordingLogger();
+    await reader.query("BEGIN");
+    await reader.query("SELECT count(*) FROM t");
+    try {
+      const failure = await applyMigrations({
+        pool: db().pool,
+        dir: migrationsDir({ "0000_t.sql": "CREATE TABLE IF NOT EXISTS t (id int);", "0001_z.sql": "ALTER TABLE t ADD COLUMN IF NOT EXISTS z int;" }),
+        logger,
+        lockRetry: { attempts: 2, baseDelayMs: 10 },
+      }).catch((error: unknown) => error);
+
+      expect((failure as Error).message).toBe("0001_z.sql:1 failed: canceling statement due to lock timeout [55P03]");
+      expect(logger.lines.warn).toEqual([expect.stringMatching(/^0001_z\.sql lost a lock conflict with the running app \[55P03\] on attempt 1 of 2; rolled back/)]);
+      expect(await ledger()).toEqual(["0000_t"]);
+    } finally {
+      await reader.query("ROLLBACK");
+      await reader.end();
+    }
+  }, 20_000);
 });
 
 describe("applyMigrations: seed rows", () => {

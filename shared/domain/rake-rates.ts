@@ -5,9 +5,10 @@
  * A change is merged over the stored rates one component at a time (buy-in, re-buy, add-on, high
  * hand) and then checked, so a TD can change one rate without resending the others. Every way of
  * changing the rates (PUT /api/tournaments/:id and PUT …/prize-pool/rates) goes through
- * mergeRakeRates.
+ * mergeRakeRates; with the prices, every change of a rate or an entry price is checked by
+ * rateOverPrice, so a fixed rate never takes more than the entry it is taken from.
  */
-import { formatMoney, toBasisPoints, toCents, type MoneyInput } from "./money";
+import { formatMoney, toBasisPoints, toCents, type Cents, type MoneyInput } from "./money";
 
 /** Each component's type and amount columns. */
 export const RAKE_COMPONENTS = [
@@ -66,6 +67,53 @@ function amountText(value: MoneyInput): string | null {
   if (value === null || value === undefined) return null;
   const text = String(value).trim();
   return text === "" ? null : text;
+}
+
+/** The entry prices the per-entry AP rates are taken from (decimal(10,2) text, as stored). */
+export interface EntryPrices {
+  buyInAmount?: MoneyInput;
+  rebuyAmount?: MoneyInput;
+  addonAmount?: MoneyInput;
+}
+
+/** Each AP component's price column and what one entry is called ("$30.00 per re-buy"); the high hand is a pot of its own. */
+const PRICED_COMPONENTS = [
+  { type: "rakeType", amount: "rakeAmount", price: "buyInAmount", entry: "buy-in" },
+  { type: "rebuyRakeType", amount: "rebuyRakeAmount", price: "rebuyAmount", entry: "re-buy" },
+  { type: "addonRakeType", amount: "addonRakeAmount", price: "addonAmount", entry: "add-on" },
+] as const satisfies ReadonlyArray<{ type: RakeTypeKey; amount: RakeAmountKey; price: keyof EntryPrices; entry: string }>;
+
+export interface RateOverPrice {
+  code: "AMOUNT_OVER_PRICE";
+  field: RakeAmountKey;
+  /** "re-buy". */
+  entry: string;
+  amountCents: Cents;
+  priceCents: Cents;
+}
+
+/**
+ * A fixed AP rate above the price of the entry it is taken from (P4REV2R2-MONEY-01): $30 AP per $25
+ * re-buy takes more than the re-buys bring in, and the prize pool goes below zero. A percentage cannot
+ * do that (it is at most 100), nor can a manual AP total (AP_EXCEEDS_GROSS). With `before`, only a
+ * component whose rate or price changed is checked, so a row stored so earlier can still be edited
+ * otherwise until one of them changes. Null when every fixed rate fits.
+ */
+export function rateOverPrice(after: RakeRates & EntryPrices, before?: RakeRates & EntryPrices): RateOverPrice | null {
+  for (const { type, amount, price, entry } of PRICED_COMPONENTS) {
+    if (after[type] !== "fixed") continue;
+    const amountCents = toCents(after[amount]);
+    const priceCents = toCents(after[price]);
+    const changed =
+      !before || before[type] !== after[type] || toCents(before[amount]) !== amountCents || toCents(before[price]) !== priceCents;
+    if (changed && priceCents > 0 && amountCents > priceCents) return { code: "AMOUNT_OVER_PRICE", field: amount, entry, amountCents, priceCents };
+  }
+  return null;
+}
+
+/** "$30.00 per re-buy is more than a re-buy costs ($25.00): the prize pool would go below zero". */
+export function rateOverPriceMessage({ entry, amountCents, priceCents }: RateOverPrice): string {
+  return `${formatMoney(amountCents)} per ${entry} is more than a ${entry} costs (${formatMoney(priceCents)}): the prize pool would go below zero`;
 }
 
 /**

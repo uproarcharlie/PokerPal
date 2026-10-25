@@ -57,6 +57,8 @@ export function tournamentDto(overrides: Partial<TournamentDetailDto> = {}): Tou
     rebuyAmount: null,
     addonAmount: null,
     maxRebuys: null,
+    maxAddons: null,
+    rebuyOrAddon: null,
     rebuyPeriodMinutes: null,
     rakeType: "none",
     rakeAmount: "0.00",
@@ -141,6 +143,7 @@ export function registrationDto(id: string, name: string, overrides: Partial<Pub
     enteringHighHands: false,
     highHandWinner: false,
     highHandAmount: null,
+    earlyBird: false,
     player: { id: `p-${id}`, name, imageUrl: null },
     ...overrides,
   };

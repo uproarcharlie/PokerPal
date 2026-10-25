@@ -111,6 +111,8 @@ export const PUBLIC_TOURNAMENT_FIELDS = [
   "rebuyAmount",
   "addonAmount",
   "maxRebuys",
+  "maxAddons",
+  "rebuyOrAddon",
   "rebuyPeriodMinutes",
   "rakeType",
   "rakeAmount",
@@ -165,6 +167,7 @@ export const PUBLIC_REGISTRATION_FIELDS = [
   "enteringHighHands",
   "highHandWinner",
   "highHandAmount",
+  "earlyBird",
 ] as const satisfies readonly (keyof TournamentRegistration)[];
 export type PublicRegistrationRow = Json<Pick<TournamentRegistration, (typeof PUBLIC_REGISTRATION_FIELDS)[number]>>;
 /** GET /api/tournaments/:id/registrations */

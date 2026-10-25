@@ -11,13 +11,17 @@ import { ResponsiveTable, type ResponsiveColumn } from "@/components/shared/resp
 import { useBusyRows } from "@/hooks/use-busy-rows";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/api/http";
+import { entriesOf } from "@/lib/entries";
 import { formatNumber, plural } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { PublicRegistration } from "@shared/api/public";
 import { registrationRemovalProblem, standingsFor } from "@shared/domain/standings";
+import { useSeating } from "@/features/seating/staff-hooks";
+import type { SeatingDto } from "@shared/api/seating";
 import { useRemoveRegistration, useUpdateRegistration } from "../../staff-hooks";
 import { playerName } from "../../player-name";
 import { EliminatePlayerDialog } from "./eliminate-player-dialog";
+import { useAnnounceReturn } from "./undo-elimination";
 import { PlaceBadge, StandingStatus } from "@/components/shared/podium";
 
 interface StandingsTableProps {
@@ -49,7 +53,43 @@ function PlayerCell({ registration }: { registration: PublicRegistration }) {
   );
 }
 
-const entriesOf = (registration: PublicRegistration) => (registration.buyIns ?? 0) + (registration.rebuys ?? 0) + (registration.addons ?? 0);
+type SeatOf = SeatingDto["seatByRegistrationId"];
+
+/** "T2 · S4", read out as "Table 2, seat 4"; "Waiting" for a player still in without one; a dash for a player who is out. */
+function SeatCell({ seat }: { seat: SeatOf[string] | "waiting" | undefined }) {
+  if (seat === "waiting") {
+    return (
+      <span className="font-medium text-accent-text" data-testid="standings-seat">
+        Waiting<span className="sr-only"> for a seat</span>
+      </span>
+    );
+  }
+  if (!seat) {
+    return (
+      <span className="text-muted-foreground" data-testid="standings-seat">
+        <span aria-hidden="true">–</span>
+        <span className="sr-only">No seat</span>
+      </span>
+    );
+  }
+  return (
+    <span className="whitespace-nowrap font-medium tabular-nums text-foreground" data-testid="standings-seat">
+      <span aria-hidden="true">
+        T{seat.tableNumber} · S{seat.seatNumber}
+      </span>
+      <span className="sr-only">
+        Table {seat.tableNumber}, seat {seat.seatNumber}
+      </span>
+    </span>
+  );
+}
+
+/** "2 entries", with the add-ons beside them: "2 entries · 1 add-on". */
+function entryText(registration: PublicRegistration): string {
+  const entries = plural(entriesOf(registration), "entry", "entries");
+  const addons = registration.addons ?? 0;
+  return addons > 0 ? `${entries} · ${plural(addons, "add-on")}` : entries;
+}
 
 /** The players, best first, with the TD's eliminate, restore and remove controls while the game is open. */
 export function StandingsTable({ tournamentId, registrations, canManage, closed, completed }: StandingsTableProps) {
@@ -58,6 +98,7 @@ export function StandingsTable({ tournamentId, registrations, canManage, closed,
   const [removing, setRemoving] = useState<PublicRegistration | null>(null);
   const restore = useUpdateRegistration(tournamentId);
   const remove = useRemoveRegistration(tournamentId);
+  const announceReturn = useAnnounceReturn(tournamentId);
   // Each Restore waits for its own answer, and each answer is told for its own player (P3REV0-PARITY-03).
   const restoring = useBusyRows();
   const standings = standingsFor(registrations, completed);
@@ -103,10 +144,17 @@ export function StandingsTable({ tournamentId, registrations, canManage, closed,
       toast({ title: "Could not restore the player", description: errorMessage(error, "Failed to restore player"), variant: "destructive" });
       return;
     }
-    toast({ title: "Player restored successfully" });
+    // Their old seat comes back only while it is free: otherwise they wait, and the toast offers a seat.
+    await announceReturn(registration, "Player restored successfully");
   };
 
   const controls = canManage && !closed;
+  // Where each player sits, read once (the Tables & Seating tab follows it): a column only once anyone is seated.
+  const seating = useSeating(tournamentId, { enabled: controls });
+  const seatOf = controls ? seating.data?.seatByRegistrationId : undefined;
+  // Still in, with tables in play and no seat: not the dash of a player who is out (TDN2-WAITING-NOT-FLAGGED).
+  const waiting = new Set(controls && seating.data && seating.data.stats.activeTables > 0 ? seating.data.unseated.map((entry) => entry.registrationId) : []);
+  const seatCell = (registration: PublicRegistration) => (waiting.has(registration.id) ? "waiting" : seatOf?.[registration.id]);
 
   // On a phone each player is a card with their controls on it (MA-02): Eliminate, the TD's most used
   // action on the night, is never off the side of a table that scrolls sideways.
@@ -118,6 +166,9 @@ export function StandingsTable({ tournamentId, registrations, canManage, closed,
       cell: (registration) => <PlaceBadge place={placeOf.get(registration.id) ?? null} finished={completed} />,
     },
     { id: "player", header: "Player", phone: "title", cell: (registration) => <PlayerCell registration={registration} /> },
+    ...(seatOf && Object.keys(seatOf).length > 0
+      ? [{ id: "seat", header: "Seat", className: "text-sm", cell: (registration: PublicRegistration) => <SeatCell seat={seatCell(registration)} /> }]
+      : []),
     {
       id: "status",
       header: "Status",
@@ -129,7 +180,7 @@ export function StandingsTable({ tournamentId, registrations, canManage, closed,
       id: "entry",
       header: "Entry",
       className: "text-sm text-muted-foreground",
-      cell: (registration) => plural(entriesOf(registration), "entry", "entries"),
+      cell: entryText,
     },
     { id: "points", header: "Points", className: "text-sm font-semibold text-foreground", cell: (registration) => formatNumber(registration.pointsAwarded ?? 0) },
     {
@@ -250,6 +301,7 @@ export function StandingsTable({ tournamentId, registrations, canManage, closed,
         tournamentId={tournamentId}
         registration={eliminating}
         registrations={registrations}
+        seatOf={seatOf}
         onEliminated={(registrationId) => {
           keepFocus.current = { registrationId, eliminated: true };
         }}

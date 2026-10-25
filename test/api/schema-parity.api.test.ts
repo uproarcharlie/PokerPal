@@ -65,7 +65,9 @@ describe("schema parity: migrations/*.sql vs shared/schema.ts", () => {
       const definition = existing.get(`${drop.table}.${drop.name}`);
       const add = adds.find((candidate) => candidate.table === drop.table && candidate.definition === definition);
       if (!add || explained.has(add.statement)) continue;
-      renames.push({ table: drop.table, database: drop.name, drizzle: add.name });
+      // drizzle-kit drops and re-adds a multi-column foreign key it introspected (tournament_seats'
+      // composite key) even when nothing differs: the same name with the same definition is no change.
+      if (add.name !== drop.name) renames.push({ table: drop.table, database: drop.name, drizzle: add.name });
       explained.add(drop.statement).add(add.statement);
     }
 

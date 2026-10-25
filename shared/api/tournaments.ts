@@ -54,6 +54,9 @@ const configFields = {
   rebuyAmount: optionalMoneySchema,
   addonAmount: optionalMoneySchema,
   maxRebuys: nullableIntegerSchema(0, 1000),
+  /** House rules (TDN3-HOUSE-RULES): add-ons per player (null: no limit), and re-buys OR add-ons, not both. */
+  maxAddons: nullableIntegerSchema(0, 1000),
+  rebuyOrAddon: z.boolean().nullable().optional(),
   rebuyPeriodMinutes: nullableIntegerSchema(0, 24 * 60),
   rakeType: rakeTypeSchema,
   rakeAmount: optionalMoneySchema,
@@ -89,7 +92,8 @@ export const MAX_UPCOMING_TOURNAMENTS_PER_CLUB = 100;
  * (400 POINTS_SYSTEM_NOT_IN_SEASON). New tournaments start as a draft ("scheduled") or open
  * ("registration"). The AP rates are merged over "none" and checked by mergeRakeRates
  * (shared/domain/rake-rates), exactly as every later change is: 400 PERCENT_OVER_100, or
- * AMOUNT_REQUIRED for a percentage or fixed rate with no amount; a rate of "none" stores 0.00. Money
+ * AMOUNT_REQUIRED for a percentage or fixed rate with no amount, or AMOUNT_OVER_PRICE for a fixed rate
+ * above the price of its entry (details: { field }); a rate of "none" stores 0.00. Money
  * set by the AP endpoints and finalize is never accepted here. A club has at most
  * MAX_UPCOMING_TOURNAMENTS_PER_CLUB upcoming tournaments (409 TOURNAMENT_LIMIT_REACHED), and an
  * account or visitor creates only so many per hour (429).
@@ -113,9 +117,11 @@ export type CreateTournamentInput = z.infer<typeof createTournamentSchema>;
  * - manualPrizePool: routed through the prize-pool adjustment service (mode manual_pool, or
  *   calculated for null/blank), so it clears rakeOverride and is logged (spec D13).
  * - AP rates (rakeType/rakeAmount and the re-buy, add-on and high-hand pairs): merged over the stored
- *   rates and checked exactly as PUT …/prize-pool/rates does (400 PERCENT_OVER_100, AMOUNT_REQUIRED),
+ *   rates and checked exactly as PUT …/prize-pool/rates does (400 PERCENT_OVER_100, AMOUNT_REQUIRED,
+ *   AMOUNT_OVER_PRICE: a new buy-in, re-buy or add-on price below its fixed rate is refused too),
  *   logged and audited the same way; a change to the buy-in, re-buy or add-on rate clears the manual
- *   AP total (the high-hand rake does not: the high hand is never part of it).
+ *   AP total unless keepRakeOverride (the high-hand rake never does: the high hand is never part of it).
+ * - status "cancelled" also pauses a running clock and ends the TV's clock key.
  * - buy-in, re-buy or add-on amounts may not drop the gross below a manual AP total (400 AP_EXCEEDS_GROSS).
  * - the high-hand settings (enabled, fee, rake, number of prizes) may not leave the awards already
  *   made not fitting the pot (409 HIGH_HAND_OVER_POOL / HIGH_HAND_AWARDED: take an award back first).
@@ -133,6 +139,8 @@ export const updateTournamentSchema = z
      * answered only once nothing else refuses the change).
      */
     repriceEntries: z.boolean(),
+    /** Keep the manual AP total (e.g. a low-turnout fix) when an AP rate changes, as PUT …/prize-pool/rates keepOverride. */
+    keepRakeOverride: z.boolean(),
     manualPrizePool: z.preprocess(
       (value) => (typeof value === "string" && value.trim() === "" ? null : value),
       moneySchema.nullable(),

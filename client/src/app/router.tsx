@@ -14,6 +14,7 @@ import { PageSpinner } from "@/components/shared/page-spinner";
 import { useAuth } from "@/contexts/auth-context";
 import { RouteErrorBoundary } from "./error-boundary";
 import { AuthLayout } from "./layouts/auth-layout";
+import { DisplayLayout } from "./layouts/display-layout";
 import { PublicLayout } from "./layouts/public-layout";
 import { lazyPage, type Preloadable } from "./lazy-page";
 import { paths, routes } from "./routes";
@@ -35,6 +36,11 @@ const PublicTournament = lazyPage(() => import("@/features/public-tournament/pag
 const PublicRegister = lazyPage(() => import("@/features/public-tournament/pages/public-register"));
 const TournamentQr = lazyPage(() => import("@/features/public-tournament/pages/tournament-qr"));
 const PlayerActions = lazyPage(() => import("@/features/public-tournament/pages/player-actions"));
+const PublicSeats = lazyPage(() => import("@/features/seating/pages/public-seats"));
+const PublicSeason = lazyPage(() => import("@/features/public-season/pages/public-season"));
+
+// The venue's TV
+const ClockDisplay = lazyPage(() => import("@/features/clock/pages/clock-display"));
 
 // Staff
 const Dashboard = lazyPage(() => import("@/features/dashboard/pages/dashboard"));
@@ -129,6 +135,11 @@ export function AppRouter() {
               <PublicRegister />
             </PublicLayout>
           </Route>
+          <Route path={paths.publicSeats}>
+            <PublicLayout>
+              <PublicSeats />
+            </PublicLayout>
+          </Route>
           <Route path={paths.publicTournament}>
             <PublicLayout>
               <PublicTournament />
@@ -148,6 +159,16 @@ export function AppRouter() {
             <PublicLayout>
               <PlayerActions />
             </PublicLayout>
+          </Route>
+          <Route path={paths.publicSeason}>
+            <PublicLayout>
+              <PublicSeason />
+            </PublicLayout>
+          </Route>
+          <Route path={paths.clockDisplay}>
+            <DisplayLayout>
+              <ClockDisplay />
+            </DisplayLayout>
           </Route>
 
           <Route path={paths.dashboard}>

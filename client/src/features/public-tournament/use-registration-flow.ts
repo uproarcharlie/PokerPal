@@ -35,8 +35,9 @@ export function useRegistrationFlow(tournamentId: string) {
   const [signedUp, setSignedUp] = useState<SignedUp | null>(null);
   const [enteringHighHands, setEnteringHighHands] = useState(false);
   const [photoUploading, setPhotoUploading] = useState(false);
-  // Whether the last sign-up refusal was put on a field (a phone number already taken), not said above the form.
-  const [refusedOnField, setRefusedOnField] = useState(false);
+  // The last sign-up refusal said above the form; one put on a field (a phone number already taken) is
+  // not. Set in the same step as the field's error, so the two never both show, even for a moment.
+  const [signUpFailure, setSignUpFailure] = useState<unknown>(null);
 
   const player = playerType === "new" ? (signedUp?.player ?? null) : existingPlayer;
 
@@ -56,7 +57,7 @@ export function useRegistrationFlow(tournamentId: string) {
       setStep(3);
       return;
     }
-    setRefusedOnField(false);
+    setSignUpFailure(null);
     try {
       // This tournament's club becomes a new player's home club, even if the sign-up stops here.
       const created = await createPlayer.mutateAsync({
@@ -81,7 +82,7 @@ export function useRegistrationFlow(tournamentId: string) {
       setSignedUp({ details: stored, player: { id: created.id, name: created.name, imageUrl: created.imageUrl }, signUpToken: created.signUpToken });
       setStep(3);
     } catch (error) {
-      setRefusedOnField(showServerFieldErrors(form.setError, error, { fields: ["name", "phone"], codes: { PHONE_TAKEN: "phone" } }));
+      if (!showServerFieldErrors(form.setError, error, { fields: ["name", "phone"], codes: { PHONE_TAKEN: "phone" } })) setSignUpFailure(error);
     }
   });
 
@@ -93,6 +94,7 @@ export function useRegistrationFlow(tournamentId: string) {
   const back = () => {
     register.reset();
     createPlayer.reset();
+    setSignUpFailure(null);
     setStep(step === 3 ? 2 : 1);
   };
 
@@ -117,10 +119,11 @@ export function useRegistrationFlow(tournamentId: string) {
     setEnteringHighHands(false);
     register.reset();
     createPlayer.reset();
+    setSignUpFailure(null);
     form.reset(EMPTY_NEW_PLAYER);
   };
 
-  const signUpError = createPlayer.error && !refusedOnField ? signUpProblem(createPlayer.error) : null;
+  const signUpError = signUpFailure === null ? null : signUpProblem(signUpFailure);
 
   return {
     step,

@@ -1,6 +1,7 @@
 /**
- * Links people type in (a club's website and social pages, image URLs). Plain code, so a page that
- * only shows a link does not load zod with shared/api/common.ts. PURE: no runtime imports.
+ * Links: the ones people type in (a club's website and social pages, image URLs), and the paths of the
+ * app's public pages that the server and the client both build. Plain code, so a page that only shows
+ * a link does not load zod with shared/api/common.ts. PURE: no runtime imports.
  */
 
 /** The longest link the app stores or renders. */
@@ -23,3 +24,25 @@ export function safeHttpUrl(value: string | null | undefined): string | null {
     return null;
   }
 }
+
+const seg = (value: string) => encodeURIComponent(value);
+
+/**
+ * The public pages' paths, for the links the server hands out (the TV's QR code, the TV clock key's
+ * link). The client's route builders make the same paths (client/src/app/routes.ts), and
+ * test/unit/public-paths.test.ts holds the two together, so a printed QR code never leads to a page
+ * the router does not serve. Ids are percent-encoded.
+ */
+export const publicPaths = {
+  tournament: (tournamentId: string) => `/tournament/${seg(tournamentId)}`,
+  seats: (tournamentId: string) => `/tournament/${seg(tournamentId)}/seats`,
+  season: (seasonId: string) => `/season/${seg(seasonId)}`,
+  clockDisplay: (tournamentId: string) => `/clock/${seg(tournamentId)}`,
+} as const;
+
+/** The fragment parameter of a TV clock link that carries the clock key (a fragment never reaches a server or its logs). */
+export const CLOCK_KEY_PARAM = "key";
+
+/** The TV clock at `tournamentId`, given the clock key that lets it run the clock: "/clock/t1#key=…". */
+export const clockKeyLink = (tournamentId: string, key: string): string =>
+  `${publicPaths.clockDisplay(tournamentId)}#${CLOCK_KEY_PARAM}=${encodeURIComponent(key)}`;

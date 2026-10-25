@@ -86,6 +86,17 @@ describe("response types", () => {
 });
 
 describe("POST /api/tournaments", () => {
+  it("refuses a fixed AP rate above the price of its entry (400 AMOUNT_OVER_PRICE, P4REV2R2-MONEY-01)", async () => {
+    const { club, owner } = await clubWithStaff();
+
+    const over = await owner.agent.post("/api/tournaments").send(newTournament(club.id, { rakeType: "fixed", rakeAmount: "60" }));
+    const fits = await owner.agent.post("/api/tournaments").send(newTournament(club.id, { rakeType: "fixed", rakeAmount: "50" }));
+
+    expect(over.status).toBe(400);
+    expect(over.body).toMatchObject({ code: "AMOUNT_OVER_PRICE", details: { field: "rakeAmount" } });
+    expect(fits.status).toBe(201);
+  });
+
   it("caps a club's upcoming tournaments, so no club can flood the home page (409 TOURNAMENT_LIMIT_REACHED, SEC-P2REV-04)", async () => {
     const { club, owner } = await clubWithStaff();
     await testDb()
@@ -793,6 +804,36 @@ describe("PUT /api/tournaments/:id", () => {
       expect(tooLow.body).toMatchObject({ code: "AP_EXCEEDS_GROSS", details: { grossCents: 8_000 } });
       expect(fine.status).toBe(200);
       expect(await tournamentRow(tournament.id)).toMatchObject({ buyInAmount: "25.00", rakeOverride: "100.00" });
+    });
+  });
+
+  describe("a fixed AP rate never takes more than its entry (P4REV2R2-MONEY-01)", () => {
+    it("refuses a fixed rate above its entry's price, and a new price below a fixed rate", async () => {
+      const { tournament, agent } = await staffedTournament({ buyInAmount: "100.00", rebuyAmount: "25.00", rebuyRakeType: "fixed", rebuyRakeAmount: "5.00" });
+
+      const overRate = await agent.put(`/api/tournaments/${tournament.id}`).send({ rebuyRakeAmount: "30" });
+      const underPrice = await agent.put(`/api/tournaments/${tournament.id}`).send({ rebuyAmount: "4" });
+      const both = await agent.put(`/api/tournaments/${tournament.id}`).send({ rebuyAmount: "40", rebuyRakeAmount: "30" });
+
+      expect(overRate.status).toBe(400);
+      expect(overRate.body).toMatchObject({ code: "AMOUNT_OVER_PRICE", details: { field: "rebuyRakeAmount" } });
+      expect(underPrice.status).toBe(400);
+      expect(underPrice.body).toEqual({
+        error: "$5 per re-buy is more than a re-buy costs ($4): the prize pool would go below zero",
+        code: "AMOUNT_OVER_PRICE",
+        details: { field: "rebuyRakeAmount" },
+      });
+      expect(both.status).toBe(200);
+      expect(await tournamentRow(tournament.id)).toMatchObject({ rebuyAmount: "40.00", rebuyRakeType: "fixed", rebuyRakeAmount: "30.00" });
+    });
+
+    it("leaves a row stored so earlier editable until its rate or price changes", async () => {
+      const { tournament, agent } = await staffedTournament({ buyInAmount: "100.00", rebuyAmount: "25.00", rebuyRakeType: "fixed", rebuyRakeAmount: "30.00" });
+
+      const renamed = await agent.put(`/api/tournaments/${tournament.id}`).send({ name: "Renamed", rebuyAmount: "25.00", rebuyRakeType: "fixed", rebuyRakeAmount: "30.00" });
+
+      expect(renamed.status).toBe(200);
+      expect(await tournamentRow(tournament.id)).toMatchObject({ name: "Renamed", rebuyRakeAmount: "30.00" });
     });
   });
 

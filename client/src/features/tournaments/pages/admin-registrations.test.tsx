@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
+import { delay, http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it } from "vitest";
 import { server } from "@test/msw/server";
 import { apiError, mockSignedIn, renderWithApp } from "@test/helpers/web";
@@ -235,5 +235,44 @@ describe("AdminRegistrationsPage", () => {
 
     await screen.findByRole("table", { name: "Registrations waiting for payment" });
     expect(screen.queryByText(/updates automatically/)).not.toBeInTheDocument();
+  });
+});
+
+describe("AdminRegistrationsPage: the early-bird bonus", () => {
+  it("gives a paid player the bonus from the desk, and shows it at once from the answer", async () => {
+    mockDesk();
+    const sent: unknown[] = [];
+    server.use(
+      http.post("/api/tournaments/t1/early-birds", async ({ request }) => {
+        sent.push(await request.json());
+        // The desk's refresh never answers: what shows is the answer's own.
+        server.use(http.get("/api/tournaments/t1/confirmed-registrations", () => delay("infinite")));
+        return HttpResponse.json({ changed: ["r3"], earlyBirds: 1 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderDesk();
+
+    const toggle = await screen.findByRole("switch", { name: "Early-bird bonus for Bob" });
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+
+    expect(sent).toEqual([{ registrationIds: ["r3"], earlyBird: true }]);
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Early-bird bonus for Bob" })).toBeChecked());
+  });
+
+  it("takes it back from a player still to pay, and says so when the server refuses", async () => {
+    mockDesk({ pending: [{ ...ann, earlyBird: true }, visitor] });
+    server.use(http.post("/api/tournaments/t1/early-birds", () => apiError(409, "TOURNAMENT_CLOSED", "This tournament is over")));
+    const user = userEvent.setup();
+    renderDesk();
+
+    const toggle = await screen.findByRole("switch", { name: "Early-bird bonus for Ann" });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+
+    expect(await screen.findByText("Could not change the early-bird bonus")).toBeInTheDocument();
+    expect(screen.getByText("This tournament is over")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Early-bird bonus for Ann" })).toBeChecked();
   });
 });

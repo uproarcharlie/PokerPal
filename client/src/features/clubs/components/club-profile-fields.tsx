@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { RakeLabelInput } from "@/features/prize-pool/components/rake-label-input";
 import { slugFromName, type ClubProfileValues } from "../club-form";
 import { AddressAutocomplete } from "./address-autocomplete";
 import { TimeZoneSelect } from "./time-zone-select";
@@ -46,7 +47,7 @@ interface ClubProfileFieldsProps {
   onUploadingChange: (uploading: boolean) => void;
 }
 
-/** A club's profile: logo, name, public URL, description, address and time zone. */
+/** A club's profile: logo, name, public URL, description, address, time zone and its name for the rake (e.g. "AP"). */
 export function ClubProfileFields({ form, slugFromNameAsTyped = false, onUploadingChange }: ClubProfileFieldsProps) {
   return (
     <>
@@ -152,6 +153,20 @@ export function ClubProfileFields({ form, slugFromNameAsTyped = false, onUploadi
               <TimeZoneSelect value={field.value} onChange={field.onChange} onBlur={field.onBlur} name={field.name} />
             </FormControl>
             <FormDescription>Dates and start times on your club's pages are shown in this time zone.</FormDescription>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+
+      <FormField
+        control={form.control}
+        name="rakeLabel"
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>Name for the rake</FormLabel>
+            <FormControl>
+              <RakeLabelInput {...field} data-testid="club-rake-label" />
+            </FormControl>
             <FormMessage />
           </FormItem>
         )}

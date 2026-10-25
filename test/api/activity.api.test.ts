@@ -174,6 +174,35 @@ describe("GET /api/tournaments/:id/activity", () => {
     expect(JSON.stringify(entries)).not.toContain(staff.owner.user.id);
   });
 
+  it("leaves a seating change's moves and undo record out of the feed, for staff too, keeping its figures (P4REV3-LOAD-02)", async () => {
+    const staff = await clubWithStaff();
+    const tournament = await createTournament({ clubId: staff.club.id, status: "in_progress" });
+    for (const name of ["Ana", "Ben", "Cat", "Dan"]) {
+      await createRegistration({ tournamentId: tournament.id, playerId: (await createPlayer({ name })).id, paymentConfirmed: true });
+    }
+    const setUp = await staff.manager.agent.post(`/api/tournaments/${tournament.id}/seating/setup`).send({ seatCount: 2 });
+    expect(setUp.status, JSON.stringify(setUp.body)).toBe(201);
+    const stored = await testDb().select().from(activityLog).where(eq(activityLog.tournamentId, tournament.id));
+    const drawn = stored.find((entry) => entry.eventType === "seating_drawn");
+    expect(Object.keys(JSON.parse(drawn?.eventData ?? "{}")).sort()).toEqual(["moves", "players", "scope", "undo"]);
+    // Rows that are not JSON objects pass through as they are.
+    await log(tournament.id, "seating_balanced", "2026-03-01T18:00:00Z", { eventData: "not json" });
+    await log(tournament.id, "seat_assigned", "2026-03-01T18:01:00Z", { eventData: '{"registrationId":"r1","from":null}' });
+
+    for (const agent of [await anon(), staff.manager.agent]) {
+      const entries = (await agent.get(`/api/tournaments/${tournament.id}/activity`)).body as FeedEntry[];
+      const data = Object.fromEntries(entries.map((entry) => [entry.eventType, entry.eventData]));
+      expect(JSON.parse(data.seating_drawn ?? "{}")).toEqual({ scope: "unseated", players: 4 });
+      expect(data.seating_balanced).toBe("not json");
+      expect(data.seat_assigned).toBe('{"registrationId":"r1","from":null}');
+      expect(JSON.stringify(entries)).not.toContain(setUp.body.seating.tables[0].id);
+    }
+    // The TD still sees every move of the last change.
+    const seating = await staff.manager.agent.get(`/api/tournaments/${tournament.id}/seating`);
+    expect(seating.body.lastChange).toMatchObject({ eventType: "seating_drawn", canUndo: true });
+    expect(seating.body.lastChange.moves).toHaveLength(4);
+  });
+
   it("sends only the allowlisted columns, so a column added to activity_log later stays private (P2REV4-CQ-03)", async () => {
     const tournament = await createTournament({ clubId: (await createClub()).id });
     await log(tournament.id, "registration", "2026-03-01T18:00:00Z");

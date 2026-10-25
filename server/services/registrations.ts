@@ -14,8 +14,9 @@ import type {
 } from "@shared/api/registrations";
 import { pickFields, PUBLIC_REGISTRATION_FIELDS } from "@shared/api/public";
 import type { ActivityEventType } from "@shared/api/tournaments";
+import { deriveClock } from "@shared/domain/clock";
 import { centsToDecimalString, centsToDollars, formatMoney, toCents } from "@shared/domain/money";
-import { maxRebuysMessage, offersHighHand, overRebuyLimit, PRIZE_POOL_LOCKED_MESSAGE } from "@shared/domain/player-actions";
+import { lateTopUpText, offersHighHand, PRIZE_POOL_LOCKED_MESSAGE, topUpRefusal, type TopUpCounts } from "@shared/domain/player-actions";
 import { registrationRemovalProblem } from "@shared/domain/standings";
 import {
   amountDueCents,
@@ -30,6 +31,7 @@ import { db, type Transaction } from "../db";
 import { viewerFor, type ClubScope } from "../http/authz";
 import { badRequest, conflict, HttpError, notFound } from "../http/errors";
 import { insertActivity } from "../repositories/activity";
+import { clockStateOf, getClock } from "../repositories/clock";
 import { deletePendingActionsForPlayer } from "../repositories/pending-actions";
 import { claimHomeClubFromFirstRegistration, getPlayer, isKnownAtClub } from "../repositories/players";
 import * as registrationsRepo from "../repositories/registrations";
@@ -37,6 +39,7 @@ import { getTournament, setTournamentColumns } from "../repositories/tournaments
 import { recordAudit } from "./audit";
 import { contactAccess, toClubPlayer, toPublicPlayer } from "./players";
 import { assertApStillWithinGross } from "./prize-pool";
+import { releaseSeatOnElimination, restoreSeatAfterReturn } from "./seating";
 import { assertHighHandAwardsFit, assertOpen, closedMessage, highHandAwardsConflict, isClosed } from "./tournament-views";
 import { requireTournament } from "./tournaments";
 
@@ -105,7 +108,22 @@ export async function lockRegistrationById(tx: Transaction, registrationId: stri
   return { tournament, registration };
 }
 
-const maxRebuysReached = (max: number) => conflict("MAX_REBUYS_REACHED", maxRebuysMessage(max));
+/** 409 MAX_REBUYS_REACHED, MAX_ADDONS_REACHED or REBUY_OR_ADDON when the house rules do not allow going from `before` to `after`. */
+function assertTopUpsAllowed(tournament: Tournament, before: TopUpCounts, after: TopUpCounts): void {
+  const refusal = topUpRefusal(tournament, before, after);
+  if (refusal) throw conflict(refusal.code, refusal.message);
+}
+
+/**
+ * "after the re-buy period, which ended at 2:15 on the clock" when `at` is past the tournament's re-buy
+ * period on its clock; null without a period, without a clock, or before its end (TDN3-HOUSE-RULES).
+ */
+async function lateTopUpOf(tx: Transaction, tournament: Tournament, at: Date): Promise<string | null> {
+  if (tournament.rebuyPeriodMinutes === null) return null;
+  const clock = await getClock(tx, tournament.id);
+  const derived = clock ? deriveClock(clockStateOf(clock), clock.levels, at.getTime()) : null;
+  return lateTopUpText(tournament.rebuyPeriodMinutes, derived?.elapsedClockMs ?? null);
+}
 
 async function logActivity(
   tx: Transaction,
@@ -123,17 +141,27 @@ async function logActivity(
   });
 }
 
+/**
+ * The re-buy and add-on entries. One sold after the re-buy period says so ("… after the re-buy period,
+ * which ended at 2:15 on the clock"): allowed, but never without a word. `at` is when it was asked for.
+ */
 async function logIncreases(
   tx: Transaction,
+  tournament: Tournament,
   registration: TournamentRegistration,
   player: Player | undefined,
   added: { rebuys: number; addons: number },
+  at = new Date(),
 ): Promise<void> {
+  if (added.rebuys <= 0 && added.addons <= 0) return;
+  const late = await lateTopUpOf(tx, tournament, at);
+  const note = late ? ` ${late}` : "";
+  const data = late ? { afterRebuyPeriod: true, rebuyPeriodMinutes: tournament.rebuyPeriodMinutes } : undefined;
   if (added.rebuys > 0) {
-    await logActivity(tx, registration, "rebuy", `${playerName(player)} made ${plural(added.rebuys, "re-buy")}`);
+    await logActivity(tx, registration, "rebuy", `${playerName(player)} made ${plural(added.rebuys, "re-buy")}${note}`, data);
   }
   if (added.addons > 0) {
-    await logActivity(tx, registration, "addon", `${playerName(player)} purchased ${plural(added.addons, "add-on")}`);
+    await logActivity(tx, registration, "addon", `${playerName(player)} purchased ${plural(added.addons, "add-on")}${note}`, data);
   }
 }
 
@@ -172,9 +200,7 @@ export async function applyCountChange(
   if (tournament.prizePoolLocked && (delta.rebuys > 0 || delta.addons > 0) && !requestedBeforeLock(tournament, requestedAt)) {
     throw conflict("PRIZE_POOL_LOCKED", PRIZE_POOL_LOCKED_MESSAGE);
   }
-  if (delta.rebuys > 0 && overRebuyLimit(tournament, next.rebuys)) {
-    throw maxRebuysReached(tournament.maxRebuys ?? 0);
-  }
+  assertTopUpsAllowed(tournament, { rebuys: registration.rebuys ?? 0, addons: registration.addons ?? 0 }, next);
   if (next.rebuys < 0 || next.addons < 0 || next.knockouts < 0) {
     throw conflict("COUNT_BELOW_ZERO", "A count cannot go below zero");
   }
@@ -194,8 +220,10 @@ export async function applyCountChange(
     await assertApStillWithinGross(tx, tournament, await registrationsRepo.registrationsOf(tx, tournament.id));
   }
   const player = await getPlayer(tx, registration.playerId);
-  await logIncreases(tx, updated, player, { rebuys: Math.max(delta.rebuys, 0), addons: Math.max(delta.addons, 0) });
+  const askedAt = requestedAt instanceof Date && requestedAt.getTime() < Date.now() ? requestedAt : new Date();
+  await logIncreases(tx, tournament, updated, player, { rebuys: Math.max(delta.rebuys, 0), addons: Math.max(delta.addons, 0) }, askedAt);
   if (reentry) await logActivity(tx, updated, "reentry", `${playerName(player)} is back in with a re-buy`);
+  if (reentry) await restoreSeatAfterReturn(tx, tournament.id, registration.id);
   return updated;
 }
 
@@ -272,6 +300,7 @@ export async function eliminate(
     eliminatedBy,
   });
   if (!eliminated) throw notFound("Registration not found");
+  await releaseSeatOnElimination(tx, registration.id);
   const eliminator = eliminatorRegistration
     ? ((await registrationsRepo.addToCounts(tx, eliminatorRegistration.id, { knockouts: 1 })) ?? null)
     : null;
@@ -340,6 +369,7 @@ async function restore(
   if (!restored) throw notFound("Registration not found");
   const player = await getPlayer(tx, registration.playerId);
   await logActivity(tx, restored, "player_restored", `${playerName(player)} was restored to active`);
+  await restoreSeatAfterReturn(tx, tournament.id, registration.id);
   return restored;
 }
 
@@ -376,9 +406,7 @@ export async function registerPlayer(tournamentId: string, input: StaffRegistrat
     if (input.enteringHighHands && !offersHighHand(tournament)) {
       throw badRequest("High hands entry is not available for this tournament", "HIGH_HAND_NOT_AVAILABLE");
     }
-    if (input.rebuys && overRebuyLimit(tournament, input.rebuys)) {
-      throw maxRebuysReached(tournament.maxRebuys ?? 0);
-    }
+    assertTopUpsAllowed(tournament, { rebuys: 0, addons: 0 }, { rebuys: input.rebuys ?? 0, addons: input.addons ?? 0 });
 
     const player = await getPlayer(tx, input.playerId);
     const reachable =
@@ -573,9 +601,8 @@ export async function updateRegistration(req: Request, registrationId: string, i
     if (tournament.prizePoolLocked && (added.buyIns > 0 || added.rebuys > 0 || added.addons > 0 || joinsHighHand)) {
       throw conflict("PRIZE_POOL_LOCKED", "Prize pool is locked. No rebuys, addons, or high hand entries allowed.");
     }
-    if (added.rebuys > 0 && overRebuyLimit(tournament, input.rebuys ?? 0)) {
-      throw maxRebuysReached(tournament.maxRebuys ?? 0);
-    }
+    const counts = { rebuys: current.rebuys ?? 0, addons: current.addons ?? 0 };
+    assertTopUpsAllowed(tournament, counts, { rebuys: input.rebuys ?? counts.rebuys, addons: input.addons ?? counts.addons });
     if (joinsHighHand && !offersHighHand(tournament)) {
       throw badRequest("High hands entry is not available for this tournament", "HIGH_HAND_NOT_AVAILABLE");
     }
@@ -615,7 +642,7 @@ export async function updateRegistration(req: Request, registrationId: string, i
     if (lowered) await assertApStillWithinGross(tx, tournament, await registrationsRepo.registrationsOf(tx, tournament.id));
 
     const player = await getPlayer(tx, current.playerId);
-    await logIncreases(tx, updated, player, added);
+    await logIncreases(tx, tournament, updated, player, added);
     if (changed.includes("highHandWinner") && input.highHandWinner === true) {
       await logHighHand(tx, updated, player, highHand);
     }

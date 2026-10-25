@@ -102,7 +102,10 @@ export const AUDIT_ACTIONS = [
   "registration.remove",
   "pending_action.dismiss",
   "high_hand.split", // target = tournament
+  "clock.key_issued", // the venue TV's clock key (target = tournament)
+  "clock.key_revoked",
   "seed_club_owner", // boot seed (server/db/seeds.ts), actor NULL
+  "seed_club_rake_label", // boot seed, actor NULL: Central Stars' rake named "AP"
   "seed_player_home_clubs", // boot seed, actor NULL
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
@@ -128,6 +131,8 @@ export type AuditData = {
   /** `via: "profile"` for the user's own edit. */
   "user.update": FieldChanges & { via?: "profile" };
   "impersonation.start": null;
+  "clock.key_issued": null;
+  "clock.key_revoked": null;
   "impersonation.stop": { startedAt: string | null; endedBy: "stop" | "sign-out" | "sign-in"; restored: boolean };
   /** `inviteId` when the new owner accepted an owner invitation. */
   "club.owner_set": { previousOwnerId: string | null; ownerId: string | null; inviteId?: string };
@@ -179,6 +184,7 @@ export type AuditData = {
     highHandPayouts: { before: number; after: number };
   };
   "seed_club_owner": { previousOwnerId: null; ownerId: string; email: string };
+  "seed_club_rake_label": { previousRakeLabel: null; rakeLabel: string };
   /** How many players were given a home club. */
   "seed_player_home_clubs": { recorded: number };
 };

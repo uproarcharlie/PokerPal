@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   knockoutTargetsFor,
+  lateTopUpText,
+  maxAddonsMessage,
   maxRebuysMessage,
   offersAddons,
   offersHighHand,
   offersRebuys,
   requestersFor,
   requestRefusal,
+  topUpRefusal,
 } from "./player-actions";
 
 const ann = { playerId: "ann", isEliminated: false };
@@ -78,6 +81,65 @@ describe("requestRefusal", () => {
     });
     expect(requestRefusal({ ...open, maxRebuys: null }, { isEliminated: false, rebuys: 50 }, "rebuy")).toBeNull();
     expect(maxRebuysMessage(1)).toBe("This tournament allows at most 1 re-buy per player");
+  });
+
+  it("refuses a second add-on, and a re-buy after an add-on, at a one-re-buy-or-one-add-on tournament (TDN3-HOUSE-RULES)", () => {
+    const oneLifeLine = { ...open, maxRebuys: 1, maxAddons: 1, rebuyOrAddon: true };
+    expect(requestRefusal(oneLifeLine, { isEliminated: false, rebuys: 0, addons: 0 }, "addon")).toBeNull();
+    expect(requestRefusal(oneLifeLine, { isEliminated: false, rebuys: 0, addons: 1 }, "addon")).toEqual({
+      code: "MAX_ADDONS_REACHED",
+      message: "This tournament allows at most 1 add-on per player",
+    });
+    expect(requestRefusal(oneLifeLine, { isEliminated: true, rebuys: 0, addons: 1 }, "rebuy")).toEqual({
+      code: "REBUY_OR_ADDON",
+      message: "Already took an add-on: this tournament allows one re-buy OR one add-on per player",
+    });
+    expect(requestRefusal(oneLifeLine, { isEliminated: false, rebuys: 1, addons: 0 }, "addon")?.code).toBe("REBUY_OR_ADDON");
+  });
+});
+
+describe("topUpRefusal (TDN3-HOUSE-RULES)", () => {
+  const oneLifeLine = { maxRebuys: 1, maxAddons: 1, rebuyOrAddon: true };
+  const none = { rebuys: 0, addons: 0 };
+
+  it("allows either top-up once, and says which one the player already took", () => {
+    expect(topUpRefusal(oneLifeLine, none, { rebuys: 1, addons: 0 })).toBeNull();
+    expect(topUpRefusal(oneLifeLine, none, { rebuys: 0, addons: 1 })).toBeNull();
+    expect(topUpRefusal(oneLifeLine, { rebuys: 1, addons: 0 }, { rebuys: 1, addons: 1 })).toEqual({
+      code: "REBUY_OR_ADDON",
+      message: "Already took a re-buy: this tournament allows one re-buy OR one add-on per player",
+    });
+    expect(topUpRefusal(oneLifeLine, none, { rebuys: 1, addons: 1 })).toEqual({
+      code: "REBUY_OR_ADDON",
+      message: "This tournament allows one re-buy OR one add-on per player",
+    });
+    expect(topUpRefusal({ ...oneLifeLine, maxRebuys: 2 }, { rebuys: 0, addons: 1 }, { rebuys: 1, addons: 1 })?.message).toBe(
+      "Already took an add-on: this tournament allows re-buys or add-ons per player, not both",
+    );
+  });
+
+  it("counts against each limit, and never refuses a correction down", () => {
+    expect(topUpRefusal(oneLifeLine, none, { rebuys: 2, addons: 0 })).toMatchObject({ code: "MAX_REBUYS_REACHED" });
+    expect(topUpRefusal(oneLifeLine, { rebuys: 0, addons: 1 }, { rebuys: 0, addons: 2 })).toEqual({ code: "MAX_ADDONS_REACHED", message: maxAddonsMessage(1) });
+    expect(topUpRefusal(oneLifeLine, { rebuys: 1, addons: 1 }, { rebuys: 0, addons: 1 })).toBeNull();
+    expect(topUpRefusal(oneLifeLine, { rebuys: 3, addons: 2 }, { rebuys: 3, addons: 2 })).toBeNull();
+    expect(maxAddonsMessage(2)).toBe("This tournament allows at most 2 add-ons per player");
+  });
+
+  it("changes nothing for a tournament without the rules", () => {
+    expect(topUpRefusal({}, { rebuys: 4, addons: 3 }, { rebuys: 5, addons: 4 })).toBeNull();
+    expect(topUpRefusal({ maxRebuys: null, maxAddons: null, rebuyOrAddon: null }, none, { rebuys: 9, addons: 9 })).toBeNull();
+    expect(topUpRefusal({ rebuyOrAddon: false }, none, { rebuys: 1, addons: 1 })).toBeNull();
+  });
+});
+
+describe("lateTopUpText (TDN3-HOUSE-RULES)", () => {
+  it("names the end of the re-buy period once the clock has passed it", () => {
+    expect(lateTopUpText(135, 135 * 60_000)).toBe("after the re-buy period, which ended at 2:15 on the clock");
+    expect(lateTopUpText(45, 46 * 60_000)).toBe("after the re-buy period, which ended at 0:45 on the clock");
+    expect(lateTopUpText(135, 135 * 60_000 - 1)).toBeNull();
+    expect(lateTopUpText(null, 999 * 60_000)).toBeNull();
+    expect(lateTopUpText(135, null)).toBeNull();
   });
 });
 

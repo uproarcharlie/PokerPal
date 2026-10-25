@@ -1,7 +1,9 @@
+import { useId } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { Check, CheckCircle2, Clock, Trophy } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { EmptyState, LoadingRows, QueryState } from "@/components/shared/query-state";
 import { ResponsiveTable, type ResponsiveColumn } from "@/components/shared/responsive-table";
 import { formatMoney, formatTime, plural } from "@/lib/format";
@@ -23,6 +25,42 @@ function HighHands({ entering }: { entering: boolean | null }) {
     <Badge variant="outline">No</Badge>
   );
 }
+
+/** The early-bird bonus (chips only, never money), given or taken back one player at a time from either list. */
+export interface EarlyBirdToggle {
+  /** The registrations whose change is being saved: their switch waits for the server. */
+  busy: ReadonlySet<string>;
+  onChange: (registrationId: string, earlyBird: boolean) => void;
+}
+
+function EarlyBirdSwitch({ registration, toggle }: { registration: StaffRegistrationDto; toggle: EarlyBirdToggle }) {
+  const id = useId();
+  const busy = toggle.busy.has(registration.id);
+  return (
+    // The label makes the whole 40 px row the target; the switch itself is smaller.
+    <label htmlFor={id} className="inline-flex min-h-10 cursor-pointer items-center gap-2">
+      <Switch
+        id={id}
+        checked={registration.earlyBird}
+        aria-disabled={busy || undefined}
+        onCheckedChange={(checked) => {
+          if (!busy) toggle.onChange(registration.id, checked);
+        }}
+        data-testid={`early-bird-${registration.id}`}
+      />
+      <span className="sr-only">Early-bird bonus for {playerName(registration)}</span>
+      <span aria-hidden="true" className="text-sm text-muted-foreground">
+        {registration.earlyBird ? "Yes" : "No"}
+      </span>
+    </label>
+  );
+}
+
+const earlyBirdColumn = <T extends StaffRegistrationDto>(toggle: EarlyBirdToggle): ResponsiveColumn<T> => ({
+  id: "early-bird",
+  header: "Early bird",
+  cell: (registration) => <EarlyBirdSwitch registration={registration} toggle={toggle} />,
+});
 
 /** The server's amounts (dollars), added up to the cent. */
 const totalCents = (amounts: readonly number[]) => amounts.reduce((sum, amount) => sum + toCents(amount), 0);
@@ -48,10 +86,11 @@ interface PendingPaymentsProps {
   /** The registration being confirmed: only its own button waits for the server. */
   confirmingIds: ReadonlySet<string>;
   onConfirm: (registrationId: string) => void;
+  earlyBirds: EarlyBirdToggle;
 }
 
 /** Sign-ups waiting at the desk: what each owes (every buy-in, re-buy, add-on and the high hand), and Confirm. */
-export function PendingPayments({ query, timeZone, confirmingIds, onConfirm }: PendingPaymentsProps) {
+export function PendingPayments({ query, timeZone, confirmingIds, onConfirm, earlyBirds }: PendingPaymentsProps) {
   const columns: ResponsiveColumn<PendingRegistrationDto>[] = [
     {
       id: "player",
@@ -69,6 +108,7 @@ export function PendingPayments({ query, timeZone, confirmingIds, onConfirm }: P
       cell: (registration) => formatMoney(toCents(registration.amountOwed), { forceCents: true }),
     },
     { id: "time", header: "Time", className: "text-sm text-muted-foreground", cell: (registration) => formatTime(registration.registrationTime, timeZone) },
+    earlyBirdColumn(earlyBirds),
     {
       id: "action",
       header: "Action",
@@ -112,8 +152,14 @@ export function PendingPayments({ query, timeZone, confirmingIds, onConfirm }: P
   );
 }
 
+interface ConfirmedPaymentsProps {
+  query: UseQueryResult<ConfirmedRegistrationDto[]>;
+  timeZone: string;
+  earlyBirds: EarlyBirdToggle;
+}
+
 /** Players who have paid: what each paid, by the same formula as what they owed. */
-export function ConfirmedPayments({ query, timeZone }: { query: UseQueryResult<ConfirmedRegistrationDto[]>; timeZone: string }) {
+export function ConfirmedPayments({ query, timeZone, earlyBirds }: ConfirmedPaymentsProps) {
   const columns: ResponsiveColumn<ConfirmedRegistrationDto>[] = [
     {
       id: "player",
@@ -136,6 +182,7 @@ export function ConfirmedPayments({ query, timeZone }: { query: UseQueryResult<C
       className: "text-sm text-muted-foreground",
       cell: (registration) => formatTime(registration.registrationTime, timeZone),
     },
+    earlyBirdColumn(earlyBirds),
     {
       id: "status",
       header: "Status",

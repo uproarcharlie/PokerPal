@@ -21,6 +21,12 @@ export const paths = {
   publicClub: "/club/:slug",
   tournamentQr: "/qr/:tournamentId",
   playerActions: "/tournaments/:tournamentId/actions",
+  /** Phase 4: the TV clock (full screen; the club's staff control it from the keyboard). */
+  clockDisplay: "/clock/:tournamentId",
+  /** Phase 4: "find your seat". */
+  publicSeats: "/tournament/:id/seats",
+  /** Phase 4: a season's leaderboard, where the TV clock's QR code leads. */
+  publicSeason: "/season/:seasonId",
 
   // Staff (signed in)
   dashboard: "/dashboard",
@@ -52,6 +58,10 @@ export const STAFF_HOME = { href: paths.dashboard, label: "Dashboard" } as const
 /** A sign-in or sign-up page that returns to `next` (a path on this site) afterwards. */
 const withNext = (path: string, next?: string) => withQuery(path, "next", next);
 
+/** The TV clock's `?screen=` parameter, and its value for the venue's own screen (a TV, or a tablet at the bar). */
+export const SCREEN_PARAM = "screen";
+export const VENUE_SCREEN = "tv";
+
 export const routes = {
   login: (next?: string) => withNext(paths.login, next),
   register: (next?: string) => withNext(paths.register, next),
@@ -65,6 +75,13 @@ export const routes = {
   publicClub: (slug: string) => `/club/${seg(slug)}`,
   tournamentQr: (tournamentId: string) => `/qr/${seg(tournamentId)}`,
   playerActions: (tournamentId: string) => `/tournaments/${seg(tournamentId)}/actions`,
+  /**
+   * The TV clock. The staff's links (`screen` "tv") open it as the venue's screen, polled every few
+   * seconds even on a tablet; a player's link leaves the screen to judge (TDN2-TABLET-AS-PHONE).
+   */
+  clockDisplay: (tournamentId: string, screen?: typeof VENUE_SCREEN) => withQuery(`/clock/${seg(tournamentId)}`, SCREEN_PARAM, screen),
+  publicSeats: (id: string) => `/tournament/${seg(id)}/seats`,
+  publicSeason: (seasonId: string) => `/season/${seg(seasonId)}`,
 
   dashboard: () => paths.dashboard,
   staffHome: () => STAFF_HOME.href,
@@ -73,7 +90,8 @@ export const routes = {
   clubDetails: (id: string) => `/clubs/${seg(id)}`,
   /** The tournaments list; given a club the viewer runs, it opens Create Tournament with that club chosen. */
   tournaments: (createForClubId?: string) => withQuery(paths.tournaments, "create", createForClubId),
-  tournamentAdmin: (id: string) => `/admin/tournaments/${seg(id)}`,
+  /** The TD's tournament page, on the desk tab `tab` (read from `?tab=`; none for the first). */
+  tournamentAdmin: (id: string, tab?: string) => withQuery(`/admin/tournaments/${seg(id)}`, "tab", tab),
   adminRegistrations: (tournamentId: string) => `/admin/registrations/${seg(tournamentId)}`,
   adminActions: (tournamentId: string) => `/admin/actions/${seg(tournamentId)}`,
   /** The seasons list; given a club the viewer runs, it opens Create New Season with that club chosen. */

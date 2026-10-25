@@ -1,4 +1,4 @@
-import { and, desc, eq, notInArray, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, notInArray, sql, type SQL } from "drizzle-orm";
 import { activityLog, players, type ActivityLog, type InsertActivityLog } from "@shared/schema";
 import { pickFields, PUBLIC_ACTIVITY_FIELDS, type PublicPlayer } from "@shared/api/public";
 import type { ActivityEventType } from "@shared/api/tournaments";
@@ -33,6 +33,23 @@ export async function listActivity(
     .where(and(...conditions))
     .orderBy(desc(activityLog.timestamp), desc(activityLog.id))
     .limit(limit);
+}
+
+/** An entry with its time (every entry the app writes has one). */
+export type TimedActivity = ActivityLog & { timestamp: string };
+
+/**
+ * The tournament's newest entry of one of `eventTypes`. Entries are in the order their writes took
+ * the tournament's lock (insertActivity's clock_timestamp), so this is the last such change.
+ */
+export async function latestActivityOf(ex: Executor, tournamentId: string, eventTypes: readonly ActivityEventType[]): Promise<TimedActivity | undefined> {
+  const [entry] = await ex
+    .select()
+    .from(activityLog)
+    .where(and(eq(activityLog.tournamentId, tournamentId), inArray(activityLog.eventType, [...eventTypes]), isNotNull(activityLog.timestamp)))
+    .orderBy(desc(activityLog.timestamp), desc(activityLog.id))
+    .limit(1);
+  return entry?.timestamp ? { ...entry, timestamp: entry.timestamp } : undefined;
 }
 
 /** A new activity entry: an `InsertActivityLog` whose type is one of ACTIVITY_EVENT_TYPES. */

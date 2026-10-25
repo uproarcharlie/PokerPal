@@ -34,7 +34,8 @@ const PLAYERS: readonly { name: string; photo: readonly [string, string] | null 
 
 const SPADE = "M50 8C30 35 8 45 8 62c0 14 12 22 24 22 8 0 14-4 16-8-1 8-4 14-10 18h24c-6-4-9-10-10-18 2 4 8 8 16 8 12 0 24-8 24-22 0-17-22-27-42-54z";
 
-function logoSvg(): string {
+/** The demo club's logo: a gold spade in a blue ring on navy (the Central Stars look). */
+export function logoSvg(): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 100 100">
     <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f2c14e"/><stop offset="1" stop-color="#b8862b"/></linearGradient></defs>
     <rect width="100" height="100" rx="22" fill="#0b1430"/>
@@ -43,7 +44,8 @@ function logoSvg(): string {
   </svg>`;
 }
 
-function photoSvg([background, figure]: readonly [string, string]): string {
+/** A player's picture: a figure in `figure`'s colour on `background`. */
+export function photoSvg([background, figure]: readonly [string, string]): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 100 100">
     <rect width="100" height="100" fill="${background}"/>
     <circle cx="50" cy="40" r="19" fill="${figure}"/>
@@ -51,7 +53,8 @@ function photoSvg([background, figure]: readonly [string, string]): string {
   </svg>`;
 }
 
-async function uploadImage(request: APIRequestContext, kind: ImageKind, svg: string): Promise<string> {
+/** Uploads `svg` (as a PNG) as `request`'s user, as the image kind asks; its stored URL. */
+export async function uploadImage(request: APIRequestContext, kind: ImageKind, svg: string): Promise<string> {
   const buffer = await sharp(Buffer.from(svg)).png().toBuffer();
   const response = await request.post(`/api/images/${kind}`, {
     multipart: { image: { name: `${kind}.png`, mimeType: "image/png", buffer } },

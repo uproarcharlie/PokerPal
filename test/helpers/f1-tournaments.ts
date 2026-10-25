@@ -7,11 +7,15 @@ import { onTestFinished, vi } from "vitest";
 import type { FinalizePreviewDto, FinalizeResultDto, FinalizeRowDto } from "@shared/api/finalize";
 import type { PrizePoolDto } from "@shared/api/prize-pool";
 import type { ClubDto, PublicRegistration } from "@shared/api/public";
-import type { TournamentDetailDto, TournamentListItemDto } from "@shared/api/tournaments";
+import type { TournamentDetailDto, TournamentListItemDto, TournamentStatus } from "@shared/api/tournaments";
 import { centsToDecimalString } from "@shared/domain/money";
 import { computePrizePool } from "@shared/domain/prize-pool";
 import { server } from "../msw/server";
+import { prizePoolDto } from "./ap-dto";
+import { liveDisplayDto } from "./clock-dto";
 import * as base from "./dto";
+import { readSentRequest } from "./requests";
+import { seatingDto } from "./seating-dto";
 
 /**
  * Lays the screens out as on a screen `width` px wide for the rest of the test: a media query matches
@@ -169,10 +173,25 @@ export function recordBodies(): { bodies: unknown[]; record: (request: Request) 
   return {
     bodies,
     record: async (request) => {
-      const text = await request.text();
-      const body: unknown = text ? JSON.parse(text) : undefined;
+      const { body } = await readSentRequest(request);
       bodies.push(body);
       return body;
     },
   };
+}
+
+/**
+ * The Phase 4 reads the TD's page makes beside its own, before any of it is set up: the live display
+ * with no clock (the header's chip and the Clock tab), the AP panel's prize pool, no seating (the
+ * Standings' Seat column) and no earlier structures to copy.
+ */
+export function mockDeskLiveReads(tournament: TournamentDetailDto, registrations: readonly PublicRegistration[]): void {
+  server.use(
+    http.get(`/api/public/tournaments/${tournament.id}/display`, () =>
+      HttpResponse.json(liveDisplayDto({ clock: null, tournament: { id: tournament.id, name: tournament.name, status: tournament.status as TournamentStatus } })),
+    ),
+    http.get(`/api/tournaments/${tournament.id}/prize-pool`, () => HttpResponse.json(prizePoolDto(tournament, registrations))),
+    http.get(`/api/tournaments/${tournament.id}/seating`, () => HttpResponse.json(seatingDto({ tournamentId: tournament.id }))),
+    http.get(`/api/clubs/${tournament.clubId}/blind-structures`, () => HttpResponse.json([])),
+  );
 }

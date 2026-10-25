@@ -15,10 +15,18 @@ describe("qk", () => {
       qk.tournaments.confirmedRegistrations("t1"),
       qk.tournaments.pendingActions("t1"),
       qk.tournaments.playerSearch("t1", "Bo"),
+      qk.tournaments.display("t1"),
+      qk.tournaments.seating("t1"),
+      qk.tournaments.publicSeating("t1"),
     ]) {
       expect(covers(detail, key)).toBe(true);
     }
     expect(covers(detail, qk.tournaments.registrations("t2"))).toBe(false);
+  });
+
+  it("puts a season's public leaderboard and a club's blind structures under their detail keys", () => {
+    expect(covers(qk.seasons.detail("s1"), qk.seasons.publicLeaderboard("s1"))).toBe(true);
+    expect(covers(qk.clubs.detail("c1"), qk.clubs.blindStructures("c1"))).toBe(true);
   });
 
   it("keeps the finalize preview out of the tournament's keys, so refreshing a finalized tournament never re-previews it", () => {

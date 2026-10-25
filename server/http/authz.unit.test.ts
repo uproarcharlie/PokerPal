@@ -218,6 +218,42 @@ describe("requireClubManager", () => {
   });
 });
 
+describe("requireClubManagerOr", () => {
+  beforeEach(() => vi.spyOn(console, "warn").mockImplementation(() => {}));
+
+  /** A stand-in credential: the x-key header "good" for tournament t-1. */
+  const key = {
+    name: "test key",
+    accepts: async (req: express.Request) => req.get("x-key") === "good" && req.params.id === "t-1",
+  };
+
+  it("lets a request carrying the credential through without a session", async () => {
+    const app = appWith("/tournaments/:id", authz.requireClubManagerOr(key, authz.clubFrom.tournament()));
+
+    const response = await request(app).post("/tournaments/t-1").set("x-key", "good");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ user: null, impersonatorId: null, clubId: null });
+  });
+
+  it("is requireClubManager for everyone else: 401 before looking, 404, 403, and staff through", async () => {
+    const app = appWith("/tournaments/:id", authz.requireClubManagerOr(key, authz.clubFrom.tournament()));
+
+    expect((await request(app).post("/tournaments/t-1").set("x-key", "bad")).status).toBe(401);
+    expect((await request(app).post("/tournaments/nope").set("x-key", "good")).status).toBe(401);
+    expect(calls.clubIdOf).toBe(0);
+    expect((await request(app).post("/tournaments/nope").set(as("owner"))).status).toBe(404);
+    expect((await request(app).post("/tournaments/t-1").set(as("stranger"))).status).toBe(403);
+    const manager = await request(app).post("/tournaments/t-1").set(as("manager")).set("x-key", "bad");
+    expect(manager.status).toBe(200);
+    expect(manager.body.clubId).toBe("club-1");
+  });
+
+  it("is named for the route inventory with its credential", () => {
+    expect(guardOf(authz.requireClubManagerOr(key, authz.clubFrom.tournament()))).toEqual({ kind: "club-manager", detail: "Tournament or test key" });
+  });
+});
+
 describe("requireClubOwner", () => {
   beforeEach(() => vi.spyOn(console, "warn").mockImplementation(() => {}));
 

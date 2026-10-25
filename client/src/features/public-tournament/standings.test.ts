@@ -21,6 +21,7 @@ const entry = (id: string, extra: Partial<PublicRegistration> = {}): PublicRegis
   enteringHighHands: false,
   highHandWinner: false,
   highHandAmount: null,
+  earlyBird: false,
   player: { id: `p-${id}`, name: id, imageUrl: null },
   ...extra,
 });

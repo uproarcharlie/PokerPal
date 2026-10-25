@@ -32,7 +32,8 @@ export interface CreateAppOptions {
  *    counts every request per visitor except live polling;
  * 4. the session, on /api only (nothing else reads it, so asset requests never query Postgres);
  * 5. the signed-in user, then the `live` limiter, which counts live polling per signed-in user (so a
- *    room of phones on the venue's address never throttles the TD) or else per visitor;
+ *    room of phones on the venue's address never throttles the TD) or else per visitor, and the
+ *    `liveOps` limiter, which counts the TD's live writes (clock, seating) the same way;
  * 6. the JSON body parser (100 kB). There is deliberately no urlencoded parser: the client only sends
  *    JSON and multipart, and a form-encoded body is what lets another site's HTML form sign a visitor
  *    in (CC-13);
@@ -79,6 +80,7 @@ export async function createApp({ env, sessionStore, rateLimits }: CreateAppOpti
   app.use("/api", createSessionMiddleware(env, sessionStore));
   app.use("/api", loadUser);
   app.use("/api", limiters.live);
+  app.use("/api", limiters.liveOps);
   app.use(express.json());
   app.use(requestLogger);
 

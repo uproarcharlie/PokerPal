@@ -7,6 +7,7 @@
 import { asc, eq } from "drizzle-orm";
 import type { Pool } from "pg";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AUDIT_ACTIONS, type AuditData } from "@shared/api/admin";
 import { auditLog, clubManagers, clubs, playerHomeClubs, tournamentRegistrations, users } from "@shared/schema";
 import { createClub, createPlayer, createTournament, createUser } from "@test/factories";
 import { resetDb, testDb } from "@test/helpers";
@@ -19,6 +20,7 @@ import {
   CENTRAL_STARS_OWNER_EMAIL,
   runBootSeeds,
   seedCentralStarsOwner,
+  seedCentralStarsRakeLabel,
   seedPlayerHomeClubs,
   type SeedLogger,
 } from "./seeds";
@@ -197,6 +199,68 @@ describe("seedCentralStarsOwner trusts only what it was written for (SEC-P2-04, 
   });
 });
 
+describe("seedCentralStarsRakeLabel", () => {
+  const labelOf = async (clubId: string) => (await testDb().select().from(clubs).where(eq(clubs.id, clubId)))[0].rakeLabel;
+  const labelAudit = () => testDb().select().from(auditLog).where(eq(auditLog.action, "seed_club_rake_label"));
+
+  it('names the Central Stars club\'s rake "AP" when it has no label, audits it, and touches no other club', async () => {
+    const centralStars = await createClub({ name: "Central Stars", slug: "central-stars", rakeLabel: null });
+    const other = await createClub({ rakeLabel: null });
+
+    const outcome = await seedCentralStarsRakeLabel(getPool());
+
+    expect(outcome).toEqual({ applied: true, detail: `club ${centralStars.id} now calls its rake "AP"` });
+    expect(await labelOf(centralStars.id)).toBe("AP");
+    expect(await labelOf(other.id)).toBeNull();
+    expect(await labelAudit()).toEqual([
+      expect.objectContaining({ actorUserId: null, targetType: "club", targetId: centralStars.id, data: { previousRakeLabel: null, rakeLabel: "AP" } }),
+    ]);
+  });
+
+  it("finds the club by name in any case and spacing when its slug differs", async () => {
+    const club = await createClub({ name: "  central STARS ", slug: "cs-poker", rakeLabel: null });
+
+    expect((await seedCentralStarsRakeLabel(getPool())).applied).toBe(true);
+    expect(await labelOf(club.id)).toBe("AP");
+  });
+
+  it("is a no-op the second time: the club already has its label", async () => {
+    const club = await createClub({ name: "Central Stars", slug: "central-stars", rakeLabel: null });
+    expect((await seedCentralStarsRakeLabel(getPool())).applied).toBe(true);
+
+    expect(await seedCentralStarsRakeLabel(getPool())).toEqual({ applied: false, reason: `club ${club.id} already calls its rake "AP"` });
+    expect(await labelAudit()).toHaveLength(1);
+  });
+
+  it("never overwrites a label the club chose", async () => {
+    const club = await createClub({ name: "Central Stars", slug: "central-stars", rakeLabel: "Admin fee" });
+
+    expect(await seedCentralStarsRakeLabel(getPool())).toEqual({ applied: false, reason: `club ${club.id} already calls its rake "Admin fee"` });
+    expect(await labelOf(club.id)).toBe("Admin fee");
+    expect(await labelAudit()).toEqual([]);
+  });
+
+  it("runs at most once: a label the owner later clears stays cleared at the next boot", async () => {
+    const club = await createClub({ name: "Central Stars", slug: "central-stars", rakeLabel: null });
+    expect((await seedCentralStarsRakeLabel(getPool())).applied).toBe(true);
+    // The owner blanks the field in club settings (PUT /api/clubs/:id stores NULL: "Rake").
+    await testDb().update(clubs).set({ rakeLabel: null }).where(eq(clubs.id, club.id));
+
+    expect(await seedCentralStarsRakeLabel(getPool())).toEqual({ applied: false, reason: expect.stringContaining("since been cleared") });
+    expect(await labelOf(club.id)).toBeNull();
+  });
+
+  it("changes nothing when no club, or more than one, is Central Stars", async () => {
+    expect(await seedCentralStarsRakeLabel(getPool())).toEqual({ applied: false, reason: "no club is Central Stars" });
+
+    const first = await createClub({ name: "Central Stars", slug: "central-stars", rakeLabel: null });
+    const second = await createClub({ name: "central stars", slug: "central-stars-2", rakeLabel: null });
+
+    expect(await seedCentralStarsRakeLabel(getPool())).toEqual({ applied: false, reason: expect.stringMatching(/^2 clubs look like Central Stars/) });
+    expect([await labelOf(first.id), await labelOf(second.id)]).toEqual([null, null]);
+  });
+});
+
 describe("seedPlayerHomeClubs (P2REV0-01)", () => {
   /** A registration written straight to the table, as builds before home clubs did (no home club recorded). */
   async function legacyRegistration(playerId: string, clubId: string, registrationTime: string) {
@@ -248,10 +312,28 @@ describe("runBootSeeds", () => {
 
     expect(logger.lines).toEqual([
       "info Central Stars owner: unchanged; no club is Central Stars",
+      "info Central Stars AP label: unchanged; no club is Central Stars",
       "info Player home clubs: unchanged; every registered player already has one",
       expect.stringMatching(/^info Central Stars owner: set; club .+ is now owned by charlie@eccuity\.com \(user .+\)$/),
+      expect.stringMatching(/^info Central Stars AP label: set; club .+ now calls its rake "AP"$/),
       "info Player home clubs: unchanged; every registered player already has one",
     ]);
+  });
+
+  it("audits only actions in the typed audit vocabulary, each with the data it is typed with (P4REV3-SEED-01)", async () => {
+    await charlieAccount();
+    const centralStars = await createClub({ name: "Central Stars", slug: "central-stars", ownerId: null });
+    const tournament = await createTournament({ clubId: centralStars.id });
+    const player = await createPlayer();
+    await testDb().insert(tournamentRegistrations).values({ tournamentId: tournament.id, playerId: player.id });
+
+    await runBootSeeds(getPool(), recordingLogger());
+
+    const rows = await testDb().select().from(auditLog).orderBy(asc(auditLog.action));
+    expect(rows.map((row) => row.action)).toEqual(["seed_club_owner", "seed_club_rake_label", "seed_player_home_clubs"]);
+    expect(rows.every((row) => (AUDIT_ACTIONS as readonly string[]).includes(row.action))).toBe(true);
+    const label: AuditData["seed_club_rake_label"] = { previousRakeLabel: null, rakeLabel: "AP" };
+    expect(rows.find((row) => row.action === "seed_club_rake_label")).toMatchObject({ actorUserId: null, targetType: "club", targetId: centralStars.id, data: label });
   });
 
   it("logs a failing seed and resolves, so the boot carries on", async () => {
@@ -261,6 +343,7 @@ describe("runBootSeeds", () => {
     await expect(runBootSeeds(unreachable, logger)).resolves.toBeUndefined();
     expect(logger.lines).toEqual([
       "error Central Stars owner: failed, nothing changed (connection refused)",
+      "error Central Stars AP label: failed, nothing changed (connection refused)",
       "error Player home clubs: failed, nothing changed (connection refused)",
     ]);
   });
@@ -273,6 +356,7 @@ describe("runBootSeeds", () => {
 
       expect(logger.lines).toEqual([
         "info Central Stars owner: unchanged; the clubs table does not exist yet (the migrations have not run)",
+        "info Central Stars AP label: unchanged; the clubs table does not exist yet (the migrations have not run)",
         "info Player home clubs: unchanged; the player_home_clubs table does not exist yet (the migrations have not run)",
       ]);
     } finally {
@@ -292,6 +376,7 @@ describe("runBootSeeds", () => {
 
       expect(warn).toHaveBeenCalledWith(expect.stringMatching(/MIGRATE_ON_BOOT=false: not applying migrations/));
       expect(await ownerOf(club.id)).toBe(charlie.id);
+      expect((await testDb().select().from(clubs).where(eq(clubs.id, club.id)))[0].rakeLabel).toBe("AP");
       expect(await testDb().select().from(playerHomeClubs).where(eq(playerHomeClubs.playerId, player.id))).toEqual([
         expect.objectContaining({ clubId: club.id }),
       ]);
@@ -310,6 +395,7 @@ describe("runBootSeeds", () => {
 
       expect(await ownerOf(club.id)).toBe(charlie.id);
       expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[seed\] Central Stars owner: set; /));
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[seed\] Central Stars AP label: set; /));
     } finally {
       log.mockRestore();
     }

@@ -4,17 +4,22 @@ import { delay, http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { server } from "@test/msw/server";
 import { apiError, mockSignedIn, renderWithApp } from "@test/helpers/web";
-import { clubDto, phoneLayout, recordBodies, registrationDto, screenWidth, tournamentDto } from "@test/helpers/f1-tournaments";
+import { clubDto, mockDeskLiveReads, phoneLayout, recordBodies, registrationDto, screenWidth, tournamentDto } from "@test/helpers/f1-tournaments";
 import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { PODIUM } from "@/components/shared/podium";
 import { qk } from "@/lib/api/query-keys";
 import { LIVE_REFRESH_MS } from "@/lib/live-refresh";
+import { pausedClock, serveDisplay } from "@test/helpers/clock-dto";
+import { seasonDto } from "@test/helpers/dto";
+import { mockSeating, recordWrite, seatingDto, seatingMutation, seatMove, seatRef } from "@test/helpers/seating-dto";
+import { SEATING_BADGE_REFRESH_MS } from "@/features/seating/staff-hooks";
 import TournamentDetailsPage from "./tournament-details";
 
 const field = [registrationDto("r1", "Ann", 2), registrationDto("r2", "Bob", 2), registrationDto("r3", "Cat", 1)];
 
 function mockDesk(tournament: Partial<TournamentDetailDto> = {}, registrations: PublicRegistration[] = field) {
+  mockDeskLiveReads(tournamentDto(tournament), registrations);
   server.use(
     http.get("/api/tournaments/t1", () => HttpResponse.json(tournamentDto(tournament))),
     http.get("/api/clubs/c1", () => HttpResponse.json(clubDto())),
@@ -35,9 +40,9 @@ function mockPut(path: string, answer: () => Response = () => HttpResponse.json(
   return sent.bodies;
 }
 
-function renderDesk() {
+function renderDesk(path = "/admin/tournaments/t1") {
   const user = userEvent.setup();
-  const view = renderWithApp(<TournamentDetailsPage />, { path: "/admin/tournaments/t1", route: "/admin/tournaments/:id" });
+  const view = renderWithApp(<TournamentDetailsPage />, { path, route: "/admin/tournaments/:id" });
   return { user, ...view };
 }
 
@@ -460,6 +465,29 @@ describe("TournamentDetailsPage: the pool", () => {
     await waitFor(() => expect(sent).toEqual([{ manualPrizePool: "300.00" }, { manualPrizePool: null }]));
   });
 
+  it("sets the pool through the AP dialog while an AP total is fixed, which says the pool replaces it (MONEY-AP-04)", async () => {
+    mockDesk({ rakeOverride: "10.00", prizePoolAdjustmentReason: "Low turnout", prizePoolAdjustedAt: "2026-10-23T08:04:00.000Z" });
+    const sent = recordBodies();
+    server.use(
+      http.put("/api/tournaments/t1/prize-pool/adjustment", async ({ request }) => {
+        await sent.record(request);
+        return HttpResponse.json({});
+      }),
+    );
+    const { user } = renderDesk();
+
+    await user.click(await screen.findByTestId("edit-prize-pool"));
+    // No box that would silently replace the fixed AP total, or save a blank that changes nothing.
+    expect(screen.queryByTestId("manual-pool-input")).not.toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "Adjust AP" });
+    expect(within(dialog).getByRole("radio", { name: "Set prize pool" })).toBeChecked();
+    expect(within(dialog).getByText("A fixed pool, e.g. a guarantee: it replaces the fixed AP total ($10).")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByTestId("edit-prize-pool")).toHaveFocus();
+    expect(sent.bodies).toEqual([]);
+  });
+
   it("draws the manual pool box as every money box is, with its $ (P3REV5-CQ-11)", async () => {
     mockDesk();
     const { user } = renderDesk();
@@ -625,11 +653,11 @@ describe("TournamentDetailsPage: the header on a laptop (lead's visual review, i
 
     await user.click(more);
     const menu = await screen.findByRole("menu");
-    for (const name of ["Registrations", "Public View", "Edit", "Delete"]) expect(within(menu).getByRole("menuitem", { name })).toBeInTheDocument();
+    for (const name of ["Registrations", "Public View", "TV clock", "Edit", "Delete"]) expect(within(menu).getByRole("menuitem", { name })).toBeInTheDocument();
   });
 
   it("shows them as buttons on a screen wide enough for one row", async () => {
-    screenWidth(1920);
+    screenWidth(2048);
     mockDesk({ status: "in_progress" });
     renderDesk();
 
@@ -762,5 +790,176 @@ describe("TournamentDetailsPage: a part priced at $0 (P3REV5-CQ-02)", () => {
     await user.click(await screen.findByRole("tab", { name: "Actions" }));
     expect(await screen.findByText("Confirm Actions")).toBeInTheDocument();
     expect(screen.queryByTestId("award-high-hand-card")).not.toBeInTheDocument();
+  });
+});
+
+describe("TournamentDetailsPage: tables, the clock and the AP (Phase 4)", () => {
+  it("puts the tables and the clock between the overview and the standings, and the AP beside the pool", async () => {
+    mockDesk({ status: "in_progress" });
+    renderDesk();
+
+    const tabs = await screen.findAllByRole("tab");
+    expect(tabs.map((tab) => tab.textContent)).toEqual(["Overview", "Tables & Seating", "Clock", "Standings", "Activity", "Actions"]);
+    expect(await screen.findByTestId("ap-panel")).toBeInTheDocument();
+    expect(await within(screen.getByTestId("ap-panel")).findByRole("heading", { name: "AP", level: 2 })).toBeInTheDocument();
+  });
+
+  it("shows the clock in the header once it is set up, and opens the Clock tab from it", async () => {
+    mockDesk({ status: "in_progress" });
+    serveDisplay({ clock: pausedClock({ levelIndex: 1, remainingMs: 9 * 60_000 }) });
+    const { user } = renderDesk();
+
+    const chip = await screen.findByTestId("clock-status-chip");
+    expect(chip).toHaveTextContent("L2 · 9:00 · 300/600");
+    await user.click(chip);
+
+    expect(screen.getByRole("tab", { name: "Clock" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("link", { name: "Open TV display" })).toHaveAttribute("href", "/clock/t1?screen=tv");
+    const resume = await screen.findByRole("button", { name: "Resume" });
+    // A mouse's click moves no focus: Space or Enter would then pause the room's clock unseen (TDN2-CHIP-FOCUS-SPACE).
+    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    expect(resume).not.toHaveFocus();
+    // From the keyboard (or a finger on a phone) the chip puts focus on Start / Pause (P4REV0-PHONE-PAUSE-FOLD).
+    chip.focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(resume).toHaveFocus());
+  });
+
+  it("keeps the open tab in the address, so a reload or a phone bringing the page back reopens it (P4REV0-TAB-RESET)", async () => {
+    mockDesk({ status: "in_progress" });
+    const first = renderDesk();
+    await first.user.click(await screen.findByRole("tab", { name: "Clock" }));
+    expect(first.location()).toBe("/admin/tournaments/t1?tab=clock");
+    await first.user.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(first.location()).toBe("/admin/tournaments/t1");
+    first.unmount();
+
+    renderDesk("/admin/tournaments/t1?tab=seating");
+    expect(await screen.findByRole("tab", { name: "Tables & Seating" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("opens the Overview for a tab the address names that the page does not have", async () => {
+    mockDesk({ status: "in_progress" });
+    renderDesk("/admin/tournaments/t1?tab=nonsense");
+    expect(await screen.findByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("says on the Tables & Seating tab, from the standings, that a bust left the tables uneven (P4REV0-BUST-FROM-SEAT)", async () => {
+    mockDesk({ status: "in_progress" });
+    const balance = [
+      { registrationId: "r1", playerName: "Ann", from: { tableId: "tb1", tableNumber: 1, tableName: "Table 1", seatNumber: 4 }, to: { tableId: "tb2", tableNumber: 2, tableName: "Table 2", seatNumber: 1 }, reason: "balance" as const },
+    ];
+    mockSeating(seatingDto({ tables: [{ id: "tb1", number: 1, seats: 9, seated: { 4: { id: "r1", name: "Ann" }, 5: { id: "r2", name: "Bob" } } }, { id: "tb2", number: 2, seats: 9 }], suggestions: { balance } }));
+    const { user } = renderDesk();
+    expect(screen.queryByTestId("seating-tab-alert")).not.toBeInTheDocument();
+
+    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+    // The Standings' Seat column reads the seating: the tab's name says what it found.
+    expect(await screen.findByTestId("seating-tab-alert", {}, { timeout: 3000 })).toHaveTextContent("Uneven");
+    expect(screen.getByRole("tab", { name: /^Tables & Seating\s*, Uneven$/ })).toBeInTheDocument();
+  });
+
+  it("follows the seating on the tab's badge from the other tabs: a bust or a move on another phone shows (TDN3-BADGE-STALE-OTHER-DEVICE)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockDesk({ status: "in_progress" });
+      const tables = [
+        { id: "tb1", number: 1, seats: 9, seated: { 1: { id: "r1", name: "Ann" }, 2: { id: "r2", name: "Bob" } } },
+        { id: "tb2", number: 2, seats: 9, seated: { 1: { id: "r3", name: "Cat" } } },
+      ];
+      const balance = [
+        { registrationId: "r2", playerName: "Bob", from: seatRef("tb1", 1, 2), to: seatRef("tb2", 2, 2), reason: "balance" as const },
+      ];
+      mockSeating(seatingDto({ tables }));
+      renderDesk();
+      await screen.findByTestId("prize-pool");
+      await act(() => vi.advanceTimersByTimeAsync(100));
+      expect(screen.queryByTestId("seating-tab-alert")).not.toBeInTheDocument();
+
+      // The floor busts Cat on another phone: the page's registrations show it, and the badge asks the seating again.
+      server.use(http.get("/api/tournaments/t1/registrations", () => HttpResponse.json([field[0], field[1], { ...field[2], isEliminated: true }])));
+      mockSeating(seatingDto({ tables: [tables[0], { ...tables[1], seated: {} }], suggestions: { balance } }));
+      await act(() => vi.advanceTimersByTimeAsync(LIVE_REFRESH_MS + 100));
+      await waitFor(() => expect(screen.getByTestId("seating-tab-alert")).toHaveTextContent("Uneven"));
+
+      // Another phone balances the tables: no one came or went, and the badge's own poll clears it.
+      mockSeating(seatingDto({ tables: [{ ...tables[0], seated: { 1: { id: "r1", name: "Ann" } } }, { ...tables[1], seated: { 2: { id: "r2", name: "Bob" } } }] }));
+      await act(() => vi.advanceTimersByTimeAsync(SEATING_BADGE_REFRESH_MS + 100));
+      await waitFor(() => expect(screen.queryByTestId("seating-tab-alert")).not.toBeInTheDocument());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows no clock in the header before one is set up", async () => {
+    mockDesk({ status: "in_progress" });
+    renderDesk();
+
+    await screen.findByTestId("prize-pool");
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Clock" })).toBeInTheDocument());
+    expect(screen.queryByTestId("clock-status-chip")).not.toBeInTheDocument();
+  });
+
+  it("calls the header's Pause what it does: Reopen registration", async () => {
+    mockDesk({ status: "in_progress" });
+    renderDesk();
+
+    expect(await screen.findByTestId("pause-tournament")).toHaveAccessibleName("Reopen registration");
+  });
+
+  it("lists each player's seat in the standings once seats are drawn", async () => {
+    mockDesk({ status: "in_progress" });
+    mockSeating(seatingDto({ tables: [{ id: "tb1", number: 2, seats: 9, seated: { 4: { id: "r1", name: "Ann" } } }], unseated: [{ id: "r2", name: "Bob" }] }));
+    const { user } = renderDesk();
+
+    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+
+    const table = await screen.findByRole("table", { name: "Standings" });
+    expect(await within(table).findByRole("columnheader", { name: "Seat" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("player-row-r1")).getByTestId("standings-seat")).toHaveTextContent("Table 2, seat 4");
+    // Still in with no seat while the tables are in play: waiting, not the dash of a player who is out.
+    expect(within(screen.getByTestId("player-row-r2")).getByTestId("standings-seat")).toHaveTextContent("Waiting for a seat");
+    expect(within(screen.getByTestId("player-row-r3")).getByTestId("standings-seat")).toHaveTextContent("No seat");
+  });
+
+  it("says a restored player whose seat was taken is waiting, on the tab and in a toast that seats them (TDN2-WAITING-NOT-FLAGGED)", async () => {
+    const out = registrationDto("r3", "Cat", 1, { isEliminated: true, eliminationTime: "2026-10-23T09:00:00.000Z" });
+    mockDesk({ status: "in_progress" }, [field[0], field[1], out]);
+    const tables = [{ id: "tb1", number: 1, seats: 9, seated: { 4: { id: "r1", name: "Ann" }, 5: { id: "r2", name: "Bob" } } }];
+    let restored = false;
+    server.use(
+      http.put("/api/registrations/r3", () => {
+        restored = true;
+        return HttpResponse.json({ ...out, isEliminated: false, eliminationTime: null });
+      }),
+      http.get("/api/tournaments/t1/seating", () => HttpResponse.json(seatingDto({ tables, unseated: restored ? [{ id: "r3", name: "Cat" }] : [] }))),
+    );
+    const seated = seatingDto({ tables: [{ ...tables[0], seated: { ...tables[0].seated, 6: { id: "r3", name: "Cat" } } }] });
+    const draws = recordWrite("post", "/api/tournaments/t1/seating/draw", () => HttpResponse.json(seatingMutation(seated, [seatMove("r3", "Cat", null, seatRef("tb1", 1, 6), "draw")])));
+    const { user } = renderDesk();
+    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+
+    await user.click(await screen.findByRole("button", { name: "Restore Cat" }));
+    const toast = within(screen.getByTestId("notifications"));
+    expect(await toast.findByText("Cat is back in, waiting for a seat: their old one was not free.")).toBeInTheDocument();
+    expect(screen.getByTestId("seating-tab-alert")).toHaveTextContent("1 waiting");
+
+    await user.click(toast.getByRole("button", { name: "Seat now" }));
+    await waitFor(() => expect(draws).toEqual([{ scope: "unseated", registrationIds: ["r3"], includeUnconfirmed: true }]));
+    expect(await toast.findByText("Cat: Table 1, Seat 6.")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId("seating-tab-alert")).not.toBeInTheDocument());
+  });
+
+  it("offers the TV clock, the seat finder's link and the season's leaderboard on the Actions tab", async () => {
+    mockDesk({ status: "in_progress", seasonId: "s1" });
+    server.use(http.get("/api/seasons/s1", () => HttpResponse.json(seasonDto())));
+    const { user } = renderDesk();
+
+    await user.click(await screen.findByRole("tab", { name: "Actions" }));
+
+    expect(screen.getByTestId("tv-clock-card")).toHaveAttribute("href", "/clock/t1?screen=tv");
+    expect(screen.getByTestId("tv-clock-card")).toHaveAttribute("target", "_blank");
+    expect(screen.getByTestId("season-leaderboard-card")).toHaveAttribute("href", "/season/s1");
+    expect(screen.getByTestId("copy-seat-finder-link")).toHaveTextContent("Copy Seat Finder Link");
   });
 });

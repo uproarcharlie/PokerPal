@@ -6,7 +6,7 @@
 import type { Viewer } from "@shared/api/common";
 import { PUBLIC_SNAPSHOT_FIELDS } from "@shared/api/finalize";
 import { pickFields, PUBLIC_TOURNAMENT_FIELDS } from "@shared/api/public";
-import { CLOSED_STATUSES } from "@shared/domain/tournaments";
+import { CLOSED_STATUSES, type TournamentStatus } from "@shared/domain/tournaments";
 import { formatMoney, toCents, type MoneyInput } from "@shared/domain/money";
 import {
   computePrizePool,
@@ -40,8 +40,26 @@ export const toTournamentDetail = (row: Tournament, viewer: Viewer) => ({
 
 export type TournamentDetail = ReturnType<typeof toTournamentDetail>;
 
+/**
+ * The tournament's status as the DTOs type it, narrowed in this one place: tournaments.status is a text
+ * column (typing the column would retype every client DTO built from the row), and every writer stores
+ * one of TOURNAMENT_STATUSES (the create and update schemas, finalize and the clock).
+ */
+export const tournamentStatusOf = (tournament: Pick<Tournament, "status">): TournamentStatus => tournament.status as TournamentStatus;
+
 export const isClosed = (tournament: Pick<Tournament, "status">): boolean =>
   (CLOSED_STATUSES as readonly string[]).includes(tournament.status);
+
+const STATUS_LABELS: Readonly<Record<TournamentStatus, string>> = {
+  scheduled: "Scheduled",
+  registration: "Registration Open",
+  in_progress: "In Progress",
+  completed: "Completed",
+  cancelled: "Cancelled",
+};
+
+/** The activity feed's `status_change` line, for every writer of a status (the clock's "also start the tournament" and its undo too). */
+export const statusChangeDescription = (status: TournamentStatus): string => `Tournament status changed to ${STATUS_LABELS[status]}`;
 
 /** "This tournament has finished" (or "was cancelled"), with ", so <what> can no longer change" when given. */
 export function closedMessage(tournament: Pick<Tournament, "status">, what?: string): string {

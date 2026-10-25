@@ -3,6 +3,12 @@ import { useSyncExternalStore, type ReactNode } from "react";
 /** One toast at a time: a new one replaces the last. */
 const TOAST_LIMIT = 1;
 
+/** The one thing a toast offers to do next ("Seat now"): pressing it closes the toast. */
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 /** A toast as the Toaster (components/shared/toaster.tsx) shows it. */
 export interface ToasterToast {
   id: string;
@@ -10,6 +16,7 @@ export interface ToasterToast {
   description?: ReactNode;
   /** "destructive" for a failure: drawn in the error colours and announced at once. */
   variant?: "default" | "destructive";
+  action?: ToastAction;
 }
 
 type Toast = Omit<ToasterToast, "id">;

@@ -3,7 +3,7 @@
  * phones from a QR code, so the router loads every page, and the staff layout, on demand. This walks
  * the static imports (what the bundler puts in the scripts a page loads; `import type` disappears and
  * `import()` is a script of its own) from the app's entry and from every page the router shows in the
- * public or sign-in layout.
+ * public, sign-in or TV display layout.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
@@ -74,6 +74,8 @@ const STAFF_ONLY = [
   /^client\/src\/features\/tournaments\/(?!api\.ts$|hooks\.ts$|components\/activity-feed\.tsx$)/,
   /^client\/src\/features\/seasons\/(?!api\.ts$|hooks\.ts$|components\/(season-leaderboard-card|season-leaderboard-table|rank-badge|active-season-badge)\.tsx$)/,
   /^client\/src\/features\/clubs\/components\/(rich-text-editor|address-autocomplete)\.tsx$/,
+  // Phase 4: the TD's seating, clock and AP panels; the TV, the seat finder and the season page load only these.
+  /^client\/src\/features\/(seating|clock|prize-pool|public-season)\/(?!api\.ts$|hooks\.ts$|server-time\.ts$|pages\/|components\/public\/)/,
   /^(@tiptap\/|@googlemaps\/)/,
 ];
 
@@ -83,7 +85,7 @@ const PAGES_WITH_FORMS = new Set(["Login", "Register", "PublicRegister", "Player
 function publicPages(): Array<{ page: string; file: string }> {
   const router = readFileSync(join(CLIENT, "app/router.tsx"), "utf8");
   const lazyPages = new Map(Array.from(router.matchAll(/const (\w+) = lazy(?:Page)?\(\(\) => import\("([^"]+)"\)\)/g), ([, page, path]) => [page, path]));
-  const shown = Array.from(router.matchAll(/<(?:PublicLayout|AuthLayout)>\s*<(\w+) \/>/g), ([, page]) => page);
+  const shown = Array.from(router.matchAll(/<(?:PublicLayout|AuthLayout|DisplayLayout)>\s*<(\w+) \/>/g), ([, page]) => page);
   return shown
     .filter((page) => lazyPages.has(page))
     .map((page) => ({ page, file: resolveImport(join(CLIENT, "app/router.tsx"), lazyPages.get(page) as string) as string }));
@@ -93,8 +95,10 @@ describe("the scripts a public page loads", () => {
   const entry = staticClosure(join(CLIENT, "main.tsx"));
   const pages = publicPages();
 
-  it("cover every page in the public and sign-in layouts", () => {
-    expect(pages.map(({ page }) => page)).toEqual(expect.arrayContaining(["Landing", "PublicTournament", "PublicRegister", "Login", "StaffInvite"]));
+  it("cover every page in the public, sign-in and TV display layouts", () => {
+    expect(pages.map(({ page }) => page)).toEqual(
+      expect.arrayContaining(["Landing", "PublicTournament", "PublicRegister", "Login", "StaffInvite", "PublicSeats", "PublicSeason", "ClockDisplay"]),
+    );
     for (const { file } of pages) expect(existsSync(file)).toBe(true);
   });
 

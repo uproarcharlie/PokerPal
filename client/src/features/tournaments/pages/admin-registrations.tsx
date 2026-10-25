@@ -14,7 +14,8 @@ import { usePageMeta } from "@/app/page-meta";
 import { errorMessage } from "@/lib/api/http";
 import { clubTimeZone } from "@/lib/format";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
-import { ConfirmedPayments, PendingPayments } from "../components/payment-desk/payment-lists";
+import { useEarlyBirds } from "@/features/clock/staff-hooks";
+import { ConfirmedPayments, PendingPayments, type EarlyBirdToggle } from "../components/payment-desk/payment-lists";
 import { TournamentNotFound } from "../components/tournament-not-found";
 import { useClub } from "@/features/clubs/hooks";
 import { useTournament } from "../hooks";
@@ -60,6 +61,15 @@ function PaymentDesk({ tournament }: { tournament: TournamentDetailDto }) {
 
   // Each row waits for its own answer, and each answer is told for its own row (P3REV0-PARITY-03).
   const rows = useBusyRows();
+  const earlyBirds = useEarlyBirds(tournament.id);
+  const earlyBirdRows = useBusyRows();
+  const earlyBirdToggle: EarlyBirdToggle = {
+    busy: earlyBirdRows.busy,
+    onChange: (registrationId, earlyBird) =>
+      void earlyBirdRows.run(registrationId, () => earlyBirds.mutateAsync({ registrationIds: [registrationId], earlyBird })).catch((error: unknown) =>
+        toast({ title: "Could not change the early-bird bonus", description: errorMessage(error), variant: "destructive" }),
+      ),
+  };
   const confirm = async (registrationId: string) => {
     try {
       await rows.run(registrationId, () => confirmPayment.mutateAsync(registrationId));
@@ -115,6 +125,7 @@ function PaymentDesk({ tournament }: { tournament: TournamentDetailDto }) {
               timeZone={timeZone}
               confirmingIds={rows.busy}
               onConfirm={(registrationId) => void confirm(registrationId)}
+              earlyBirds={earlyBirdToggle}
             />
           </CardContent>
         </Card>
@@ -125,7 +136,7 @@ function PaymentDesk({ tournament }: { tournament: TournamentDetailDto }) {
             <CardDescription>Players who have paid and are registered</CardDescription>
           </CardHeader>
           <CardContent>
-            <ConfirmedPayments query={confirmed} timeZone={timeZone} />
+            <ConfirmedPayments query={confirmed} timeZone={timeZone} earlyBirds={earlyBirdToggle} />
           </CardContent>
         </Card>
 

@@ -8,14 +8,16 @@
  */
 import type { Request } from "express";
 import type { PrizePoolAdjustmentInput, PrizePoolDto, RakeRatesInput } from "@shared/api/prize-pool";
-import type { TournamentStatus } from "@shared/api/tournaments";
 import { formatMoney, isAmountSet, toCents, type MoneyInput } from "@shared/domain/money";
 import { computePrizePool, payoutsForDisplay, rakeLabel, type PayoutDisplay } from "@shared/domain/prize-pool";
 import {
   mergeRakeRates,
   RAKE_COMPONENT_NAMES,
   RAKE_COMPONENTS,
+  rateOverPrice,
+  rateOverPriceMessage,
   rateText,
+  type EntryPrices,
   type MergedRakeRates,
   type RakeRates,
 } from "@shared/domain/rake-rates";
@@ -29,7 +31,7 @@ import { playerNames } from "../repositories/players";
 import { registrationsOf } from "../repositories/registrations";
 import { getTournament, lockTournamentForUpdate, setTournamentColumns } from "../repositories/tournaments";
 import { recordAudit } from "./audit";
-import { assertHighHandAwardsFit, assertOpen, toTournamentDetail, type TournamentDetail } from "./tournament-views";
+import { assertHighHandAwardsFit, assertOpen, toTournamentDetail, tournamentStatusOf, type TournamentDetail } from "./tournament-views";
 
 type ClubLabel = Pick<Club, "rakeLabel"> | undefined;
 
@@ -85,7 +87,7 @@ export function toPrizePoolDto(context: PrizePoolContext): PrizePoolDto {
   const locked = tournament.prizePoolLocked === true;
   return {
     tournamentId: tournament.id,
-    status: tournament.status as TournamentStatus,
+    status: tournamentStatusOf(tournament),
     rakeLabel: rakeLabel(club),
     locked,
     estimated: !locked && tournament.status !== "completed",
@@ -254,6 +256,16 @@ export interface RakeRatesChange {
   reason: string | null;
 }
 
+/**
+ * 400 AMOUNT_OVER_PRICE (details: { field }) when a fixed AP rate is above the price of its entry
+ * (rateOverPrice): "$30 per re-buy is more than a re-buy costs ($25)…". With `before`, only a rate or
+ * price that changed is checked (P4REV2R2-MONEY-01).
+ */
+export function assertRatesWithinPrices(after: RakeRates & EntryPrices, before?: RakeRates & EntryPrices): void {
+  const problem = rateOverPrice(after, before);
+  if (problem) throw badRequest(rateOverPriceMessage(problem), problem.code, { field: problem.field });
+}
+
 /** The rates `changes` merged over `stored`, or 400 PERCENT_OVER_100 / AMOUNT_REQUIRED naming the amount field. */
 export function mergedRatesOrThrow(stored: RakeRates, changes: RakeRates): MergedRakeRates {
   const merged = mergeRakeRates(stored, changes);
@@ -276,6 +288,8 @@ export function mergedRatesOrThrow(stored: RakeRates, changes: RakeRates): Merge
 export async function applyRakeRates(tx: Executor, req: Request, context: PrizePoolContext, request: RakeRatesChange): Promise<Tournament> {
   const { tournament, registrations, club } = context;
   const rates = mergedRatesOrThrow(tournament, request.changes);
+  // `tournament` already has any new prices of the same request (PUT /api/tournaments/:id writes them first).
+  assertRatesWithinPrices({ ...tournament, ...rates }, tournament);
   const changed = RAKE_COMPONENTS.filter(({ type, amount }) => !sameRate(rates[type], rates[amount], tournament[type], tournament[amount]));
   const isAp = ({ type }: (typeof RAKE_COMPONENTS)[number]) => type !== "highHandRakeType";
   const apChanged = changed.some(isAp);

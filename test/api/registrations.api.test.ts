@@ -9,7 +9,7 @@ import request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
 import { findForbiddenKeys } from "@shared/api/public";
 import { HIGH_HAND_PRIZES_MAX } from "@shared/domain/prize-pool";
-import { activityLog, auditLog, pendingActions, tournamentRegistrations, tournaments, type Player, type Tournament } from "@shared/schema";
+import { activityLog, auditLog, pendingActions, tournamentClocks, tournamentRegistrations, tournaments, type Player, type Tournament } from "@shared/schema";
 import {
   createClub,
   createPlayer,
@@ -20,6 +20,7 @@ import {
   type NewRegistration,
   type NewTournament,
 } from "../factories";
+import { createClock, MINUTE_MS } from "../factories/clock";
 import { createApp } from "../../server/app";
 import { loadEnv } from "../../server/config/env";
 import { issueSignUpToken, SIGN_UP_TOKEN_TTL_MS } from "../../server/services/sign-up-tokens";
@@ -105,6 +106,7 @@ describe("POST /api/tournaments/:id/registrations", () => {
       enteringHighHands: false,
       highHandWinner: false,
       highHandAmount: null,
+      earlyBird: false,
       player: publicPlayer(player),
     });
     expect(findForbiddenKeys(response.body)).toEqual([]);
@@ -1374,4 +1376,82 @@ describe("the public-write budget (anonymous sign-ups and requests)", () => {
     expect(signedUp).toHaveLength(50);
     expect(statuses.filter((status) => status !== 201)).toEqual([]);
   }, 60_000);
+});
+
+describe("the format's house rules (TDN3-HOUSE-RULES)", () => {
+  /** Central Stars' One Life Line: one $25 re-buy OR one $25 add-on per player. */
+  const oneLifeLine = { rebuyAmount: "25.00", addonAmount: "25.00", maxRebuys: 1, maxAddons: 1, rebuyOrAddon: true, status: "in_progress" } as const;
+  const ONE_OR_THE_OTHER = "this tournament allows one re-buy OR one add-on per player";
+
+  it("refuses a second add-on, and an add-on after the re-buy, at the desk, wherever the count is changed", async () => {
+    const { tournament, agent } = await ownedTournament(oneLifeLine);
+    const { registration: alice } = await registered(tournament.id, "Alice");
+    const { registration: bob } = await registered(tournament.id, "Bob", { rebuys: 1 });
+    const counts = (id: string, body: object) => agent.post(`/api/registrations/${id}/counts`).send(body);
+
+    const firstAddon = await counts(alice.id, { addons: 1 });
+    const secondAddon = await counts(alice.id, { addons: 1 });
+    const rebuyAfterAddon = await counts(alice.id, { rebuys: 1 });
+    const addonAfterRebuy = await agent.put(`/api/registrations/${bob.id}`).send({ addons: 1 });
+    const both = await agent.post(`/api/tournaments/${tournament.id}/registrations`).send({ playerId: (await createPlayer()).id, rebuys: 1, addons: 1 });
+    const correction = await agent.put(`/api/registrations/${bob.id}`).send({ rebuys: 0 });
+
+    expect(firstAddon.status).toBe(200);
+    expect(secondAddon.status).toBe(409);
+    expect(secondAddon.body).toEqual({ error: "This tournament allows at most 1 add-on per player", code: "MAX_ADDONS_REACHED" });
+    expect(rebuyAfterAddon.status).toBe(409);
+    expect(rebuyAfterAddon.body).toEqual({ error: `Already took an add-on: ${ONE_OR_THE_OTHER}`, code: "REBUY_OR_ADDON" });
+    expect(addonAfterRebuy.status).toBe(409);
+    expect(addonAfterRebuy.body).toEqual({ error: `Already took a re-buy: ${ONE_OR_THE_OTHER}`, code: "REBUY_OR_ADDON" });
+    expect(both.status).toBe(409);
+    expect(both.body.code).toBe("REBUY_OR_ADDON");
+    expect(correction.status).toBe(200);
+    expect(await registrationRow(alice.id)).toMatchObject({ rebuys: 0, addons: 1 });
+    expect((await activityFor(tournament.id)).map((entry) => entry.description)).toEqual(["Alice purchased 1 add-on"]);
+  });
+
+  it("changes nothing for a tournament whose format sets no such rule", async () => {
+    const { tournament, agent } = await ownedTournament({ rebuyAmount: "25.00", addonAmount: "25.00", status: "in_progress" });
+    const { registration } = await registered(tournament.id, "Alice", { rebuys: 3, addons: 2 });
+
+    const response = await agent.post(`/api/registrations/${registration.id}/counts`).send({ rebuys: 1, addons: 1 });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ rebuys: 4, addons: 3 });
+  });
+
+  it("says when a re-buy or add-on is sold after the re-buy period on the clock, and still sells it", async () => {
+    // The test clock: 20 + 20-minute levels and a 15-minute break, so re-buys close 55 minutes in.
+    const { tournament, agent } = await ownedTournament({ ...oneLifeLine, maxAddons: null, rebuyOrAddon: null, maxRebuys: null, rebuyPeriodMinutes: 55 });
+    const { registration: alice } = await registered(tournament.id, "Alice");
+    const { registration: bob } = await registered(tournament.id, "Bob");
+    await createClock({ tournamentId: tournament.id, state: { status: "paused", currentLevelIndex: 1, pausedRemainingMs: 5 * MINUTE_MS, startedAt: Date.now() - 60 * MINUTE_MS } });
+
+    const inTime = await agent.post(`/api/registrations/${alice.id}/counts`).send({ rebuys: 1 });
+    await testDb().update(tournamentClocks).set({ currentLevelIndex: 3, pausedRemainingMs: 10 * MINUTE_MS }).where(eq(tournamentClocks.tournamentId, tournament.id));
+    const late = await agent.post(`/api/registrations/${bob.id}/counts`).send({ rebuys: 1, addons: 1 });
+
+    expect([inTime.status, late.status]).toEqual([200, 200]);
+    const after = "after the re-buy period, which ended at 0:55 on the clock";
+    const data = JSON.stringify({ afterRebuyPeriod: true, rebuyPeriodMinutes: 55 });
+    // Bob's two entries share a timestamp, so they are compared in name order.
+    const entries = (await activityFor(tournament.id)).map(({ description, eventData }) => [description, eventData]);
+    expect(entries.sort(([a], [b]) => String(a).localeCompare(String(b)))).toEqual([
+      ["Alice made 1 re-buy", null],
+      [`Bob made 1 re-buy ${after}`, data],
+      [`Bob purchased 1 add-on ${after}`, data],
+    ]);
+  });
+
+  it("is stored and shown with the tournament", async () => {
+    const { tournament, agent } = await ownedTournament({ rebuyAmount: "25.00", addonAmount: "25.00" });
+
+    const updated = await agent.put(`/api/tournaments/${tournament.id}`).send({ maxAddons: 1, rebuyOrAddon: true });
+    const shown = await (await anon()).get(`/api/tournaments/${tournament.id}`);
+
+    expect(updated.status).toBe(200);
+    expect(updated.body).toMatchObject({ maxAddons: 1, rebuyOrAddon: true });
+    expect(shown.body).toMatchObject({ maxAddons: 1, rebuyOrAddon: true });
+    expect((await testDb().select().from(tournaments).where(eq(tournaments.id, tournament.id)))[0]).toMatchObject({ maxAddons: 1, rebuyOrAddon: true });
+  });
 });

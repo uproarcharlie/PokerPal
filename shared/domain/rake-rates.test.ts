@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { Tournament } from "../schema";
-import { mergeRakeRates, RAKE_COMPONENTS, type RakeRates } from "./rake-rates";
+import { mergeRakeRates, RAKE_COMPONENTS, rateOverPrice, rateOverPriceMessage, type RakeRates } from "./rake-rates";
 
 /** A tournament's rates as Postgres returns them. */
 const stored: RakeRates = {
@@ -94,5 +94,31 @@ describe("mergeRakeRates", () => {
   it("covers the four components, and accepts a tournament row as the stored rates", () => {
     expect(RAKE_COMPONENTS.map((c) => c.type)).toEqual(["rakeType", "rebuyRakeType", "addonRakeType", "highHandRakeType"]);
     expectTypeOf<Tournament>().toExtend<RakeRates>();
+  });
+});
+
+describe("rateOverPrice (P4REV2R2-MONEY-01)", () => {
+  const prices = { buyInAmount: "100.00", rebuyAmount: "25.00", addonAmount: "25.00" };
+
+  it("finds a fixed rate above the price of its entry, naming the amount field", () => {
+    const problem = { code: "AMOUNT_OVER_PRICE", field: "rebuyRakeAmount", entry: "re-buy", amountCents: 3_000, priceCents: 2_500 } as const;
+    expect(rateOverPrice({ ...prices, rebuyRakeType: "fixed", rebuyRakeAmount: "30.00" })).toEqual(problem);
+    expect(rateOverPriceMessage(problem)).toBe("$30 per re-buy is more than a re-buy costs ($25): the prize pool would go below zero");
+    expect(rateOverPrice({ ...prices, rakeType: "fixed", rakeAmount: "100.01" })).toMatchObject({ field: "rakeAmount", entry: "buy-in" });
+  });
+
+  it("lets a rate up to the price, a percentage, the high hand and an entry the tournament does not sell through", () => {
+    expect(rateOverPrice({ ...prices, addonRakeType: "fixed", addonRakeAmount: "25.00" })).toBeNull();
+    expect(rateOverPrice({ ...prices, rebuyRakeType: "percentage", rebuyRakeAmount: "100" })).toBeNull();
+    expect(rateOverPrice({ ...prices, highHandRakeType: "fixed", highHandRakeAmount: "500.00" })).toBeNull();
+    expect(rateOverPrice({ ...prices, rebuyAmount: null, rebuyRakeType: "fixed", rebuyRakeAmount: "5.00" })).toBeNull();
+  });
+
+  it("with what was stored before, checks only a rate or price that changed", () => {
+    const legacy = { ...prices, rebuyRakeType: "fixed", rebuyRakeAmount: "30.00" };
+    expect(rateOverPrice(legacy, legacy)).toBeNull();
+    expect(rateOverPrice({ ...legacy, rebuyAmount: "20.00" }, legacy)).toMatchObject({ field: "rebuyRakeAmount", priceCents: 2_000 });
+    expect(rateOverPrice({ ...legacy, rebuyRakeAmount: "31.00" }, legacy)).toMatchObject({ amountCents: 3_100 });
+    expect(rateOverPrice({ ...prices, rebuyRakeType: "fixed", rebuyRakeAmount: "5.00" }, { ...prices, rebuyRakeType: "fixed", rebuyRakeAmount: "5.00", rebuyAmount: "4.00" })).toBeNull();
   });
 });

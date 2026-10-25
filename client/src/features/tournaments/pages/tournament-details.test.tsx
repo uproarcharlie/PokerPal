@@ -5,10 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { server } from "@test/msw/server";
 import { apiError, mockSignedIn, renderWithApp } from "@test/helpers/web";
 import { LIVE_REFRESH_MS } from "@/lib/live-refresh";
-import { clubDto, finalizeResultDto, HASH_A, HASH_B, previewOf, registrationDto, tournamentDto } from "@test/helpers/f1-tournaments";
+import { clubDto, finalizeResultDto, HASH_A, HASH_B, mockDeskLiveReads, previewOf, registrationDto, tournamentDto } from "@test/helpers/f1-tournaments";
 import type { PublicRegistration } from "@shared/api/public";
 import type { ManagedRegistration } from "@shared/api/registrations";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
+import { seatingDto, seatingMutation, seatMove, seatRef } from "@test/helpers/seating-dto";
 import TournamentDetails from "./tournament-details";
 
 const field = [registrationDto("r1", "Ann", 2), registrationDto("r2", "Bob", 2), registrationDto("r3", "Cat", 1)];
@@ -21,6 +22,7 @@ function mockPage(
     registrations = field,
   }: { canOwn?: boolean; overrides?: Partial<TournamentDetailDto>; registrations?: PublicRegistration[] } = {},
 ) {
+  mockDeskLiveReads(tournamentDto({ ...overrides, viewer: { canManage, canOwn } }), registrations);
   server.use(
     http.get("/api/tournaments/t1", () => HttpResponse.json(tournamentDto({ ...overrides, viewer: { canManage, canOwn } }))),
     http.get("/api/clubs/c1", () => HttpResponse.json(clubDto())),
@@ -151,6 +153,40 @@ describe("TournamentDetails", () => {
     expect(registered).toEqual({ playerId: "p-dee", buyIns: 1, rebuys: 0, addons: 0 });
   });
 
+  it("says a late walk-in is waiting for a seat while the tables are in play, and seats them in one tap (TDN2-WAITING-NOT-FLAGGED)", async () => {
+    mockPage(true);
+    const tables = [{ id: "tb1", number: 1, seats: 9, seated: { 1: { id: "r1", name: "Ann" } } }];
+    const draws: unknown[] = [];
+    server.use(
+      http.get("/api/public/tournaments/t1/players", () => HttpResponse.json([{ id: "p-dee", name: "Dee Visitor", imageUrl: null }])),
+      http.post("/api/tournaments/t1/registrations", () =>
+        HttpResponse.json(
+          { ...registrationDto("r9", "Dee Visitor"), playerId: "p-dee", player: { id: "p-dee", name: "Dee Visitor", imageUrl: null }, paymentConfirmed: false } satisfies ManagedRegistration,
+          { status: 201 },
+        ),
+      ),
+      http.get("/api/tournaments/t1/seating", () => HttpResponse.json(seatingDto({ tables, unseated: [{ id: "r9", name: "Dee Visitor" }] }))),
+      http.post("/api/tournaments/t1/seating/draw", async ({ request }) => {
+        draws.push(await request.json());
+        const seated = seatingDto({ tables: [{ ...tables[0], seated: { ...tables[0].seated, 2: { id: "r9", name: "Dee Visitor" } } }] });
+        return HttpResponse.json(seatingMutation(seated, [seatMove("r9", "Dee Visitor", null, seatRef("tb1", 1, 2), "draw")]));
+      }),
+    );
+    const user = userEvent.setup();
+    renderDetails();
+
+    await user.click(await screen.findByTestId("register-player"));
+    await user.type(screen.getByRole("searchbox", { name: "Player" }), "Dee");
+    await user.click(await screen.findByTestId("player-option-p-dee"));
+    await user.click(screen.getByTestId("register-player-final"));
+
+    const notifications = within(screen.getByTestId("notifications"));
+    expect(await notifications.findByText("Dee Visitor is in, waiting for a seat.")).toBeInTheDocument();
+    await user.click(notifications.getByRole("button", { name: "Seat now" }));
+    expect(await notifications.findByText("Dee Visitor: Table 1, Seat 2.")).toBeInTheDocument();
+    expect(draws).toEqual([{ scope: "unseated", registrationIds: ["r9"], includeUnconfirmed: true }]);
+  });
+
   it("locks the prize pool only after the TD confirms, and offers to unlock it again (TN2-01)", async () => {
     mockPage(true);
     const sent: unknown[] = [];
@@ -254,7 +290,7 @@ describe("TournamentDetails", () => {
     expect(screen.getByTestId("no-payouts")).toHaveTextContent("what each place was paid was never recorded");
   });
 
-  it("counts each player's entries in words: 1 entry, 3 entries", async () => {
+  it("counts each player's entries in words, as the clock does, with the add-ons beside them (P4REV4-R3-CQ-05)", async () => {
     mockPage(true, { registrations: [registrationDto("r1", "Ann", 1), { ...registrationDto("r2", "Bob", 1), rebuys: 1, addons: 1 }] });
     const user = userEvent.setup();
     renderDetails();
@@ -262,7 +298,7 @@ describe("TournamentDetails", () => {
     await user.click(await screen.findByRole("tab", { name: "Standings" }));
     const row = async (name: string) => within(await screen.findByRole("row", { name: new RegExp(name) }));
     expect((await row("Ann")).getByRole("cell", { name: "1 entry" })).toBeInTheDocument();
-    expect((await row("Bob")).getByRole("cell", { name: "3 entries" })).toBeInTheDocument();
+    expect((await row("Bob")).getByRole("cell", { name: "2 entries · 1 add-on" })).toBeInTheDocument();
   });
 
   it("removes a mistaken sign-up after the TD confirms (P2REV0-02)", async () => {

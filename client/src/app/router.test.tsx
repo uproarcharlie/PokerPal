@@ -26,6 +26,10 @@ vi.mock("@/features/seasons/pages/seasons", () => page("Seasons"));
 vi.mock("@/features/users/pages/user-management", () => page("User management"));
 vi.mock("@/features/account/pages/login", () => page("Sign in"));
 vi.mock("@/features/public-tournament/pages/public-register", () => page("Tournament sign-up"));
+vi.mock("@/features/public-tournament/pages/public-tournament", () => page("Public tournament page"));
+vi.mock("@/features/seating/pages/public-seats", () => page("Find your seat"));
+vi.mock("@/features/public-season/pages/public-season", () => page("Season leaderboard"));
+vi.mock("@/features/clock/pages/clock-display", () => page("Tournament clock"));
 vi.mock("@/features/tournaments/pages/tournament-details", () => ({
   default: () => {
     throw new Error("the page crashed");
@@ -41,6 +45,37 @@ describe("AppRouter", () => {
 
     expect(await screen.findByRole("heading", { name: "Tournament sign-up" })).toBeInTheDocument();
     expect(screen.queryByTestId("nav-clubs")).not.toBeInTheDocument();
+  });
+
+  it("shows the seat finder and the season page in the public layout, the seat finder before the tournament page", async () => {
+    mockSignedOut();
+    const seats = renderWithApp(<AppRouter />, { path: "/tournament/t1/seats" });
+    expect(await screen.findByRole("heading", { name: "Find your seat" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Public tournament page" })).not.toBeInTheDocument();
+    expect(document.documentElement).not.toHaveClass("dark");
+    seats.unmount();
+
+    renderWithApp(<AppRouter />, { path: "/season/s1" });
+    expect(await screen.findByRole("heading", { name: "Season leaderboard" })).toBeInTheDocument();
+    expect(screen.queryByTestId("nav-clubs")).not.toBeInTheDocument();
+  });
+
+  it("shows the TV clock full screen and dark, with no sidebar, and the impersonation pill at the top (P4REV3-SEC-03)", async () => {
+    mockSignedIn(TESS, { impersonator: { id: "a1", name: "Ada Admin", email: "ada@lovepoker.test" } });
+    // The pill shows on every page while an admin views the app as someone else.
+    const season = renderWithApp(<AppRouter />, { path: "/season/s1" });
+    expect(await screen.findByRole("status", { name: "Impersonation" })).toBeInTheDocument();
+    season.unmount();
+
+    renderWithApp(<AppRouter />, { path: "/clock/t1" });
+
+    expect(await screen.findByRole("heading", { name: "Tournament clock" })).toBeInTheDocument();
+    expect(document.getElementById("main")).toHaveAttribute("tabindex", "-1");
+    await waitFor(() => expect(document.documentElement).toHaveClass("dark"));
+    expect(document.documentElement.dataset.surface).toBe("display");
+    expect(screen.queryByTestId("nav-clubs")).not.toBeInTheDocument();
+    // That session runs the room's clock, and left on the TV it leads back to the admin's account.
+    expect(await screen.findByRole("status", { name: "Impersonation" })).toHaveTextContent("Viewing as");
   });
 
   it("sends a visitor on a staff page to sign in, and back there afterwards", async () => {

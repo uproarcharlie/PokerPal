@@ -20,6 +20,7 @@ describe("the club forms' schemas", () => {
       imageUrl: null,
       address: null,
       timezone: "Pacific/Auckland",
+      rakeLabel: null,
     });
   });
 
@@ -62,6 +63,7 @@ describe("profileValues", () => {
       imageUrl: "/uploads/x.webp",
       address: "",
       timezone: "Pacific/Auckland",
+      rakeLabel: "",
     });
   });
 });
