@@ -31,6 +31,7 @@ import * as seasonsRepo from "../repositories/seasons";
 import * as tournamentsRepo from "../repositories/tournaments";
 import { recordAudit } from "./audit";
 import { stopClockForCancel } from "./clock";
+import { assertCanShowBankTransfer } from "./club-payments";
 import { assertOwnedImage, noteDeletedImages, noteReplacedImage } from "./images/upload";
 import {
   applyPrizePoolAdjustment,
@@ -184,7 +185,8 @@ const NO_RATES: RakeRates = {
  * creation that it would refuse to change afterwards (P2REV4-CQ-01). A club has at most
  * MAX_UPCOMING_TOURNAMENTS_PER_CLUB upcoming tournaments (409 TOURNAMENT_LIMIT_REACHED): any account
  * can open a club, and upcoming tournaments are listed on the public home page (SEC-P2REV-04). One
- * club's creates take turns, so two at once cannot both pass the count.
+ * club's creates take turns, so two at once cannot both pass the count. Showing bank transfer details
+ * after sign-up (round 8) needs the club's bank details (400 VALIDATION on showBankTransfer).
  */
 export async function createTournament(env: AppEnv, req: Request, input: CreateTournamentInput): Promise<TournamentDetail> {
   assertOwnedImage(env, input.imageUrl, undefined, INVALID_MESSAGE);
@@ -195,6 +197,7 @@ export async function createTournament(env: AppEnv, req: Request, input: CreateT
   const row = await db.transaction(async (tx) => {
     await assertSeasonAndPoints(tx, input.clubId, points.seasonId, points.pointsSystemId);
     await assertSeatingSettings(tx, input.clubId, input);
+    if (input.showBankTransfer === true) await assertCanShowBankTransfer(tx, input.clubId);
     await tournamentsRepo.lockClubTournamentCreates(tx, input.clubId);
     if ((await tournamentsRepo.countUpcomingTournaments(tx, input.clubId)) >= MAX_UPCOMING_TOURNAMENTS_PER_CLUB) {
       throw conflict(
@@ -355,7 +358,8 @@ function assertRepricingConfirmed(changes: readonly Repricing[], confirmed: bool
  * the rates service, exactly as their own endpoints do; a price with entries recorded at it is never
  * removed (repricedEntries) and changes only with `repriceEntries`, asked last
  * (assertRepricingConfirmed); new entry prices may not leave a manual AP total above the gross. A
- * new image must be one we stored. Status changes and locks are logged as before.
+ * new image must be one we stored; showing bank transfer details after sign-up is turned on only while
+ * the club has them (round 8). Status changes and locks are logged as before.
  */
 export async function updateTournament(env: AppEnv, req: Request, id: string, input: UpdateTournamentInput): Promise<TournamentDetail> {
   let previousImageUrl: string | null = null;
@@ -388,6 +392,8 @@ export async function updateTournament(env: AppEnv, req: Request, id: string, in
       await assertSeasonAndPoints(tx, current.clubId, points.seasonId, points.pointsSystemId);
     }
 
+    // Round 8: turned on only while the club has bank details to show; resent unchanged, it stays.
+    if (config.showBankTransfer === true && current.showBankTransfer !== true) await assertCanShowBankTransfer(tx, current.clubId);
     if (config.openTableAt !== undefined || config.seatsPerTable !== undefined) {
       await assertSeatingSettings(tx, current.clubId, {
         ...current,

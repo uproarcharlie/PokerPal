@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { server } from "@test/msw/server";
 import { mockSignedIn, renderWithApp } from "@test/helpers/web";
 import { pointsSystemDto, seasonDto } from "@test/helpers/dto";
-import { clubDto, recordBodies, screenWidth, tournamentDto } from "@test/helpers/f1-tournaments";
+import { clubDto, noBankDetails, recordBodies, screenWidth, tournamentDto } from "@test/helpers/f1-tournaments";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { CreateTournamentDialog } from "../create-tournament-dialog";
 import { EditTournamentDialog } from "../edit-tournament-dialog";
@@ -23,6 +23,7 @@ function mockForm() {
   const sent = recordBodies();
   server.use(
     http.get("/api/clubs", () => HttpResponse.json([clubDto()])),
+    noBankDetails(),
     http.get("/api/seasons", () => HttpResponse.json([spring])),
     http.get("/api/seasons/s1/points-systems", () => HttpResponse.json([league])),
     http.get("/api/tournaments/t1/registrations", () => HttpResponse.json([])),

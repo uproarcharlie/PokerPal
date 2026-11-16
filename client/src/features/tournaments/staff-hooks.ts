@@ -13,6 +13,7 @@ import type { FinalizeInput, FinalizePreviewInput } from "@shared/api/finalize";
 import type { ConfirmPendingActionInput, PendingActionDto } from "@shared/api/pending-actions";
 import type {
   AdjustCountsInput,
+  ConfirmPaymentInput,
   FreeEntryChangeInput,
   PendingRegistrationDto,
   StaffRegistrationInput,
@@ -208,12 +209,15 @@ export function useRemoveRegistration(tournamentId: string) {
   });
 }
 
-/** Confirms one registration's payment: it leaves the pending list at once, then both lists refresh. */
+/**
+ * Confirms one registration's payment, with how the player paid when the desk asked (round 8): it
+ * leaves the pending list at once, then both lists refresh.
+ */
 export function useConfirmPayment(tournamentId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: confirmPayment,
-    onSuccess: (_registration, registrationId) => {
+    mutationFn: ({ registrationId, ...input }: { registrationId: string } & ConfirmPaymentInput) => confirmPayment(registrationId, input),
+    onSuccess: (_registration, { registrationId }) => {
       dropFromList<PendingRegistrationDto>(queryClient, qk.tournaments.pendingRegistrations(tournamentId), registrationId);
       void invalidateTournament(queryClient, tournamentId);
     },

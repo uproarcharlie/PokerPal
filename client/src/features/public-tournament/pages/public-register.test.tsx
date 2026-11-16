@@ -57,6 +57,8 @@ async function chooseExistingPlayer(user: ReturnType<typeof userEvent.setup>, se
 
 beforeEach(() => {
   mockSignedOut();
+  // A sign-up with a transfer to make is kept in the tab (R8REV1-PHONE-02): each test starts with none.
+  sessionStorage.clear();
 });
 
 describe("PublicRegisterPage: where focus goes (MA-P3REV1-03)", () => {

@@ -8,6 +8,7 @@ import type { ClubTheme } from "../domain/theme";
 import type { AuditLogEntry, TournamentRegistration } from "../schema";
 import { dateSchema, limitSchema, requiredText, type Json } from "./common";
 import { accountEmailSchema, phoneSchema, type SessionUser } from "./auth";
+import type { BankDetails } from "./clubs";
 
 export const USER_ROLES = ["admin", "full_member"] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -94,6 +95,7 @@ export const AUDIT_ACTIONS = [
   "club.invite_created",
   "club.invite_revoked",
   "club.delete",
+  "club.bank_details", // round 8: the club's bank account for transfers set, changed or removed (target = club)
   "season.delete",
   "tournament.delete",
   "prize_pool.adjust",
@@ -173,6 +175,11 @@ export type AuditData = {
   "club.invite_created": { inviteId: string; role: string; email: string; expiresAt: string };
   "club.invite_revoked": { inviteId: string; role: string; email: string };
   "club.delete": { name: string; slug: string; imageUrl: string | null; tournamentImageUrls: string[] };
+  /**
+   * Round 8: the bank details players are told to pay into, before and after (null: none). Recorded
+   * because changing the account number redirects every transfer that follows.
+   */
+  "club.bank_details": { before: BankDetails | null; after: BankDetails | null };
   "season.delete": { name: string; clubId: string };
   "tournament.delete": { name: string; clubId: string; status: string; imageUrl: string | null };
   "prize_pool.adjust": {

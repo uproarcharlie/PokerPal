@@ -92,9 +92,12 @@ export function BasicInfoSection({ form, clubs, clubName, pointsLocked, timeZone
                   value={field.value}
                   onValueChange={(value) => {
                     field.onChange(value);
-                    // A season or points system belongs to one club: never keep another club's.
+                    // A season or points system belongs to one club: never keep another club's. Nor its bank
+                    // details (round 8): switched on for a club that has them, the switch would stay on, greyed
+                    // out, for one that has none, and the server would refuse the tournament (R8REV1-PHONE-03).
                     setValue("seasonId", "");
                     setValue("pointsSystemId", "");
+                    setValue("showBankTransfer", false);
                   }}
                 >
                   <FormControl>

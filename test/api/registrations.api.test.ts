@@ -77,9 +77,10 @@ const staffColumns = (registration: object) => {
   const { freeEntryBy: _by, freeEntryAt: _at, ...row } = asJson(registration) as Record<string, unknown>;
   return row;
 };
-/** Whether it has paid, and whether it came in free (round 7), are staff bookkeeping. */
+/** Whether (and how, round 8) it has paid, and whether it came in free (round 7), are staff bookkeeping. */
 const asPublic = ({
   paymentConfirmed: _paid,
+  paidBy: _paidBy,
   freeEntry: _free,
   freeEntryFunded: _funded,
   freeEntryReason: _reason,

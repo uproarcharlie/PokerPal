@@ -56,10 +56,16 @@ export default function Privacy() {
             "your name;",
             "your phone number, if you give one, so a club can recognise you when you come back and contact you about a game;",
             "a photo of you, only if you choose to take or upload one;",
-            "your tournament entries and results: buy-ins, re-buys and add-ons, finishing places, knockouts, points and prizes.",
+            "your tournament entries and results: buy-ins, re-buys and add-ons, finishing places, knockouts, points and prizes;",
+            "whether you have paid for an entry and, when the club's staff note it, how: in cash or by bank transfer.",
           ]}
         />
         <p>If you have a staff account to run a club, we also keep your name, email address, an optional phone number and your password (stored only in a scrambled form that cannot be read back).</p>
+        <p>
+          If your club takes payments by bank transfer, we keep the bank account its staff enter: the account name (which may be a
+          person&apos;s, such as the club treasurer&apos;s), the account number, the bank and any note for players, and which staff
+          member last changed them, and when.
+        </p>
         <p>
           To keep the site secure, our servers use the network address a request comes from to limit misuse, and staff who sign in
           get a cookie that keeps them signed in. We do not use advertising or tracking cookies.
@@ -73,7 +79,8 @@ export default function Privacy() {
       <Section title="Why we collect it">
         <List
           items={[
-            "to let clubs run their tournaments: who is playing, who has paid, who went out and who won;",
+            "to let clubs run their tournaments: who is playing, who has paid and how, who went out and who won;",
+            "to let players pay a club ahead of a game by bank transfer, when the club offers it;",
             "to show tournament standings and season leaderboards;",
             "to recognise a returning player by their phone number, or without one by letting them pick themselves from the club's players with the same name, so the same person is not signed up twice;",
             "to protect the site from misuse, such as too many sign-ups from one network.",
@@ -87,6 +94,8 @@ export default function Privacy() {
             "Your name, photo and results appear on the club's public tournament pages and leaderboards, which anyone with the link can open. Tournament pages that name players ask search engines not to list them.",
             "Your phone number is seen only by the staff of the club you first played at and by the site's administrators. It never appears on a public page.",
             "Staff email addresses are seen only by the site's administrators and the club's owner.",
+            "Who has paid, and how, is seen only by the club's staff and the site's administrators.",
+            "A club's bank account details are seen by its staff, the site's administrators, and a player right after they sign up for one of its games with a buy-in to transfer. They never appear on a public page, the club's TV screen or to other players.",
           ]}
         />
         <p>We do not sell your details or give them to anyone for marketing.</p>

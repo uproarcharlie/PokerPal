@@ -13,10 +13,11 @@ import { usePaymentDesk } from "../../staff-hooks";
 import { FreeEntrySheet } from "../free-entry/free-entry-sheet";
 import { useFreeEntryChanges } from "../free-entry/use-free-entry-changes";
 import { ConfirmedPayments, PendingPayments } from "./payment-lists";
+import { transferDeskOf } from "./transfer-split";
 import { usePaymentConfirmations } from "./use-payment-confirmations";
 
 interface PaymentDeskCardsProps {
-  tournament: Pick<TournamentDetailDto, "id" | "maxPlayers" | "buyInAmount">;
+  tournament: Pick<TournamentDetailDto, "id" | "maxPlayers" | "buyInAmount" | "showBankTransfer">;
   timeZone: string;
   /** The club's name for its take ("AP"), for what a funded free entry leaves out. */
   rakeLabel: string;
@@ -44,7 +45,10 @@ const WORDS = {
  * TD's phone it is the Money tab's lower half (round5-contracts §8.1). Both lists are followed every
  * DESK_REFRESH_MS while shown, so QR sign-ups arrive on their own. A payment confirmed under "seat them
  * once they've paid" says where the player sits. A game with no buy-in accepts its players instead
- * (round 7, item 8): accepting confirms them at $0.
+ * (round 7, item 8): accepting confirms them at $0. A game that shows bank transfer details after
+ * sign-up (round 8) shows each sign-up's transfer Reference and what of its amount the door still
+ * collects (the high hand), finds a name from the bank statement, and confirms each payment as Cash or
+ * Transfer.
  */
 export function PaymentDeskCards({ tournament, timeZone, rakeLabel }: PaymentDeskCardsProps) {
   const { pending, confirmed } = usePaymentDesk(tournament.id);
@@ -56,6 +60,7 @@ export function PaymentDeskCards({ tournament, timeZone, rakeLabel }: PaymentDes
   const [freeFor, setFreeFor] = useState<PendingRegistrationDto | null>(null);
   const freeButton = useRef<HTMLElement | null>(null);
   const buyInCents = toCents(tournament.buyInAmount);
+  const transfers = transferDeskOf(tournament);
   const words = freeTournament ? WORDS.free : WORDS.paid;
   // Max players accepted already (round 5, item 15): the waiting list says so before a refused tap. Both lists are needed to count.
   const full = pending.data && confirmed.data ? acceptRefusal([...pending.data, ...confirmed.data], tournament.maxPlayers) : null;
@@ -93,6 +98,7 @@ export function PaymentDeskCards({ tournament, timeZone, rakeLabel }: PaymentDes
             freeTournament={freeTournament}
             earlyBirds={earlyBirdToggle}
             full={full}
+            transfers={transfers}
           />
         </CardContent>
       </Card>
@@ -103,7 +109,14 @@ export function PaymentDeskCards({ tournament, timeZone, rakeLabel }: PaymentDes
           <CardDescription>{words.confirmedDescription}</CardDescription>
         </CardHeader>
         <CardContent>
-          <ConfirmedPayments query={confirmed} timeZone={timeZone} earlyBirds={earlyBirdToggle} freeEntries={freeEntryChanges} freeTournament={freeTournament} />
+          <ConfirmedPayments
+            query={confirmed}
+            timeZone={timeZone}
+            earlyBirds={earlyBirdToggle}
+            freeEntries={freeEntryChanges}
+            freeTournament={freeTournament}
+            transfers={transfers}
+          />
         </CardContent>
       </Card>
 

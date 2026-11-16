@@ -24,7 +24,28 @@ import type {
 } from "../schema";
 import { limitSchema, type Json, type WithViewer } from "./common";
 
-/** Keys that must never appear anywhere in a public response body. */
+/**
+ * The club's bank details (round 8: its columns, and the names its staff's payments endpoint and a
+ * sign-up's payment instructions give them). Only the club's staff read them (GET /api/clubs/:id/payments),
+ * and the one other body that carries them is the answer to a sign-up with a buy-in to transfer, for a
+ * tournament that shows them, to whoever made it (`paymentInstructions`): never the waiting list's, and
+ * no public read, list, club page or TV screen, for anyone.
+ */
+export const BANK_DETAIL_KEYS = [
+  "bankAccountName",
+  "bankAccountNumber",
+  "bankName",
+  "bankInstructions",
+  "bankDetails",
+  "accountName",
+  "accountNumber",
+  "paymentInstructions",
+] as const;
+
+/**
+ * Keys that must never appear anywhere in a public response body. One exception: the bank details in
+ * the answer to a sign-up (BANK_DETAIL_KEYS).
+ */
 export const FORBIDDEN_PUBLIC_KEYS = [
   "email",
   "phone",
@@ -38,6 +59,8 @@ export const FORBIDDEN_PUBLIC_KEYS = [
   "byUserId",
   // Who gave a free entry (round 7): a user id, kept on the server for the audit log.
   "freeEntryBy",
+  // The club's bank details (round 8): BANK_DETAIL_KEYS.
+  ...BANK_DETAIL_KEYS,
 ] as const;
 
 /** Paths of every key of `keys` in `value`, at any depth, JSON text inside strings included. */
@@ -116,7 +139,8 @@ export type PublicSeason = Json<Pick<Season, (typeof PUBLIC_SEASON_FIELDS)[numbe
 /**
  * A tournament as anyone may see it: every column except the audit user ids, the (large) finalize
  * snapshot and the club's takings (TOURNAMENT_TAKINGS_FIELDS). The money carried into its pool from an
- * earlier game (`carriedIn`, round 5 item 16) is public: it is what players play for.
+ * earlier game (`carriedIn`, round 5 item 16) is public: it is what players play for. So is
+ * `showBankTransfer` (round 8), sent beside these as BankTransferSetting.
  */
 export const PUBLIC_TOURNAMENT_FIELDS = [
   "id",
@@ -191,14 +215,25 @@ export type TournamentTakings = Json<Pick<Tournament, (typeof TOURNAMENT_TAKINGS
  * A tournament as the API answers it: the public fields, and the takings only for a viewer who runs its
  * club (absent for everyone else, so a public page can never show them by mistake).
  */
-export type PublicTournament = Json<Pick<Tournament, (typeof PUBLIC_TOURNAMENT_FIELDS)[number]>> & Partial<TournamentTakings>;
+export type PublicTournament = Json<Pick<Tournament, (typeof PUBLIC_TOURNAMENT_FIELDS)[number]>> & Partial<TournamentTakings> & BankTransferSetting;
+
+/**
+ * Round 8: whether the tournament tells whoever signs up how to pay by bank transfer (only while its
+ * club has bank details). Public, so the QR page can say so before sign-up; the details themselves are
+ * not (BANK_DETAIL_KEYS). Every tournament answer has it; optional only because one made before round 8
+ * (a cached answer, a test's fixture) has none, which reads as off.
+ */
+export interface BankTransferSetting {
+  showBankTransfer?: boolean;
+}
 
 /**
  * Keys that tell what the club takes (round 6): the takings columns, and the figures the prize-pool
  * maths, the finalize snapshot, the TV and the activity feed work them into (the AP itself, the gross
  * the pool is taken from, how the pool was set, what was kept, added or carried over, and to where),
  * and what it pays in for free entries, how many it gave and to whom (round 7: a registration's free
- * entry, whether the club funds it and why, are the staff's bookkeeping, as its payment is). None may appear in a body sent
+ * entry, whether the club funds it and why, are the staff's bookkeeping, as its payment is, and so is
+ * how it was paid: round 8). None may appear in a body sent
  * to someone who does not run the club, nor in any body the TV or the public prize pool is sent,
  * whoever looks: the server's no-takings scan runs `findTakingsKeys` over every public response. The
  * club's name for its take (`rakeLabel`) is not a figure, and stays public.
@@ -232,6 +267,8 @@ export const FORBIDDEN_TAKINGS_KEYS = [
   "freeEntryReason",
   "freeEntryNote",
   "freeEntryAt",
+  // How an entry paid (round 8): cash, bank transfer or a free entry, as the TD recorded it.
+  "paidBy",
 ] as const;
 
 const TAKINGS: ReadonlySet<string> = new Set(FORBIDDEN_TAKINGS_KEYS);

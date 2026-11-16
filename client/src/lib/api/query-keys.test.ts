@@ -24,9 +24,10 @@ describe("qk", () => {
     expect(covers(detail, qk.tournaments.registrations("t2"))).toBe(false);
   });
 
-  it("puts a season's public leaderboard and a club's blind structures under their detail keys", () => {
+  it("puts a season's public leaderboard and a club's blind structures and bank details under their detail keys", () => {
     expect(covers(qk.seasons.detail("s1"), qk.seasons.publicLeaderboard("s1"))).toBe(true);
     expect(covers(qk.clubs.detail("c1"), qk.clubs.blindStructures("c1"))).toBe(true);
+    expect(covers(qk.clubs.detail("c1"), qk.clubs.payments("c1"))).toBe(true);
   });
 
   it("keeps the finalize preview out of the tournament's keys, so refreshing a finalized tournament never re-previews it", () => {

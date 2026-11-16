@@ -14,6 +14,7 @@ import type { FinalizeInput, FinalizePreviewDto, FinalizePreviewInput, FinalizeR
 import type {
   AdjustCountsInput,
   ConfirmedRegistrationDto,
+  ConfirmPaymentInput,
   FreeEntryChangedDto,
   FreeEntryChangeInput,
   ManagedRegistration,
@@ -84,9 +85,12 @@ export const updateRegistration = (id: string, input: UpdateRegistrationInput) =
 /** A mistaken sign-up taken out again (only while nothing has happened to the entry). */
 export const removeRegistration = (id: string) => apiSend("DELETE", `/api/registrations/${segment(id)}`);
 
-/** Confirms a payment; under "once they've paid" the answer says where auto-seat put the player (round 5). */
-export const confirmPayment = (registrationId: string) =>
-  apiSend<PaymentConfirmedDto>("PATCH", `/api/registrations/${segment(registrationId)}/confirm-payment`);
+/**
+ * Confirms a payment, saying how the player paid when the desk asked (round 8: cash or bank transfer;
+ * no body otherwise). Under "once they've paid" the answer says where auto-seat put the player (round 5).
+ */
+export const confirmPayment = (registrationId: string, { paidBy }: ConfirmPaymentInput = {}) =>
+  apiSend<PaymentConfirmedDto>("PATCH", `/api/registrations/${segment(registrationId)}/confirm-payment`, paidBy ? { paidBy } : undefined);
 
 /**
  * Gives a free entry (round 7), changes one, takes one back (a normal unpaid entry) or marks one paid.

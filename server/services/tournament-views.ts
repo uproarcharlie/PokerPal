@@ -21,10 +21,12 @@ import { conflict, type HttpError } from "../http/errors";
 /**
  * A tournament as its viewer may see it: no audit user ids, no snapshot, and the club's takings (its AP
  * rates, a manual AP total, why the pool was adjusted, where a prize difference goes) only for someone
- * who runs the club (`canManage`; round 6).
+ * who runs the club (`canManage`; round 6). Whether it shows bank transfer details after sign-up (round
+ * 8) is for everyone; the details are not.
  */
 export const toPublicTournament = (row: Tournament, canManage: boolean) => ({
   ...pickFields(row, PUBLIC_TOURNAMENT_FIELDS),
+  showBankTransfer: row.showBankTransfer === true,
   ...(canManage ? pickFields(row, TOURNAMENT_TAKINGS_FIELDS) : {}),
 });
 

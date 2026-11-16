@@ -7,7 +7,7 @@ import { server } from "@test/msw/server";
 import { apiError, mockSignedIn, renderWithApp } from "@test/helpers/web";
 import { installFakeXhr } from "@test/helpers/fake-xhr";
 import { seasonDto } from "@test/helpers/dto";
-import { clubDto, recordBodies, tournamentDto } from "@test/helpers/f1-tournaments";
+import { clubDto, noBankDetails, recordBodies, tournamentDto } from "@test/helpers/f1-tournaments";
 import { CreateTournamentDialog } from "./create-tournament-dialog";
 
 const otherClub = clubDto({ id: "c2", name: "Visitors Club", rakeLabel: null, viewer: { canManage: false, canOwn: false } });
@@ -21,6 +21,7 @@ function mockForm({ seasonsOf = {} as Record<string, Array<{ id: string; name: s
       return HttpResponse.json((seasonsOf[clubId] ?? []).map((season) => ({ ...season, clubId, startDate: "2026-01-01T00:00:00.000Z", endDate: null, isActive: true, createdAt: null })));
     }),
     http.get("/api/seasons/:id/points-systems", () => HttpResponse.json([])),
+    noBankDetails(),
     http.post("/api/tournaments", async ({ request }) => {
       await created.record(request);
       return HttpResponse.json(tournamentDto(), { status: 201 });

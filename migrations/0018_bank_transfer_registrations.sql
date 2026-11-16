@@ -1,0 +1,21 @@
+-- 0018_bank_transfer_registrations.sql
+-- Round 8 (bank transfer payments): how an accepted entry paid, for the club's records:
+-- 'cash' | 'transfer' (what the TD picked when confirming the payment) | 'free' (a free entry,
+-- round 7). The app validates the value (shared/api/registrations PAID_BY). NULL: not recorded (every
+-- payment confirmed before round 8, one confirmed without saying how, and every unpaid entry). Staff
+-- bookkeeping, like the payment itself: never in a public response (shared/api/public
+-- FORBIDDEN_TAKINGS_KEYS).
+--
+-- ADDITIVE + IDEMPOTENT ONLY: one nullable column with no default, so every existing registration
+-- reads "not recorded" and every pool, payout and payment is exactly as before. No constraint is
+-- added. Re-running is a no-op.
+--
+-- Its own file (round 8: 0016-0018, one table each): the ALTER takes ACCESS EXCLUSIVE on
+-- tournament_registrations only, and in a transaction of its own it holds no other lock while it
+-- waits, so it cannot deadlock with the live app (which locks tournaments, then registrations, or the
+-- other way).
+--
+-- Deploy order: old code with this schema is fine (its inserts leave the column NULL, and it never
+-- names it). New code needs it, which the boot applies before it listens.
+
+ALTER TABLE tournament_registrations ADD COLUMN IF NOT EXISTS paid_by text;

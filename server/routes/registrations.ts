@@ -1,11 +1,13 @@
 import { Router } from "express";
 import {
   adjustCountsSchema,
+  confirmPaymentSchema,
   freeEntryChangeSchema,
   publicRegistrationSchema,
   staffRegistrationSchema,
   updateRegistrationSchema,
   type AdjustCountsInput,
+  type ConfirmPaymentInput,
   type FreeEntryChangeInput,
   type UpdateRegistrationInput,
 } from "@shared/api/registrations";
@@ -47,7 +49,8 @@ export function registrationsRoutes({ env, limiters }: RouteDeps): Router {
    * caller just typed in (signUpToken); staff of the club may also set the opening counts and payment
    * and register anyone, with a free entry too (round 7: the public schema has no such field, so a QR
    * sign-up's is ignored). Sign-ups past Max players join the waiting list; accepting past it is
-   * refused (round 5, item 15).
+   * refused (round 5, item 15). For a tournament that shows its club's bank details after sign-up, the
+   * answer carries how to pay by transfer (round 8: paymentInstructions), only here.
    */
   router.post(
     "/api/tournaments/:id/registrations",
@@ -58,7 +61,10 @@ export function registrationsRoutes({ env, limiters }: RouteDeps): Router {
       const staff = await canManageClub(req.user, tournament.clubId);
       const input = parseOrThrow(staff ? staffRegistrationSchema : publicRegistrationSchema, req.body ?? {}, INVALID);
       const token = signUpTokenScope(env, input.playerId, input.signUpToken);
-      res.status(201).json(await registerPlayer(req, tournament.id, input, { staff, vouched: token !== null, vouchedAt: token?.clubId ?? null }));
+      const created = await registerPlayer(req, tournament.id, input, { staff, vouched: token !== null, vouchedAt: token?.clubId ?? null });
+      // Its payment instructions name the club's bank account (round 8): for whoever signed up, never a cache.
+      if (created.paymentInstructions) res.set("Cache-Control", "no-store");
+      res.status(201).json(created);
     }),
   );
 
@@ -92,8 +98,9 @@ export function registrationsRoutes({ env, limiters }: RouteDeps): Router {
   router.patch(
     "/api/registrations/:id/confirm-payment",
     requireClubManager(clubFrom.registration()),
-    asyncHandler(async (req, res) => {
-      res.json(await confirmPayment(req.params.id));
+    validateBody(confirmPaymentSchema, INVALID),
+    asyncHandler<{ id: string }, unknown, ConfirmPaymentInput>(async (req, res) => {
+      res.json(await confirmPayment(req.params.id, req.body));
     }),
   );
 

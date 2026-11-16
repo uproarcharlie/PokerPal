@@ -225,3 +225,97 @@ export interface MembersCountResponse {
 
 /** GET /api/clubs/member-counts: the same count for every club, by club id. */
 export type MemberCountsResponse = Record<string, number>;
+
+/* ---------- bank transfer payments (round 8: Club settings → Payments) ---------- */
+
+/** "12-3456-7890123-00": bank, branch, account, and a suffix of 2 or 3 digits. */
+const NZ_BANK_ACCOUNT = /^(\d{2})-(\d{4})-(\d{7})-(\d{2,3})$/;
+
+/**
+ * A New Zealand bank account number as the banks write it ("12-3456-7890123-00", or a 3-digit suffix
+ * "-000"), from what someone typed: dashes, spaces or nothing between the parts ("12 3456 7890123 00",
+ * "123456789012300"). Null when it is not one. The digits are not checked against the banks' check-digit
+ * rules: a refusal of a real account would stop a club taking payments, and the club checks its own number.
+ */
+export function normaliseNzBankAccount(text: string): string | null {
+  const trimmed = text.trim();
+  if (trimmed.length > 40) return null;
+  const parts = trimmed.split(/[\s-]+/).filter((part) => part !== "");
+  const digits = parts.join("");
+  if (!/^\d{15,16}$/.test(digits)) return null;
+  const formatted =
+    parts.length === 1 ? `${digits.slice(0, 2)}-${digits.slice(2, 6)}-${digits.slice(6, 13)}-${digits.slice(13)}` : parts.join("-");
+  return NZ_BANK_ACCOUNT.test(formatted) ? formatted : null;
+}
+
+export const BANK_DETAILS_LIMITS = Object.freeze({ accountName: 100, bankName: 60, instructions: 300 });
+
+/** A New Zealand account number, stored as the banks write it (normaliseNzBankAccount). */
+export const nzBankAccountSchema = z.string().transform((text, ctx) => {
+  const formatted = normaliseNzBankAccount(text);
+  if (formatted !== null) return formatted;
+  ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Enter a New Zealand account number, like 12-3456-7890123-00" });
+  return z.NEVER;
+});
+
+/** The club's bank details as its staff type them: the account's name and number, and optionally the bank and a short note. */
+export const bankDetailsSchema = z.object({
+  accountName: requiredText(BANK_DETAILS_LIMITS.accountName),
+  accountNumber: nzBankAccountSchema,
+  bankName: optionalText(BANK_DETAILS_LIMITS.bankName),
+  instructions: optionalText(BANK_DETAILS_LIMITS.instructions),
+});
+
+/**
+ * PUT /api/clubs/:id/payments (the club's owner and managers, and admins): the club's bank details,
+ * replaced whole (a bank or note left out is removed), or `bankDetails: null` to remove them. Removing
+ * them stops every tournament of the club showing them after sign-up, whatever its
+ * showBankTransfer says (that setting is kept, for when details are added again).
+ */
+export const updateClubPaymentsSchema = z.object({ bankDetails: bankDetailsSchema.nullable() });
+export type UpdateClubPaymentsInput = z.infer<typeof updateClubPaymentsSchema>;
+
+/** A club's bank account for payments by transfer (round 8). */
+export interface BankDetails {
+  accountName: string;
+  /** As the banks write it: "12-3456-7890123-00". */
+  accountNumber: string;
+  bankName: string | null;
+  /** The club's own note for players paying by transfer, e.g. "Pay by 5pm on the day". */
+  instructions: string | null;
+}
+
+/** The parts of the bank details, in the order the Payments tab shows them. */
+export const BANK_DETAILS_FIELDS = Object.freeze(["accountName", "accountNumber", "bankName", "instructions"] as const satisfies readonly (keyof BankDetails)[]);
+
+/** How many of the latest changes to the bank details the Payments tab is sent. */
+export const BANK_DETAILS_CHANGES_SHOWN = 5;
+
+/**
+ * One change to the club's bank details, from the audit log: any of its staff may change them, and a
+ * new account number redirects every transfer that follows, so the tab says who did it, and when
+ * (R8REV0-PRIV-03). No values: what the details are now is beside it.
+ */
+export interface BankDetailsChangeDto {
+  /** ISO 8601. */
+  at: string;
+  /** Who made it (a staff member, or an admin): their name; null once their account is gone. */
+  by: string | null;
+  /** "added" when the club had none before, "removed" when it has none after. */
+  change: "added" | "changed" | "removed";
+  /** The parts that differ: every part set before or after, for an added or removed one. */
+  fields: (keyof BankDetails)[];
+}
+
+/**
+ * GET and PUT /api/clubs/:id/payments (the club's owner and managers, and admins). Never on a public
+ * page, the TV or a public response: the one other place the details go is the answer to a sign-up
+ * with a buy-in to transfer (shared/api/registrations PaymentInstructionsDto).
+ */
+export interface ClubPaymentsDto {
+  clubId: string;
+  /** Null: none set, so no tournament of the club can show them (showBankTransfer is refused). */
+  bankDetails: BankDetails | null;
+  /** The latest changes, newest first (at most BANK_DETAILS_CHANGES_SHOWN): "Last changed by Sam on 17 Nov". */
+  changes: BankDetailsChangeDto[];
+}

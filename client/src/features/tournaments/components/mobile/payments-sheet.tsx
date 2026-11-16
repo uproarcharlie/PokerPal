@@ -3,6 +3,7 @@ import { Banknote } from "lucide-react";
 import { PhoneSheet, PhoneSheetBody, PhoneSheetHeader } from "@/components/shared/phone-sheet";
 import { usePendingPayments } from "../../staff-hooks";
 import { PendingPayments } from "../payment-desk/payment-lists";
+import type { TransferDesk } from "../payment-desk/transfer-split";
 import { usePaymentConfirmations } from "../payment-desk/use-payment-confirmations";
 
 interface PaymentsSheetProps {
@@ -12,6 +13,11 @@ interface PaymentsSheetProps {
   freeTournament: boolean;
   /** Why nobody more can be accepted now (Max players accepted already: round 5, item 15), or null. */
   full: string | null;
+  /**
+   * The game shows bank transfer details after sign-up (round 8; null: it does not): references, what
+   * the door still collects, a name search, Cash or Transfer.
+   */
+  transfers: TransferDesk | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   returnFocusTo?: RefObject<HTMLElement | null>;
@@ -22,7 +28,7 @@ interface PaymentsSheetProps {
  * Confirm, one tap from wherever the TD is. Under "seat them once they've paid" confirming is what seats
  * a late arrival, and on the Money tab the list sat below the figures, the payouts and the AP.
  */
-export function PaymentsSheet({ tournamentId, timeZone, freeTournament, full, open, onOpenChange, returnFocusTo }: PaymentsSheetProps) {
+export function PaymentsSheet({ tournamentId, timeZone, freeTournament, full, transfers, open, onOpenChange, returnFocusTo }: PaymentsSheetProps) {
   const heading = useRef<HTMLHeadingElement>(null);
   return (
     <PhoneSheet side="bottom" open={open} onOpenChange={onOpenChange} returnFocusTo={returnFocusTo} initialFocus={heading}>
@@ -33,12 +39,20 @@ export function PaymentsSheet({ tournamentId, timeZone, freeTournament, full, op
         description={freeTournament ? "Free tournament: accept each player who signed up." : "Confirm each player's payment as you take it at the desk."}
       />
       {/* Followed only while open. */}
-      <PhoneSheetBody>{open ? <PendingList tournamentId={tournamentId} timeZone={timeZone} freeTournament={freeTournament} full={full} /> : null}</PhoneSheetBody>
+      <PhoneSheetBody>
+        {open ? <PendingList tournamentId={tournamentId} timeZone={timeZone} freeTournament={freeTournament} full={full} transfers={transfers} /> : null}
+      </PhoneSheetBody>
     </PhoneSheet>
   );
 }
 
-function PendingList({ tournamentId, timeZone, freeTournament, full }: { tournamentId: string; timeZone: string; freeTournament: boolean; full: string | null }) {
+function PendingList({
+  tournamentId,
+  timeZone,
+  freeTournament,
+  full,
+  transfers,
+}: Pick<PaymentsSheetProps, "tournamentId" | "timeZone" | "freeTournament" | "full" | "transfers">) {
   const pending = usePendingPayments(tournamentId);
   const { confirmingIds, confirm, earlyBirds } = usePaymentConfirmations(tournamentId, { freeTournament });
   // A free entry has its own quick action (round 7): this sheet only takes payments.
@@ -51,6 +65,7 @@ function PendingList({ tournamentId, timeZone, freeTournament, full }: { tournam
       freeTournament={freeTournament}
       earlyBirds={earlyBirds}
       full={full}
+      transfers={transfers}
     />
   );
 }

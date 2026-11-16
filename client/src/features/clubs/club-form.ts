@@ -1,7 +1,8 @@
 /** The club forms' schemas (taken from shared/api/clubs, never restated) and their values from a ClubDto. */
 import { z } from "zod";
-import { clubSlugSchema, createClubSchema, updateClubSchema } from "@shared/api/clubs";
+import { clubSlugSchema, createClubSchema, updateClubSchema, type BankDetails } from "@shared/api/clubs";
 import type { ClubDto } from "@shared/api/public";
+import { routes } from "@/app/routes";
 import { DEFAULT_TIME_ZONE } from "@/lib/format";
 
 const PROFILE_FIELDS = { name: true, slug: true, description: true, imageUrl: true, address: true, timezone: true, rakeLabel: true } as const;
@@ -68,6 +69,29 @@ export function socialValues(club: ClubDto): ClubSocialValues {
     websiteUrl: club.websiteUrl ?? "",
   };
 }
+
+/** What the Payments tab edits (round 8): every box as text, "" for none. */
+export interface BankDetailsValues {
+  accountName: string;
+  accountNumber: string;
+  bankName: string;
+  instructions: string;
+}
+
+export function bankDetailsValues(details: BankDetails | null): BankDetailsValues {
+  return {
+    accountName: details?.accountName ?? "",
+    accountNumber: details?.accountNumber ?? "",
+    bankName: details?.bankName ?? "",
+    instructions: details?.instructions ?? "",
+  };
+}
+
+/** The settings tab a link may open (`?tab=`): the Payments tab, from the tournament form's bank-transfer switch. */
+export const SETTINGS_TABS = ["profile", "social", "tournaments", "payments", "colours", "managers"] as const;
+export type SettingsTab = (typeof SETTINGS_TABS)[number];
+
+export const clubSettingsHref = (clubId: string, tab: SettingsTab) => `${routes.clubSettings(clubId)}?tab=${tab}`;
 
 /** A club URL made from its name: "Central Stars!" → "central-stars". */
 export function slugFromName(name: string): string {

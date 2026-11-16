@@ -15,6 +15,7 @@ import type {
   FreeEntryStatus,
   ManagedRegistration,
   PaymentConfirmedDto,
+  PaymentStatus,
   PendingRegistrationDto,
   RegistrationCreatedDto,
 } from "@shared/api/registrations";
@@ -36,8 +37,11 @@ import type {
 /** What a service function's promise resolves to, as JSON. */
 type Out<F extends (...args: never[]) => unknown> = Json<Awaited<ReturnType<F>>>;
 
-/** A staff registration as the server always sends it: with its free entry (round 7; optional in the DTO for older fixtures). */
-type Staff<T> = T & Required<FreeEntryStatus>;
+/**
+ * A staff registration as the server always sends it: with its free entry (round 7) and how it paid
+ * (round 8), both optional in the DTO for older fixtures.
+ */
+type Staff<T> = T & Required<FreeEntryStatus> & Required<Pick<PaymentStatus, "paidBy">>;
 
 describe("service results serialise to the shared DTOs", () => {
   it("activity", () => {

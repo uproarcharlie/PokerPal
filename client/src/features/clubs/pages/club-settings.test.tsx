@@ -44,6 +44,8 @@ beforeEach(() => {
       staffReads += 1;
       return HttpResponse.json(staffDto());
     }),
+    // The Payments tab (round 8) stays mounted, so its bank details are read with the page.
+    http.get("/api/clubs/c1/payments", () => HttpResponse.json({ clubId: "c1", bankDetails: null, changes: [] })),
   );
   serveClub(
     clubDto({
@@ -73,7 +75,7 @@ describe("ClubSettingsPage: who sees what", () => {
     renderSettings();
 
     expect(await screen.findByRole("heading", { level: 1, name: "Central Stars Settings" })).toBeInTheDocument();
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Profile", "Social links", "Tournaments", "Colours", "Managers"]);
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Profile", "Social links", "Tournaments", "Payments", "Colours", "Managers"]);
     expect(screen.getByRole("button", { name: /Delete Club/ })).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "Managers" }));
@@ -86,7 +88,7 @@ describe("ClubSettingsPage: who sees what", () => {
     renderSettings();
 
     expect(await screen.findByText("Central Stars Settings")).toBeInTheDocument();
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Profile", "Social links", "Tournaments", "Colours"]);
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Profile", "Social links", "Tournaments", "Payments", "Colours"]);
     expect(screen.queryByRole("button", { name: /Delete Club/ })).not.toBeInTheDocument();
     expect(staffReads).toBe(0);
   });

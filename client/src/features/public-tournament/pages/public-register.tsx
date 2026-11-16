@@ -42,7 +42,7 @@ function WaitingListNotice({ tournament, signedUp }: { tournament: TournamentDet
 }
 
 function Registration({ tournament }: { tournament: TournamentDetailDto }) {
-  const flow = useRegistrationFlow(tournament.id);
+  const flow = useRegistrationFlow(tournament.id, { closed: isClosedStatus(tournament.status) });
   const { data: club } = useClub(tournament.clubId);
   // Who is already in, for the waiting-list notice: a failed count leaves the server to number the sign-up.
   const { data: signedUp } = useRegistrations(tournament.id);

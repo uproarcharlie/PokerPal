@@ -7,6 +7,7 @@ import { onTestFinished, vi } from "vitest";
 import type { FinalizePreviewDto, FinalizePreviewInput, FinalizeResultDto, FinalizeRowDto } from "@shared/api/finalize";
 import { toPublicPrizes } from "@shared/api/live-display";
 import type { PrizePoolDto } from "@shared/api/prize-pool";
+import type { ClubPaymentsDto } from "@shared/api/clubs";
 import type { ClubDto, PublicRegistration } from "@shared/api/public";
 import type { FreeEntryStatus } from "@shared/api/registrations";
 import type { TournamentDetailDto, TournamentListItemDto, TournamentStatus } from "@shared/api/tournaments";
@@ -208,9 +209,16 @@ export function recordBodies(): { bodies: unknown[]; record: (request: Request) 
 }
 
 /**
+ * A club with no bank details (round 8), for every screen that shows the tournament form: its "Show
+ * bank transfer details after sign-up" switch reads them.
+ */
+export const noBankDetails = () =>
+  http.get("/api/clubs/:id/payments", ({ params }) => HttpResponse.json<ClubPaymentsDto>({ clubId: String(params.id), bankDetails: null, changes: [] }));
+
+/**
  * The Phase 4 reads the TD's page makes beside its own, before any of it is set up: the live display
  * with no clock (the header's chip and the Clock tab), the AP panel's prize pool, no seating (the
- * Standings' Seat column) and no earlier structures to copy.
+ * Standings' Seat column), no earlier structures to copy, and no bank details (the edit form).
  */
 export function mockDeskLiveReads(tournament: TournamentDetailDto, registrations: readonly PublicRegistration[]): void {
   server.use(
@@ -222,5 +230,6 @@ export function mockDeskLiveReads(tournament: TournamentDetailDto, registrations
     http.get(`/api/public/tournaments/${tournament.id}/prizes`, () => HttpResponse.json(toPublicPrizes(tournament, registrations))),
     http.get(`/api/tournaments/${tournament.id}/seating`, () => HttpResponse.json(seatingDto({ tournamentId: tournament.id }))),
     http.get(`/api/clubs/${tournament.clubId}/blind-structures`, () => HttpResponse.json([])),
+    noBankDetails(),
   );
 }

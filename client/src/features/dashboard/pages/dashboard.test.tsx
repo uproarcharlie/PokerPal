@@ -7,6 +7,7 @@ import type { ClubDto, PublicSeason } from "@shared/api/public";
 import type { LeaderboardEntryDto } from "@shared/api/seasons";
 import type { TournamentListItemDto } from "@shared/api/tournaments";
 import { server } from "@test/msw/server";
+import { noBankDetails } from "@test/helpers/f1-tournaments";
 import { clubDto, leaderboardEntry, seasonDto, tournamentListItem } from "@test/helpers/f5-dto";
 import { apiError, mockSignedIn, renderWithApp } from "@test/helpers/web";
 import DashboardPage from "./dashboard";
@@ -44,6 +45,7 @@ function serve({ stats = STATS, clubs = [mine, theirs], tournaments = [], season
     http.get("/api/dashboard/stats", () => (stats instanceof Response ? stats : HttpResponse.json(stats))),
     http.get("/api/clubs", () => HttpResponse.json(clubs)),
     http.get("/api/clubs/member-counts", () => HttpResponse.json(memberCounts)),
+    noBankDetails(),
     http.get("/api/tournaments", ({ request }) => {
       asked.push(new URL(request.url).search);
       return HttpResponse.json(filtered(tournaments, request));

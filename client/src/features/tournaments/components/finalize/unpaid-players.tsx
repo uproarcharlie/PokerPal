@@ -36,7 +36,7 @@ export function UnpaidPlayers({ tournamentId, unpaid, leftOut, onLeaveOut, onCon
 
   const confirm = async (player: UnpaidPlayerDto) => {
     try {
-      const paid = await rows.run(player.registrationId, () => confirmPayment.mutateAsync(player.registrationId));
+      const paid = await rows.run(player.registrationId, () => confirmPayment.mutateAsync({ registrationId: player.registrationId }));
       onConfirmed(player.registrationId);
       const confirmed = `${player.playerName} has paid: ${formatMoney(player.amountDueCents)} is in the prize pool.`;
       const left = highHandLeftText(paid.highHandUnawardedCents);

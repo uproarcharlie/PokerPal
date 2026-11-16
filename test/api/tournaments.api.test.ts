@@ -10,7 +10,7 @@ import session from "express-session";
 import request from "supertest";
 import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { Json } from "@shared/api/common";
-import { findForbiddenKeys, findTakingsKeys, PUBLIC_TOURNAMENT_FIELDS, TOURNAMENT_TAKINGS_FIELDS } from "@shared/api/public";
+import { findForbiddenKeys, findTakingsKeys, PUBLIC_TOURNAMENT_FIELDS, TOURNAMENT_TAKINGS_FIELDS, type BankTransferSetting } from "@shared/api/public";
 import { MAX_UPCOMING_TOURNAMENTS_PER_CLUB, type TournamentDetailDto, type TournamentListItemDto } from "@shared/api/tournaments";
 import { activityLog, auditLog, tournamentRegistrations, tournaments, type Tournament } from "@shared/schema";
 import { createApp } from "../../server/app";
@@ -50,11 +50,14 @@ const activityFor = async (tournamentId: string) =>
 
 const auditFor = (targetId: string) => testDb().select().from(auditLog).where(eq(auditLog.targetId, targetId));
 
-/** The tournament as the public may see it, and with the club's takings for someone who runs the club (round 6). */
+/**
+ * The tournament as the public may see it, and with the club's takings for someone who runs the club
+ * (round 6). Whether it shows bank transfer details after sign-up is for everyone (round 8).
+ */
 const publicView = (row: Tournament, canManage = false) => {
   const json = asJson(row) as Record<string, unknown>;
   const fields = canManage ? [...PUBLIC_TOURNAMENT_FIELDS, ...TOURNAMENT_TAKINGS_FIELDS] : PUBLIC_TOURNAMENT_FIELDS;
-  return Object.fromEntries(fields.map((key) => [key, json[key] ?? null]));
+  return { ...Object.fromEntries(fields.map((key) => [key, json[key] ?? null])), showBankTransfer: row.showBankTransfer };
 };
 
 /** The finalize snapshot goes only to someone who runs the club: the public read the prizes from GET /api/public/tournaments/:id/prizes. */
@@ -80,10 +83,12 @@ const newTournament = (clubId: string, extra: Record<string, unknown> = {}) => (
 describe("response types", () => {
   it("serialise to the shared DTOs", () => {
     type ListItem = Json<Awaited<ReturnType<typeof listTournaments>>[number]>;
+    // The server always says whether bank transfer details are shown (round 8; optional in the DTO for older fixtures).
+    type Sent<T> = T & Required<BankTransferSetting>;
     expectTypeOf<Json<TournamentDetail>>().toExtend<TournamentDetailDto>();
-    expectTypeOf<TournamentDetailDto>().toExtend<Json<TournamentDetail>>();
+    expectTypeOf<Sent<TournamentDetailDto>>().toExtend<Json<TournamentDetail>>();
     expectTypeOf<ListItem>().toExtend<TournamentListItemDto>();
-    expectTypeOf<TournamentListItemDto>().toExtend<ListItem>();
+    expectTypeOf<Sent<TournamentListItemDto>>().toExtend<ListItem>();
   });
 });
 

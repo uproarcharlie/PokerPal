@@ -1,4 +1,4 @@
-import { useParams } from "wouter";
+import { useParams, useSearch } from "wouter";
 import type { ClubDto } from "@shared/api/public";
 import { usePageMeta } from "@/app/page-meta";
 import { routes } from "@/app/routes";
@@ -13,7 +13,9 @@ import { ClubColoursTab } from "@/features/branding/components/club-colours-tab"
 import { SignupPhotoField } from "@/features/players/components/signup-photo-field";
 import { ClubTableDefaultsFields } from "@/features/seating/components/club-table-defaults-fields";
 import { clubTimeZone } from "@/lib/format";
+import { SETTINGS_TABS, type SettingsTab } from "../club-form";
 import { ClubNotFound } from "../components/club-not-found";
+import { ClubPaymentsTab } from "../components/club-payments-tab";
 import { ClubProfileForm } from "../components/club-profile-form";
 import { ClubSocialForm } from "../components/club-social-form";
 import { ClubStaffCard } from "../components/club-staff-card";
@@ -49,17 +51,27 @@ function TournamentDefaultsTab({ club }: { club: ClubDto }) {
   );
 }
 
+/** The tab a link asked for (`?tab=payments`), when there is one by that name. */
+function linkedTab(search: string): SettingsTab | undefined {
+  const tab = new URLSearchParams(search).get("tab");
+  return SETTINGS_TABS.find((name) => name === tab);
+}
+
 function ClubSettings({ club }: { club: ClubDto }) {
   const { isAdmin } = useAuth();
+  const linked = linkedTab(useSearch());
   // Each tab is one entry: the club's colours are one (round 5); its fuller branding (Phase 5) extends that tab.
-  const tabs: HostedTab[] = [
+  const tabs: (HostedTab & { value: SettingsTab })[] = [
     { value: "profile", label: "Profile", content: <ClubProfileForm club={club} />, keepMounted: true },
     { value: "social", label: "Social links", content: <ClubSocialForm club={club} />, keepMounted: true },
     { value: "tournaments", label: "Tournaments", content: <TournamentDefaultsTab club={club} />, keepMounted: true },
+    // Round 8: the bank account players may pay into ahead; the owner's and managers' alike.
+    { value: "payments", label: "Payments", content: <ClubPaymentsTab club={club} />, keepMounted: true },
     { value: "colours", label: "Colours", content: <ClubColoursTab club={club} />, keepMounted: true },
   ];
   // Managers and deletion are the owner's and admins' (the staff list answers 403 to managers).
   if (club.viewer.canOwn) tabs.push({ value: "managers", label: "Managers", content: <ManagersTab club={club} canInviteOwner={isAdmin} /> });
+  const firstTab = tabs.some((tab) => tab.value === linked) ? linked : undefined;
 
   return (
     <>
@@ -70,13 +82,16 @@ function ClubSettings({ club }: { club: ClubDto }) {
         actions={club.viewer.canOwn ? <DeleteClubButton club={club} /> : undefined}
       />
       <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6 lg:px-8">
-        <TabHost tabs={tabs} />
+        <TabHost tabs={tabs} defaultValue={firstTab} />
       </div>
     </>
   );
 }
 
-/** A club's settings, for the people who run it: profile, social links, tournament defaults, colours and (owner, admins) its managers. */
+/**
+ * A club's settings, for the people who run it: profile, social links, tournament defaults, payments
+ * (bank details), colours and (owner, admins) its managers.
+ */
 export default function ClubSettingsPage() {
   const { id = "" } = useParams<{ id: string }>();
   const club = useClub(id);

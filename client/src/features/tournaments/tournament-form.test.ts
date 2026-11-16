@@ -263,6 +263,15 @@ describe("a part priced at $0 (P3REV5-CQ-02)", () => {
     expect(formValuesFromTournament(tournamentDto({ enableHighHand: true, highHandAmount: null }), ZONE).enableHighHand).toBe(false);
     expect(formValuesFromTournament(tournamentDto({ enableHighHand: true, highHandAmount: "5.00" }), ZONE).enableHighHand).toBe(true);
   });
+
+  it("starts a new tournament with bank transfer details off, opens a stored setting as it is, and resends it only when changed (round 8)", () => {
+    expect(NEW_TOURNAMENT_VALUES.showBankTransfer).toBe(false);
+    const on = formValuesFromTournament(tournamentDto({ showBankTransfer: true }), ZONE);
+    expect(on.showBankTransfer).toBe(true);
+    expect(formValuesFromTournament(tournamentDto({ showBankTransfer: undefined }), ZONE).showBankTransfer).toBe(false);
+    expect(changedConfig(configOf(on), configOf(on))).toEqual({});
+    expect(changedConfig(configOf(on), configOf({ ...on, showBankTransfer: false }))).toEqual({ showBankTransfer: false });
+  });
 });
 
 describe("entries already recorded (P3REV0-PARITY-EDIT-REPRICE)", () => {

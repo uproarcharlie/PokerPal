@@ -8,6 +8,7 @@ import {
   type Tournament,
   type TournamentRegistration,
 } from "@shared/schema";
+import type { PaidBy } from "@shared/api/registrations";
 import type { Executor } from "../db";
 
 export async function getTournamentRegistration(ex: Executor, id: string): Promise<TournamentRegistration | undefined> {
@@ -166,11 +167,11 @@ export async function removeKnockout(ex: Executor, id: string): Promise<void> {
     .where(eq(tournamentRegistrations.id, id));
 }
 
-/** Marks the payment confirmed; undefined when it already was (or the registration is gone). */
-export async function confirmPayment(ex: Executor, id: string): Promise<TournamentRegistration | undefined> {
+/** Marks the payment confirmed, and how it was paid (round 8; null: not said); undefined when it already was (or the registration is gone). */
+export async function confirmPayment(ex: Executor, id: string, paidBy: PaidBy | null = null): Promise<TournamentRegistration | undefined> {
   const [registration] = await ex
     .update(tournamentRegistrations)
-    .set({ paymentConfirmed: true })
+    .set({ paymentConfirmed: true, paidBy })
     .where(and(eq(tournamentRegistrations.id, id), sql`${tournamentRegistrations.paymentConfirmed} IS NOT TRUE`))
     .returning();
   return registration;

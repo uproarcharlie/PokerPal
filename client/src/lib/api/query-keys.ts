@@ -50,6 +50,8 @@ export const qk = {
     staff: (id: string) => ["clubs", "detail", id, "staff"] as const,
     /** GET /api/clubs/:id/blind-structures (staff): structures of recent tournaments, to copy */
     blindStructures: (id: string) => ["clubs", "detail", id, "blind-structures"] as const,
+    /** GET /api/clubs/:id/payments (owner, managers or admin): the club's bank details (round 8) */
+    payments: (id: string) => ["clubs", "detail", id, "payments"] as const,
   },
 
   seasons: {

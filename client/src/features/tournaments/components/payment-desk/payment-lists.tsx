@@ -1,18 +1,30 @@
-import { useId } from "react";
+import { useId, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
-import { Check, CheckCircle2, Clock, Hourglass, Ticket, Trophy, Undo2 } from "lucide-react";
+import { Banknote, Check, CheckCircle2, Clock, Hourglass, Landmark, Ticket, Trophy, Undo2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { EmptyState, LoadingRows, QueryState } from "@/components/shared/query-state";
 import { ResponsiveTable, type ResponsiveColumn } from "@/components/shared/responsive-table";
 import { formatMoney, formatTime, plural } from "@/lib/format";
-import type { ConfirmedRegistrationDto, PendingRegistrationDto, StaffRegistrationDto } from "@shared/api/registrations";
+import { normaliseName } from "@shared/api/players";
+import {
+  PAID_BY_LABELS,
+  paymentReference,
+  type ConfirmedRegistrationDto,
+  type PaymentMethod,
+  type PendingRegistrationDto,
+  type StaffRegistrationDto,
+} from "@shared/api/registrations";
 import { isFreeEntry } from "@shared/domain/prize-pool";
-import { toCents } from "@shared/domain/money";
+import { toCents, type Cents } from "@shared/domain/money";
 import { waitingListPlaceOf } from "@/features/public-tournament/waiting-list";
 import { playerName } from "../../player-name";
 import { FreeEntryBadge } from "../free-entry/free-entry-badge";
+import { transferSplit, type TransferDesk, type TransferSplit } from "./transfer-split";
 
 /** A phone number for the player's own club; another club's player keeps theirs (ClubPlayer.canEdit). */
 const phoneOf = (registration: StaffRegistrationDto) =>
@@ -72,6 +84,29 @@ function freeEntryNote(rows: readonly ConfirmedRegistrationDto[], freeTournament
   return free > 0 ? `confirmed · ${free} free ${free === 1 ? "entry" : "entries"}` : "confirmed and paid";
 }
 
+const money = (cents: Cents) => formatMoney(cents, { forceCents: true });
+
+/**
+ * An entry's amount and, where its player was told to transfer the buy-in only (round 8), the two parts
+ * under it: what the transfer pays and what is still paid at the door (the high hand), so the TD
+ * matches the bank line to the buy-in and knows what else to collect.
+ */
+function SplitAmount({ id, amount, split }: { id: string; amount: number; split: TransferSplit | null }) {
+  if (!split || split.doorCents === 0) return <>{money(toCents(amount))}</>;
+  return (
+    <span className="inline-block">
+      <span className="block">{money(toCents(amount))}</span>
+      <span className="block text-xs font-normal text-muted-foreground" data-testid={`transfer-part-${id}`}>
+        Transfer {money(split.transferCents)} (buy-in)
+      </span>
+      <span className="block text-xs font-medium text-foreground" data-testid={`door-part-${id}`}>
+        At the door {money(split.doorCents)}
+        {split.doorFor ? ` (${split.doorFor})` : ""}
+      </span>
+    </span>
+  );
+}
+
 /** The server's amounts (dollars), added up to the cent. */
 const totalCents = (amounts: readonly number[]) => amounts.reduce((sum, amount) => sum + toCents(amount), 0);
 
@@ -80,7 +115,7 @@ function Total({ label, cents, players, note }: { label: string; cents: number; 
     <div className="mt-4 flex items-center justify-between rounded-lg bg-muted p-4">
       <div>
         <p className="text-sm font-medium text-foreground">{label}</p>
-        <p className="text-2xl font-bold tabular-nums text-foreground">{formatMoney(cents, { forceCents: true })}</p>
+        <p className="text-2xl font-bold tabular-nums text-foreground">{money(cents)}</p>
       </div>
       <div className="text-right">
         <p className="text-sm text-muted-foreground">{plural(players, "player")}</p>
@@ -95,7 +130,8 @@ interface PendingPaymentsProps {
   timeZone: string;
   /** The registration being confirmed: only its own button waits for the server. */
   confirmingIds: ReadonlySet<string>;
-  onConfirm: (registrationId: string) => void;
+  /** Confirms the payment, and how it was paid when the desk asked (`transfers`). */
+  onConfirm: (registrationId: string, paidBy?: PaymentMethod) => void;
   /**
    * Opens the free-entry sheet for a sign-up (round 7, item 6): "Free entry" beside Confirm Payment.
    * Left out where nobody pays a buy-in (`freeTournament`).
@@ -112,6 +148,36 @@ interface PendingPaymentsProps {
    * more", shared/domain/waiting-list), said over the waiting list; null while there is room.
    */
   full?: string | null;
+  /**
+   * The tournament shows bank transfer details after sign-up (round 8; null: it does not): each unpaid
+   * sign-up shows the Reference their transfer carries (their name, cut to 12 characters) and, when
+   * part of what they owe is paid at the door (the high hand), the two parts; a box finds a name or
+   * reference from the bank statement, and the payment is confirmed as Cash or Transfer for the club's
+   * records. Transfer asks first while something is still to collect at the door.
+   */
+  transfers?: TransferDesk | null;
+}
+
+/** Whether the registration's player is the one a bank statement's name or reference points to. */
+const matches = (registration: StaffRegistrationDto, search: string) => normaliseName(playerName(registration)).includes(search);
+
+function TransferSearch({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const id = useId();
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={id}>Find a transfer</Label>
+      <Input
+        id={id}
+        type="search"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="Name or reference from the bank"
+        autoComplete="off"
+        className="h-11 md:h-10"
+        data-testid="transfer-search"
+      />
+    </div>
+  );
 }
 
 /** The unpaid sign-ups in the field, and those on the waiting list behind it (round 5, item 15), next in first. */
@@ -127,13 +193,112 @@ function splitPending(rows: readonly PendingRegistrationDto[]): { field: Pending
 }
 
 /**
+ * Before a transfer is confirmed for an entry that owes more than its buy-in (round 8): the transfer
+ * paid the buy-in only, and confirming takes the whole entry, the high hand into its pot included, so
+ * the TD collects the rest at the door first. "Not yet" leaves the entry on the list to pay.
+ */
+function CollectAtDoorDialog({
+  registration,
+  split,
+  onOpenChange,
+  onConfirm,
+}: {
+  registration: PendingRegistrationDto | null;
+  split: TransferSplit | null;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: (registrationId: string) => void;
+}) {
+  const shown = registration && split ? { registration, split } : null;
+  return (
+    <ConfirmDialog
+      open={shown !== null}
+      onOpenChange={onOpenChange}
+      title={shown ? `Collect ${money(shown.split.doorCents)} at the door` : ""}
+      description={
+        shown
+          ? `${playerName(shown.registration)}'s bank transfer pays the buy-in, ${money(shown.split.transferCents)}. ` +
+            `The ${shown.split.doorFor || "rest"} is paid at the door: confirm once you have it.`
+          : ""
+      }
+      cancelLabel="Not yet"
+      confirmLabel="Collected: confirm"
+      contentTestId="collect-at-door"
+      confirmTestId="collect-at-door-confirm"
+      onConfirm={() => {
+        if (shown) onConfirm(shown.registration.id);
+      }}
+    />
+  );
+}
+
+/**
  * Sign-ups waiting at the desk: what each owes (every buy-in, re-buy, add-on and the high hand), and
  * Confirm. Under them, numbered, the waiting list behind a full field (round 5, item 15): confirming
  * one's payment accepts them, which the server refuses while Max players are accepted, so the list
- * says so first. Their amounts are not in the total: they pay once a place opens.
+ * says so first. Their amounts are not in the total: they pay once a place opens. Where players may
+ * pay ahead by bank transfer (round 8), the field shows each one's transfer Reference and what of their
+ * amount the transfer pays and the door collects, a box narrows both lists to the name on a transfer,
+ * and Confirm is Cash or Transfer.
  */
-export function PendingPayments({ query, timeZone, confirmingIds, onConfirm, onFreeEntry, freeTournament = false, earlyBirds, full = null }: PendingPaymentsProps) {
+export function PendingPayments({
+  query,
+  timeZone,
+  confirmingIds,
+  onConfirm,
+  onFreeEntry,
+  freeTournament = false,
+  earlyBirds,
+  full = null,
+  transfers = null,
+}: PendingPaymentsProps) {
   const waitingListHeading = useId();
+  const [search, setSearch] = useState("");
+  // The entry whose transfer is being confirmed while the high hand is still to collect at the door.
+  const [collecting, setCollecting] = useState<PendingRegistrationDto | null>(null);
+  const byTransfer = transfers && !freeTournament ? transfers : null;
+  const found = normaliseName(search);
+  const splitOf = (registration: PendingRegistrationDto) => (byTransfer ? transferSplit(registration, registration.amountOwed, byTransfer) : null);
+  const confirmTransfer = (registration: PendingRegistrationDto) => {
+    if ((splitOf(registration)?.doorCents ?? 0) > 0) setCollecting(registration);
+    else onConfirm(registration.id, "transfer");
+  };
+  const confirmButtons = (registration: PendingRegistrationDto) =>
+    byTransfer ? (
+      // Cash and Transfer wrap together on a phone, never one without the other.
+      <div className="flex gap-2">
+        <Button
+          className="h-11 md:h-10"
+          onClick={() => onConfirm(registration.id, "cash")}
+          busy={confirmingIds.has(registration.id)}
+          aria-label={`Confirm cash payment for ${playerName(registration)}`}
+          data-testid={`confirm-payment-${registration.id}`}
+        >
+          <Banknote className="h-4 w-4" aria-hidden="true" />
+          Cash
+        </Button>
+        <Button
+          className="h-11 md:h-10"
+          onClick={() => confirmTransfer(registration)}
+          busy={confirmingIds.has(registration.id)}
+          aria-label={`Confirm bank transfer for ${playerName(registration)}`}
+          data-testid={`confirm-transfer-${registration.id}`}
+        >
+          <Landmark className="h-4 w-4" aria-hidden="true" />
+          Transfer
+        </Button>
+      </div>
+    ) : (
+      <Button
+        className="h-11 md:h-10"
+        onClick={() => onConfirm(registration.id)}
+        busy={confirmingIds.has(registration.id)}
+        aria-label={freeTournament ? `Accept ${playerName(registration)}` : `Confirm payment for ${playerName(registration)}`}
+        data-testid={`confirm-payment-${registration.id}`}
+      >
+        <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+        {freeTournament ? "Accept" : "Confirm Payment"}
+      </Button>
+    );
   const confirmButton = (registration: PendingRegistrationDto) => (
     <div className="flex flex-wrap items-center justify-end gap-2">
       {onFreeEntry && !freeTournament ? (
@@ -152,16 +317,7 @@ export function PendingPayments({ query, timeZone, confirmingIds, onConfirm, onF
           Free entry
         </Button>
       ) : null}
-      <Button
-        className="h-11 md:h-10"
-        onClick={() => onConfirm(registration.id)}
-        busy={confirmingIds.has(registration.id)}
-        aria-label={freeTournament ? `Accept ${playerName(registration)}` : `Confirm payment for ${playerName(registration)}`}
-        data-testid={`confirm-payment-${registration.id}`}
-      >
-        <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-        {freeTournament ? "Accept" : "Confirm Payment"}
-      </Button>
+      {confirmButtons(registration)}
     </div>
   );
   const player: ResponsiveColumn<PendingRegistrationDto> = { id: "player", header: "Player", phone: "title", className: "font-medium", cell: playerName };
@@ -170,7 +326,7 @@ export function PendingPayments({ query, timeZone, confirmingIds, onConfirm, onF
     id: "amount",
     header: "Amount",
     className: "text-lg font-semibold tabular-nums",
-    cell: (registration) => formatMoney(toCents(registration.amountOwed), { forceCents: true }),
+    cell: (registration) => <SplitAmount id={registration.id} amount={registration.amountOwed} split={splitOf(registration)} />,
   };
   const time: ResponsiveColumn<PendingRegistrationDto> = {
     id: "time",
@@ -179,8 +335,15 @@ export function PendingPayments({ query, timeZone, confirmingIds, onConfirm, onF
     cell: (registration) => formatTime(registration.registrationTime, timeZone),
   };
   const action: ResponsiveColumn<PendingRegistrationDto> = { id: "action", header: "Action", className: "text-right", phone: "actions", cell: confirmButton };
+  const reference: ResponsiveColumn<PendingRegistrationDto> = {
+    id: "reference",
+    header: "Transfer ref",
+    className: "text-muted-foreground",
+    cell: (registration) => <span data-testid={`transfer-reference-${registration.id}`}>{paymentReference(playerName(registration))}</span>,
+  };
   const columns: ResponsiveColumn<PendingRegistrationDto>[] = [
     player,
+    ...(byTransfer ? [reference] : []),
     phone,
     { id: "high-hands", header: "High Hands", cell: (registration) => <HighHands entering={registration.enteringHighHands} /> },
     amount,
@@ -223,17 +386,28 @@ export function PendingPayments({ query, timeZone, confirmingIds, onConfirm, onF
     >
       {(rows) => {
         const { field, waiting } = splitPending(rows);
+        // A bank statement's name or reference narrows both lists; the total stays the whole field's.
+        const shownField = byTransfer && found ? field.filter((row) => matches(row, found)) : field;
+        const shownWaiting = byTransfer && found ? waiting.filter((row) => matches(row, found)) : waiting;
         return (
           <>
+            {byTransfer ? <TransferSearch value={search} onChange={setSearch} /> : null}
+            {byTransfer && found && shownField.length + shownWaiting.length === 0 ? (
+              <p className="text-sm text-muted-foreground" data-testid="transfer-search-none">
+                Nobody waiting to pay matches &ldquo;{search.trim()}&rdquo;.
+              </p>
+            ) : null}
             {field.length > 0 ? (
               <>
-                <ResponsiveTable
-                  rows={field}
-                  columns={columns}
-                  rowKey={(registration) => registration.id}
-                  rowProps={(registration) => ({ "data-testid": `registration-${registration.id}` })}
-                  caption="Registrations waiting for payment"
-                />
+                {shownField.length > 0 ? (
+                  <ResponsiveTable
+                    rows={shownField}
+                    columns={columns}
+                    rowKey={(registration) => registration.id}
+                    rowProps={(registration) => ({ "data-testid": `registration-${registration.id}` })}
+                    caption="Registrations waiting for payment"
+                  />
+                ) : null}
                 <Total
                   label={freeTournament ? "Still to pay" : "Total Pending"}
                   cents={totalCents(field.map((row) => row.amountOwed))}
@@ -244,7 +418,7 @@ export function PendingPayments({ query, timeZone, confirmingIds, onConfirm, onF
             ) : (
               <p className="text-sm text-muted-foreground">{freeTournament ? "Everyone in the field has been accepted." : "Everyone in the field has paid."}</p>
             )}
-            {waiting.length > 0 ? (
+            {shownWaiting.length > 0 ? (
               <section aria-labelledby={waitingListHeading} className="mt-6 space-y-3" data-testid="payment-waiting-list">
                 <h3 id={waitingListHeading} className="flex items-center gap-2 text-base font-semibold text-foreground">
                   <Hourglass className="h-4 w-4 text-accent-text" aria-hidden="true" />
@@ -261,7 +435,7 @@ export function PendingPayments({ query, timeZone, confirmingIds, onConfirm, onF
                   </p>
                 ) : null}
                 <ResponsiveTable
-                  rows={waiting}
+                  rows={shownWaiting}
                   columns={waitingColumns}
                   rowKey={(registration) => registration.id}
                   rowProps={(registration) => ({ "data-testid": `registration-${registration.id}` })}
@@ -270,6 +444,14 @@ export function PendingPayments({ query, timeZone, confirmingIds, onConfirm, onF
                 />
               </section>
             ) : null}
+            <CollectAtDoorDialog
+              registration={collecting}
+              split={collecting ? splitOf(collecting) : null}
+              onOpenChange={(open) => {
+                if (!open) setCollecting(null);
+              }}
+              onConfirm={(registrationId) => onConfirm(registrationId, "transfer")}
+            />
           </>
         );
       }}
@@ -285,6 +467,18 @@ export interface FreeEntryActions {
   /** The registrations whose change is being saved: their buttons wait for the server. */
   busy: ReadonlySet<string>;
   onChange: (registration: ConfirmedRegistrationDto, change: FreeEntryUndo) => void;
+}
+
+/** How a confirmed payment was made, when the TD said (round 8): cash or bank transfer. */
+function PaidByMark({ registration }: { registration: ConfirmedRegistrationDto }) {
+  const paidBy = registration.paidBy;
+  if (paidBy !== "cash" && paidBy !== "transfer") return null;
+  return (
+    <Badge variant="outline" data-testid={`paid-by-${registration.id}`}>
+      {paidBy === "transfer" ? <Landmark className="mr-1 h-3 w-3" aria-hidden="true" /> : <Banknote className="mr-1 h-3 w-3" aria-hidden="true" />}
+      {PAID_BY_LABELS[paidBy]}
+    </Badge>
+  );
 }
 
 /** A free entry's FREE mark, and its way back: Mark paid, or Undo (a normal unpaid entry again). */
@@ -334,13 +528,18 @@ interface ConfirmedPaymentsProps {
   freeEntries?: FreeEntryActions;
   /** The game has no buy-in (round 7, item 8): the players were accepted, not paid. */
   freeTournament?: boolean;
+  /** Players may pay ahead by bank transfer (round 8): a payment confirmed as a transfer shows what the door collected. */
+  transfers?: TransferDesk | null;
 }
 
 /**
  * Players who have paid, or were let in free (round 7: FREE, with Mark paid and Undo): what each paid,
- * by the same formula as what they owed (a free entry's buy-in is not paid).
+ * by the same formula as what they owed (a free entry's buy-in is not paid). A payment confirmed as a
+ * bank transfer (round 8) shows what the transfer paid and what was collected at the door.
  */
-export function ConfirmedPayments({ query, timeZone, earlyBirds, freeEntries, freeTournament = false }: ConfirmedPaymentsProps) {
+export function ConfirmedPayments({ query, timeZone, earlyBirds, freeEntries, freeTournament = false, transfers = null }: ConfirmedPaymentsProps) {
+  const splitOf = (registration: ConfirmedRegistrationDto) =>
+    transfers && registration.paidBy === "transfer" ? transferSplit(registration, registration.amountPaid, transfers) : null;
   const columns: ResponsiveColumn<ConfirmedRegistrationDto>[] = [
     {
       id: "player",
@@ -355,7 +554,7 @@ export function ConfirmedPayments({ query, timeZone, earlyBirds, freeEntries, fr
       id: "amount",
       header: "Amount Paid",
       className: "text-lg font-semibold tabular-nums",
-      cell: (registration) => formatMoney(toCents(registration.amountPaid), { forceCents: true }),
+      cell: (registration) => <SplitAmount id={registration.id} amount={registration.amountPaid} split={splitOf(registration)} />,
     },
     {
       id: "time",
@@ -373,10 +572,13 @@ export function ConfirmedPayments({ query, timeZone, earlyBirds, freeEntries, fr
         isFreeEntry(registration) ? (
           <FreeEntryStatusCell registration={registration} actions={freeEntries} />
         ) : (
-          <Badge className="bg-status-live text-status-live-foreground hover:bg-status-live">
-            <Check className="mr-1 h-3 w-3" aria-hidden="true" />
-            {freeTournament ? "Accepted" : "Confirmed"}
-          </Badge>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <PaidByMark registration={registration} />
+            <Badge className="bg-status-live text-status-live-foreground hover:bg-status-live">
+              <Check className="mr-1 h-3 w-3" aria-hidden="true" />
+              {freeTournament ? "Accepted" : "Confirmed"}
+            </Badge>
+          </div>
         ),
     },
   ];

@@ -4,8 +4,10 @@
  * route that mounts no guard is requested, as nobody, a signed-in stranger, the club's owner and a
  * platform admin, in a club whose staff and players all have emails, phones and accounts, after a
  * live and a finished tournament's worth of activity made through the API (AP rates, a manual AP total
- * with its reason, a finalize). Each body is walked with `findForbiddenKeys` and `findTakingsKeys`
- * (JSON text inside strings included) and searched for every one of those emails, phones and user ids.
+ * with its reason, a finalize), at a club with bank details whose live tournament shows them after
+ * sign-up (round 8). Each body is walked with `findForbiddenKeys` and `findTakingsKeys` (JSON text
+ * inside strings included) and searched for every one of those emails, phones and user ids, and for
+ * the club's bank details, which no public read carries to anyone, its own staff included.
  * The takings may reach only the club's own staff, and only on the reads their screens edit them from
  * (STAFF_TAKINGS_READS); the TV, the public prize pool and every other read carry none, whoever looks.
  * The route list comes from the router stack (test/helpers/routes.ts), so a new public read without a
@@ -33,7 +35,7 @@ interface World {
   /** Finalized through the API: positions, prizes, points, the snapshot. */
   finished: Tournament;
   players: Player[];
-  /** Every email, phone and user id in the world: none may appear in a public body. */
+  /** Every email, phone and user id in the world, and the club's bank details: none may appear in a public body. */
   secrets: string[];
 }
 
@@ -97,7 +99,7 @@ const RUNS_THE_CLUB: ReadonlySet<Visitor> = new Set<Visitor>(["owner", "admin"])
 const STAFF_TAKINGS_READS: ReadonlySet<string> = new Set([
   "GET /api/tournaments",
   "GET /api/tournaments/:id",
-  // The desk's rows: who paid, and who came in on a free entry and whether the club funds it (round 7).
+  // The desk's rows: who paid and how (round 8), and who came in on a free entry and whether the club funds it (round 7).
   "GET /api/tournaments/:id/registrations",
   "GET /api/tournaments/:tournamentId/activity",
 ]);
@@ -110,6 +112,14 @@ async function ok(pending: request.Test, status = 200): Promise<request.Response
   if (response.status !== status) throw new Error(`Setup request answered ${response.status}: ${JSON.stringify(response.body)}`);
   return response;
 }
+
+/** The club's bank details (round 8): only its staff's payments endpoint and a sign-up's own answer carry them. */
+const PII_BANK = {
+  accountName: "PII Bank Account Holder",
+  accountNumber: "12-3456-7654321-00",
+  bankName: "PII Bank of the South",
+  instructions: "PII bank note: pay by Friday",
+};
 
 /** A player with every personal field filled, linked to an account of their own. */
 async function personalPlayer(index: number): Promise<Player> {
@@ -143,6 +153,7 @@ async function buildWorld(): Promise<World> {
   const players = [];
   for (let index = 0; index < 8; index++) players.push(await personalPlayer(index));
 
+  await ok(owner.agent.put(`/api/clubs/${club.id}/payments`).send({ bankDetails: PII_BANK }));
   const newTournament = async (name: string) =>
     (
       await ok(
@@ -159,6 +170,7 @@ async function buildWorld(): Promise<World> {
           highHandAmount: "5.00",
           maxPlayers: 20,
           status: "registration",
+          showBankTransfer: true,
         }),
         201,
       )
@@ -176,9 +188,12 @@ async function buildWorld(): Promise<World> {
             .post(`/api/tournaments/${live.id}/registrations`)
             .send({ playerId, enteringHighHands: index === 0, signUpToken: signUpTokenFor(playerId) })
         : manager.agent.post(`/api/tournaments/${live.id}/registrations`).send({ playerId, paymentConfirmed: true });
-    liveRegistrations.push((await ok(signUp, 201)).body as { id: string });
+    const created = (await ok(signUp, 201)).body as { id: string; paymentInstructions?: unknown };
+    // A QR sign-up's own answer is the one place, other than the staff's payments endpoint, the bank details go (round 8).
+    if (index < 3 && !created.paymentInstructions) throw new Error("Setup: the QR sign-up was not told how to pay by transfer");
+    liveRegistrations.push(created);
   }
-  await ok(manager.agent.patch(`/api/registrations/${liveRegistrations[0].id}/confirm-payment`));
+  await ok(manager.agent.patch(`/api/registrations/${liveRegistrations[0].id}/confirm-payment`).send({ paidBy: "transfer" }));
   await ok(manager.agent.put(`/api/tournaments/${live.id}`).send({ status: "in_progress" }));
   await ok(manager.agent.post(`/api/registrations/${liveRegistrations[1].id}/counts`).send({ rebuys: 1, addons: 1 }));
   await ok(manager.agent.put(`/api/registrations/${liveRegistrations[4].id}`).send({ isEliminated: true, eliminatedBy: players[3].id }));
@@ -222,6 +237,7 @@ async function buildWorld(): Promise<World> {
   const secrets = [
     ...accounts.flatMap((account) => [account.id, account.email, account.phone]),
     ...players.flatMap((player) => [player.email, player.phone, player.userId]),
+    ...Object.values(PII_BANK),
   ].filter((value): value is string => typeof value === "string" && value !== "");
 
   return { staff, club, season, pointsSystem, live, finished, players, secrets };
@@ -239,7 +255,7 @@ describe("public reads", () => {
   });
 
   describe.each(Object.entries(PROBES))("%s", (key, probe) => {
-    it.each(VIEWERS)("shows %s no email, phone, user id or other forbidden key", async (viewer) => {
+    it.each(VIEWERS)("shows %s no email, phone, user id, bank detail or other forbidden key", async (viewer) => {
       const agent = await agentFor(viewer, world.staff);
 
       for (const url of probe(world)) {
@@ -304,8 +320,9 @@ describe("public reads", () => {
     ]);
 
     expect(detail.body).toMatchObject({ rakeType: "percentage", rakeAmount: "10.00", rakeOverride: "20.00", prizePoolAdjustmentReason: "Low turnout" });
-    // The desk's rows say who came in free, and why (round 7); who gave it is never sent.
+    // The desk's rows say who came in free, and why (round 7), and how each paid (round 8); who gave a free entry is never sent.
     expect(registrations.body).toContainEqual(expect.objectContaining({ freeEntry: true, freeEntryFunded: true, freeEntryReason: "promo", freeEntryNote: "PII free-entry note" }));
+    expect(registrations.body).toContainEqual(expect.objectContaining({ paymentConfirmed: true, paidBy: "transfer" }));
     expect(findForbiddenKeys(registrations.body)).toEqual([]);
     expect(activity.body.map((entry: { eventType: string }) => entry.eventType)).toContain("prize_pool_adjusted");
     // The public prize pool is the same for everyone, the TD looking at the public page included.

@@ -167,6 +167,20 @@ const ROUTES: Record<string, RouteRow> = {
     cases: single(staffOf(200), ({ club }) => ({ path: `/api/clubs/${club.id}`, json: { name: "Renamed Club" } })),
     missing: () => ({ path: `/api/clubs/${UNKNOWN_ID}`, json: { name: "Renamed Club" } }),
   },
+  // The club's bank details (round 8): its staff only, for reading too.
+  "GET /api/clubs/:id/payments": {
+    guards: ["club-manager:Club"],
+    cases: single(staffOf(200), ({ club }) => ({ path: `/api/clubs/${club.id}/payments` })),
+    missing: () => ({ path: `/api/clubs/${UNKNOWN_ID}/payments` }),
+  },
+  "PUT /api/clubs/:id/payments": {
+    guards: ["club-manager:Club"],
+    cases: single(staffOf(200), ({ club }) => ({
+      path: `/api/clubs/${club.id}/payments`,
+      json: { bankDetails: { accountName: "Matrix Club", accountNumber: "12-3456-7890123-00" } },
+    })),
+    missing: () => ({ path: `/api/clubs/${UNKNOWN_ID}/payments`, json: { bankDetails: null } }),
+  },
   "DELETE /api/clubs/:id": {
     guards: ["club-owner:Club"],
     cases: single(ownerOf(204), ({ club }) => ({ path: `/api/clubs/${club.id}` })),

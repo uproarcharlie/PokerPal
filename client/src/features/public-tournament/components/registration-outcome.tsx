@@ -11,8 +11,10 @@ import { SeatAssignment } from "@/features/seating/components/public/seat-assign
 import { Button } from "@/components/ui/button";
 import { CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { amountDue } from "../registration";
+import { transferToMake } from "../saved-sign-up";
 import { waitingListPlaceOf } from "../waiting-list";
 import { offersHighHand } from "@shared/domain/player-actions";
+import { BankTransferCard } from "./bank-transfer-card";
 
 function BackToTournament({ tournamentId, variant }: { tournamentId: string; variant: "outline" | "ghost" }) {
   return (
@@ -73,13 +75,62 @@ function RegisteredPlayer({ player }: { player: PublicPlayer }) {
   );
 }
 
+/** What to pay at the desk: one buy-in, and the high-hands entry when ticked. */
+function PayAtDesk({ tournament, enteringHighHands, waiting }: { tournament: TournamentDetailDto; enteringHighHands: boolean; waiting: boolean }) {
+  const withHighHands = enteringHighHands && offersHighHand(tournament);
+  return (
+    <div className="space-y-2 rounded-lg bg-muted p-4">
+      <p className="text-sm font-medium text-foreground">{waiting ? "Pay at the desk once you're called in" : "Please proceed to the payment desk"}</p>
+      <p className="text-3xl font-bold text-primary" data-testid="amount-due">
+        {amountDue(tournament, enteringHighHands)}
+      </p>
+      <p className="text-xs text-muted-foreground">
+        Buy-in: <MoneyText amount={tournament.buyInAmount} forceCents />
+        {withHighHands ? (
+          <>
+            {" "}
+            + High Hands: <MoneyText amount={tournament.highHandAmount} forceCents />
+          </>
+        ) : null}
+      </p>
+    </div>
+  );
+}
+
+interface HowToPayProps {
+  tournament: TournamentDetailDto;
+  /** The sign-up's answer: the bank transfer's details when the tournament shows them. */
+  registration: RegistrationCreatedDto | null;
+  enteringHighHands: boolean;
+  waitingListPlace: number | null;
+}
+
 /**
- * Signed up: who, what to pay at the desk, and a way to sign up the next player on the same phone. A
- * sign-up past a full field is on the waiting list (round 5, item 15): it says their number, and that
- * they pay once a place opens and the tournament director accepts them, never that a seat is coming.
+ * How the player pays (round 8): by bank transfer or at the door when the tournament shows its club's
+ * bank details and there is a buy-in to pay (a free entry never pays one); not yet, from the waiting
+ * list, which pays only once a place opens; else at the desk, as before.
+ */
+function HowToPay({ tournament, registration, enteringHighHands, waitingListPlace }: HowToPayProps) {
+  const told = registration?.paymentInstructions;
+  const waiting = waitingListPlace !== null || told?.waitingList === true;
+  if (told && waiting) {
+    return (
+      <p className="rounded-lg bg-muted p-4 text-sm font-medium text-foreground" data-testid="dont-pay-yet">
+        You&apos;re on the waiting list{waitingListPlace === null ? "" : ` (#${waitingListPlace})`} — don&apos;t pay yet; the club will tell you if a spot opens.
+      </p>
+    );
+  }
+  const transfer = transferToMake(registration);
+  if (transfer) return <BankTransferCard transfer={transfer} />;
+  return <PayAtDesk tournament={tournament} enteringHighHands={enteringHighHands} waiting={waiting} />;
+}
+
+/**
+ * Signed up: who, how to pay, and a way to sign up the next player on the same phone. A sign-up past a
+ * full field is on the waiting list (round 5, item 15): it says their number, and that they pay once a
+ * place opens and the tournament director accepts them, never that a seat is coming.
  */
 export function RegistrationComplete({ tournament, club, player, registration, enteringHighHands, onRegisterAnother }: CompleteProps) {
-  const withHighHands = enteringHighHands && offersHighHand(tournament);
   const waitingListPlace = waitingListPlaceOf(registration);
   // Where automatic seating put them; nothing while the tournament has no tables (most clubs never draw any).
   const seating = registration && waitingListPlace === null && !(registration.seating.status === "waiting" && registration.seating.reason === "no_tables") ? registration.seating : null;
@@ -106,23 +157,7 @@ export function RegistrationComplete({ tournament, club, player, registration, e
       </CardHeader>
       <CardContent className="space-y-4">
         {seating ? <SeatAssignment seating={seating} tournamentId={tournament.id} /> : null}
-        <div className="space-y-2 rounded-lg bg-muted p-4">
-          <p className="text-sm font-medium text-foreground">
-            {waitingListPlace === null ? "Please proceed to the payment desk" : "Pay at the desk once you're called in"}
-          </p>
-          <p className="text-3xl font-bold text-primary" data-testid="amount-due">
-            {amountDue(tournament, enteringHighHands)}
-          </p>
-          <p className="text-xs text-muted-foreground">
-            Buy-in: <MoneyText amount={tournament.buyInAmount} forceCents />
-            {withHighHands ? (
-              <>
-                {" "}
-                + High Hands: <MoneyText amount={tournament.highHandAmount} forceCents />
-              </>
-            ) : null}
-          </p>
-        </div>
+        <HowToPay tournament={tournament} registration={registration} enteringHighHands={enteringHighHands} waitingListPlace={waitingListPlace} />
         <div className="space-y-2">
           <Button onClick={onRegisterAnother} variant="outline" className="w-full" size="lg" data-testid="register-another">
             Register Another Player

@@ -33,6 +33,13 @@ export const clubs = pgTable("clubs", {
   defaultTableShape: text("default_table_shape").$type<TableShape>(),
   requireSignupPhoto: boolean("require_signup_photo").notNull().default(false),
   theme: jsonb("theme").$type<ClubTheme>(),
+  // Round 8 (migrations/0016_bank_transfer_clubs): the account players may pay into by transfer, for its
+  // staff and, when a tournament shows it, whoever has just signed up; never public. Name and number
+  // together make the bank details (the number as the banks write it: shared/api/clubs normaliseNzBankAccount).
+  bankAccountName: text("bank_account_name"),
+  bankAccountNumber: text("bank_account_number"),
+  bankName: text("bank_name"),
+  bankInstructions: text("bank_instructions"),
   ownerId: varchar("owner_id").references(() => users.id, { onDelete: "set null" }), // Club owner
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => ({
@@ -157,6 +164,9 @@ export const tournaments = pgTable("tournaments", {
   // earlier tournaments (null: none), kept in step with prize_carry_overs by the carry-over service.
   prizeDifference: text("prize_difference").$type<PrizeDifferenceChoice>(),
   carriedIn: jsonb("carried_in").$type<CarriedIn[]>(),
+  // Round 8 (migrations/0017_bank_transfer_tournaments): sign-ups are told how to pay by bank transfer
+  // into the club's account (only while the club has bank details).
+  showBankTransfer: boolean("show_bank_transfer").notNull().default(false),
 }, (table) => ({
   clubIdx: index("idx_tournaments_club_id").on(table.clubId),
   seasonIdx: index("idx_tournaments_season_id").on(table.seasonId),
@@ -220,6 +230,9 @@ export const tournamentRegistrations = pgTable("tournament_registrations", {
   freeEntryNote: text("free_entry_note"),
   freeEntryBy: varchar("free_entry_by"), // users.id, audit text (no FK), never sent to a client
   freeEntryAt: timestamp("free_entry_at", { withTimezone: true, mode: "date" }),
+  // Round 8 (migrations/0018_bank_transfer_registrations): how an accepted entry paid, cash | transfer | free
+  // (shared/api/registrations PAID_BY; null: not recorded).
+  paidBy: text("paid_by"),
 }, (table) => ({
   tournamentIdx: index("idx_tournament_registrations_tournament_id").on(table.tournamentId),
   playerIdx: index("idx_tournament_registrations_player_id").on(table.playerId),

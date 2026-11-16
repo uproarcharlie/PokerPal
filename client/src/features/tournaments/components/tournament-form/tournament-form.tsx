@@ -6,9 +6,11 @@ import type { ClubDto } from "@shared/api/public";
 import { rakeLabel } from "@shared/domain/prize-pool";
 import { clubTimeZone } from "@/lib/format";
 import type { RecordedEntries, TournamentFormValues } from "../../tournament-form";
+import { BankTransferField } from "./bank-transfer-field";
 import { BasicInfoSection } from "./basic-info-section";
 import { BuyInSection, PrizePoolSection } from "./buy-in-section";
 import { FormatPresets } from "./format-presets";
+import { FormSection } from "./form-section";
 import { LimitsSection } from "./limits-section";
 import { OptionsSection } from "./options-section";
 
@@ -75,6 +77,10 @@ export function TournamentForm({
           <PrizePoolSection control={form.control} rakeLabel={label} />
         </fieldset>
         <OptionsSection control={form.control} rakeLabel={label} moneyLocked={moneyLocked} highHandEntrants={recorded?.highHandEntrants ?? 0} />
+        {/* Its own part (round 8), never between the high hand's box and its settings (R8REV1-PHONE-04). */}
+        <FormSection title="Payments">
+          <BankTransferField control={form.control} club={selectedClub} />
+        </FormSection>
         <LimitsSection control={form.control} club={selectedClub} />
       </form>
     </Form>

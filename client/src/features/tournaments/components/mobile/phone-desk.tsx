@@ -18,6 +18,7 @@ import type { WaitingCount } from "../desk/desk-actions";
 import type { DeskDialogs } from "../desk/desk-dialogs";
 import { freeEntryCandidates } from "../free-entry/free-entry-candidates";
 import { FreeEntrySheet } from "../free-entry/free-entry-sheet";
+import { transferDeskOf } from "../payment-desk/transfer-split";
 import { StandingsTable } from "../standings/standings-table";
 import { BustSheet } from "./bust-sheet";
 import { MoneyTab } from "./money-tab";
@@ -193,6 +194,7 @@ export function PhoneDesk({
             timeZone={timeZone}
             freeTournament={isFreeTournament(tournament)}
             full={acceptRefusal(registrations, tournament.maxPlayers)}
+            transfers={transferDeskOf(tournament)}
             returnFocusTo={quickActionsRef}
             {...dialogs.propsFor("payments")}
           />

@@ -1,6 +1,6 @@
 import { and, desc, eq, lt, type SQL } from "drizzle-orm";
-import { auditLog, type AuditLogEntry } from "@shared/schema";
-import type { AuditLogQuery } from "@shared/api/admin";
+import { auditLog, users, type AuditLogEntry } from "@shared/schema";
+import type { AuditAction, AuditLogQuery } from "@shared/api/admin";
 import type { Executor } from "../db";
 
 /** Writes one audit_log row (server/services/audit.ts decides what goes in it). */
@@ -22,4 +22,22 @@ export async function listAuditLog(ex: Executor, query: AuditLogQuery): Promise<
     .where(and(...filters))
     .orderBy(desc(auditLog.createdAt), desc(auditLog.id))
     .limit(query.limit);
+}
+
+export interface AuditTrailEntry {
+  createdAt: Date;
+  data: AuditLogEntry["data"];
+  /** Who made it, by name: null for a row with no actor, or once their account is gone (rows have no FKs). */
+  actorName: string | null;
+}
+
+/** The latest `limit` rows of one action on one target, newest first, each with its actor's name. */
+export async function auditTrailOf(ex: Executor, action: AuditAction, target: { type: string; id: string }, limit: number): Promise<AuditTrailEntry[]> {
+  return ex
+    .select({ createdAt: auditLog.createdAt, data: auditLog.data, actorName: users.name })
+    .from(auditLog)
+    .leftJoin(users, eq(users.id, auditLog.actorUserId))
+    .where(and(eq(auditLog.action, action), eq(auditLog.targetType, target.type), eq(auditLog.targetId, target.id)))
+    .orderBy(desc(auditLog.createdAt), desc(auditLog.id))
+    .limit(limit);
 }

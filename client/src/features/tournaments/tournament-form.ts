@@ -57,6 +57,8 @@ export interface TournamentFormValues {
   seatsPerTable: string;
   useClubAddress: boolean;
   address: string;
+  /** Round 8: "Show bank transfer details after sign-up" (needs the club's bank details). */
+  showBankTransfer: boolean;
 }
 
 /** The settings a tournament is created with, before it is given a status. */
@@ -246,6 +248,7 @@ export const NEW_TOURNAMENT_VALUES: TournamentFormValues = {
   seatsPerTable: "",
   useClubAddress: true,
   address: "",
+  showBankTransfer: false,
 };
 
 /**
@@ -326,5 +329,6 @@ export function formValuesFromTournament(tournament: PublicTournament, timeZone:
     seatsPerTable: text(tournament.seatsPerTable),
     useClubAddress: tournament.useClubAddress !== false,
     address: text(tournament.address),
+    showBankTransfer: tournament.showBankTransfer === true,
   };
 }

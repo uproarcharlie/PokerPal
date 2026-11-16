@@ -6,18 +6,31 @@
  * in its step, so Back finds what was typed. The players with that name at the club are offered first
  * ("Already played here? That's me"), with or without a number, so a returning player is not made
  * twice: one who signed up by name only before has no number stored to be found by (R7FREV1-02). "No,
- * I'm new here" then signs up as before, matched by the number when one is typed.
+ * I'm new here" then signs up as before, matched by the number when one is typed. A sign-up with a bank
+ * transfer to make is kept in the tab (saved-sign-up), so coming back to the page from the banking app
+ * shows its confirmation again (R8REV1-PHONE-02), until "Register Another Player".
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import type { PublicPlayer } from "@shared/api/public";
+import type { RegistrationCreatedDto } from "@shared/api/registrations";
 import { useToast } from "@/hooks/use-toast";
+import { useRegistrations } from "@/features/tournaments/hooks";
 import { errorMessage, hasErrorCode } from "@/lib/api/http";
 import { useSameNameLookup } from "./components/player-search";
 import { useCreatePlayer, useRegisterForTournament } from "./hooks";
 import { registrationProblem, signUpProblem } from "./messages";
 import { EMPTY_NEW_PLAYER, newPlayerSchema, sameDetails, type NewPlayerValues, type PlayerDetails } from "./registration";
 import { formResolver, showServerFieldErrors } from "@/lib/forms";
+import { forgetSignUp, readSavedSignUp, saveSignUp, transferToMake } from "./saved-sign-up";
+import { waitingListPlaceOf } from "./waiting-list";
+
+/** The sign-up toast's word on paying: as the confirmation below it says (round 8: by transfer, or not yet). */
+function howToPayNote(created: RegistrationCreatedDto): string {
+  if (waitingListPlaceOf(created) !== null || created.paymentInstructions?.waitingList) return "You're on the waiting list: don't pay yet.";
+  if (transferToMake(created)) return "Pay by bank transfer, or at the door.";
+  return "Please proceed to payment confirmation.";
+}
 
 export type PlayerType = "new" | "existing";
 export type Step = 1 | 2 | 3;
@@ -40,7 +53,12 @@ interface SameName {
   players: PublicPlayer[];
 }
 
-export function useRegistrationFlow(tournamentId: string) {
+interface RegistrationFlowOptions {
+  /** The tournament is over (completed or cancelled): a sign-up kept from before is not shown again. */
+  closed?: boolean;
+}
+
+export function useRegistrationFlow(tournamentId: string, { closed = false }: RegistrationFlowOptions = {}) {
   const { toast } = useToast();
   const form = useForm<NewPlayerValues>({ resolver: formResolver(newPlayerSchema), defaultValues: EMPTY_NEW_PLAYER });
   const createPlayer = useCreatePlayer();
@@ -63,6 +81,18 @@ export function useRegistrationFlow(tournamentId: string) {
   // The last sign-up refusal said above the form; one put on a field (a phone number already taken) is
   // not. Set in the same step as the field's error, so the two never both show, even for a moment.
   const [signUpFailure, setSignUpFailure] = useState<unknown>(null);
+  // The sign-up this tab made before the page was reloaded, with a transfer still to make (R8REV1-PHONE-02).
+  const [saved, setSaved] = useState(() => readSavedSignUp(tournamentId));
+  // Shown again while it stands: not once the tournament is over, nor once the club has taken the entry off.
+  const { data: entries } = useRegistrations(tournamentId);
+  const restored = saved && !closed && (entries === undefined || entries.some((entry) => entry.id === saved.registration.id)) ? saved : null;
+  const signedUpBefore = register.isSuccess ? null : restored;
+
+  // One that no longer stands is not kept for the next visit either.
+  const stale = saved !== null && restored === null;
+  useEffect(() => {
+    if (stale) forgetSignUp(tournamentId);
+  }, [stale, tournamentId]);
 
   const player = playerType === "new" ? (claimed ?? signedUp?.player ?? null) : existingPlayer;
   const view: RegistrationView = step === 1 ? "type" : step === 3 ? "confirm" : playerType === "new" ? newPlayerStage : "search";
@@ -185,22 +215,26 @@ export function useRegistrationFlow(tournamentId: string) {
     else setStep(step === 3 ? 2 : 1);
   };
 
-  const signUp = async (playerId: string) => {
+  const signUp = async (chosen: PublicPlayer) => {
     // A player the club's search found needs no token; one made (or matched) here brings POST /api/players's.
     const token = playerType === "new" && !claimed && signedUp ? { signUpToken: signedUp.signUpToken } : {};
+    let created: RegistrationCreatedDto;
     try {
-      await register.mutateAsync({ playerId, enteringHighHands, ...token });
+      created = await register.mutateAsync({ playerId: chosen.id, enteringHighHands, ...token });
     } catch {
       return; // said on the step, from the mutation's error
     }
-    toast({ title: "Registration Successful!", description: "Please proceed to payment confirmation." });
+    saveSignUp(tournamentId, { player: chosen, registration: created, enteringHighHands });
+    toast({ title: "Registration Successful!", description: howToPayNote(created) });
   };
 
   const completeRegistration = () => {
-    if (player) void signUp(player.id);
+    if (player) void signUp(player);
   };
 
   const startOver = () => {
+    forgetSignUp(tournamentId);
+    setSaved(null);
     setStep(1);
     setPlayerType(null);
     setNewPlayerStage("photo");
@@ -239,16 +273,17 @@ export function useRegistrationFlow(tournamentId: string) {
     existingPlayer,
     chooseExistingPlayer: setExistingPlayer,
     continueWithExisting,
-    player,
-    enteringHighHands,
+    player: signedUpBefore?.player ?? player,
+    enteringHighHands: signedUpBefore?.enteringHighHands ?? enteringHighHands,
     setEnteringHighHands,
     completeRegistration,
     registering: register.isPending,
     registrationError: register.error ? registrationProblem(register.error) : null,
-    // Signed up: the mutation's own success, which Back and Start over reset (P3REV3-CQ-13).
-    complete: register.isSuccess,
-    /** The registration once signed up, with where auto-seat put the player (round 5). */
-    registration: register.data ?? null,
+    // Signed up: the mutation's own success, which Back and Start over reset (P3REV3-CQ-13), or a
+    // sign-up this tab made before the page was reloaded (R8REV1-PHONE-02).
+    complete: register.isSuccess || signedUpBefore !== null,
+    /** The registration once signed up, with where auto-seat put the player (round 5) and how to pay (round 8). */
+    registration: register.data ?? signedUpBefore?.registration ?? null,
     /**
      * The player has been made (or found) with the photo as it stands: it can no longer change here, as
      * sending it again would find that player and drop the new photo (P3REV3-IMG-01).

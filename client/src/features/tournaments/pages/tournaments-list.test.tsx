@@ -4,7 +4,7 @@ import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { server } from "@test/msw/server";
 import { apiError, mockSignedIn, renderWithApp } from "@test/helpers/web";
-import { clubDto, listItemDto, phoneLayout } from "@test/helpers/f1-tournaments";
+import { clubDto, listItemDto, noBankDetails, phoneLayout } from "@test/helpers/f1-tournaments";
 import TournamentsListPage from "./tournaments-list";
 
 const ours = listItemDto({ id: "t1", name: "Friday Freezeout", status: "registration", buyInAmount: "50.00", maxPlayers: 30, confirmedPlayerCount: 3, registeredCount: 5 });
@@ -20,6 +20,7 @@ function mockList(answer: (url: URL) => Response = () => HttpResponse.json([ours
       return answer(url);
     }),
     http.get("/api/clubs", () => HttpResponse.json([clubDto(), visitors])),
+    noBankDetails(),
   );
   return asked;
 }

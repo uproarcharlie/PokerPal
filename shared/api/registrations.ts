@@ -63,6 +63,28 @@ export const freeEntrySchema = z.object({
 });
 export type FreeEntryInput = z.infer<typeof freeEntrySchema>;
 
+/* ---------- how an entry paid (round 8) ---------- */
+
+/**
+ * How an accepted entry paid, for the club's records (tournament_registrations.paid_by): in cash or by
+ * bank transfer, as the TD said when confirming the payment, or a free entry (written when one is
+ * given). Null: not recorded (a payment confirmed before round 8, or without saying how).
+ */
+export const PAID_BY = ["cash", "transfer", "free"] as const;
+export type PaidBy = (typeof PAID_BY)[number];
+
+export const PAID_BY_LABELS: Readonly<Record<PaidBy, string>> = Object.freeze({
+  cash: "Cash",
+  transfer: "Bank transfer",
+  free: "Free entry",
+});
+
+export const isPaidBy = (value: unknown): value is PaidBy => typeof value === "string" && (PAID_BY as readonly string[]).includes(value);
+
+/** What the TD may record a payment as; a free entry is recorded by giving one (POST /api/registrations/:id/free-entry). */
+export const PAYMENT_METHODS = ["cash", "transfer"] as const satisfies readonly PaidBy[];
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+
 /**
  * The same endpoint for someone who manages the tournament's club: may also set the opening counts
  * and payment. Registering a player as paid, or with re-buys or add-ons, accepts them: past Max
@@ -78,6 +100,8 @@ export const staffRegistrationSchema = publicRegistrationSchema.extend({
   addons: integerSchema(0, 1000).optional(),
   paymentConfirmed: z.boolean().optional(),
   freeEntry: freeEntrySchema.optional(),
+  /** Round 8: how a player registered as paid paid (only with `paymentConfirmed: true`, else 400). */
+  paidBy: z.enum(PAYMENT_METHODS).optional(),
 });
 export type StaffRegistrationInput = z.infer<typeof staffRegistrationSchema>;
 
@@ -117,7 +141,7 @@ export type StaffRegistrationInput = z.infer<typeof staffRegistrationSchema>;
  * - paymentConfirmed false → true accepts the player, as does a first re-buy, add-on, knockout or bust
  *   of a waiting-list entry: past Max players, 409 TOURNAMENT_FULL (round 5, item 15; no override).
  *   true → false takes the entry's money out of the pool: a manual AP total must still be within what
- *   the paid entries took in (400 AP_EXCEEDS_GROSS).
+ *   the paid entries took in (400 AP_EXCEEDS_GROSS); how it paid (paidBy, round 8) is cleared with it.
  */
 export const updateRegistrationSchema = z
   .object({
@@ -152,6 +176,14 @@ export const adjustCountsSchema = z
 export type AdjustCountsInput = z.infer<typeof adjustCountsSchema>;
 
 /**
+ * PATCH /api/registrations/:id/confirm-payment (staff), round 8: how the player paid, for the club's
+ * records (`paidBy`; left out, not recorded). Confirming a payment already confirmed changes only how
+ * it was paid, when sent, and logs nothing. A free entry keeps "free": mark it paid instead.
+ */
+export const confirmPaymentSchema = z.object({ paidBy: z.enum(PAYMENT_METHODS).optional() });
+export type ConfirmPaymentInput = z.infer<typeof confirmPaymentSchema>;
+
+/**
  * POST /api/registrations/:id/free-entry (staff of the tournament's club), round 7:
  * - "give": gives the entry a free entry, or changes its reason, note or funding. Giving one to an
  *   unpaid sign-up accepts them like a payment does: past Max players, 409 TOURNAMENT_FULL (no
@@ -161,7 +193,8 @@ export type AdjustCountsInput = z.infer<typeof adjustCountsSchema>;
  * - "take_back": a normal unpaid entry again (accepted no more, as when a payment is taken back: the
  *   high-hand awards must still fit the pot, 409 HIGH_HAND_OVER_POOL / HIGH_HAND_AWARDED, and a manual
  *   AP total the gross, 400 AP_EXCEEDS_GROSS).
- * - "mark_paid": a normal paid entry: the player has paid their buy-in after all.
+ * - "mark_paid": a normal paid entry: the player has paid their buy-in after all (`paidBy`, round 8:
+ *   how, else not recorded).
  * "take_back" and "mark_paid" on an entry with no free entry are 409 NOT_FREE_ENTRY. Allowed after the
  * game too, like payments (reconciled at the end of the night). Each change is a staff-only activity
  * entry ("payment_confirmed", eventData.freeEntry) and an audit row ("registration.free_entry").
@@ -169,13 +202,18 @@ export type AdjustCountsInput = z.infer<typeof adjustCountsSchema>;
 export const freeEntryChangeSchema = z.discriminatedUnion("action", [
   freeEntrySchema.extend({ action: z.literal("give") }),
   z.object({ action: z.literal("take_back") }),
-  z.object({ action: z.literal("mark_paid") }),
+  z.object({ action: z.literal("mark_paid"), paidBy: z.enum(PAYMENT_METHODS).optional() }),
 ]);
 export type FreeEntryChangeInput = z.infer<typeof freeEntryChangeSchema>;
 
 /** Whether the entry has paid at the desk: for the club's staff only (P2REV0-SEC-04). */
 export interface PaymentStatus {
   paymentConfirmed: boolean | null;
+  /**
+   * How it paid (round 8; null: not recorded). Every staff registration answer has it; optional only
+   * because a row made before round 8 (a cached answer, a test's fixture) has none.
+   */
+  paidBy?: PaidBy | null;
 }
 
 /**
@@ -207,7 +245,90 @@ export type ManagedRegistration = PublicRegistration & PaymentStatus & FreeEntry
  * logs "seat_waiting" for the TD; no_tables before setup; awaiting_payment under "once they've paid";
  * off).
  */
-export type RegistrationCreatedDto = (PublicRegistration | ManagedRegistration) & { seating: AutoSeatResultDto };
+export type RegistrationCreatedDto = (PublicRegistration | ManagedRegistration) & {
+  seating: AutoSeatResultDto;
+  /**
+   * Round 8: how to pay by bank transfer, when the tournament shows its club's bank details after
+   * sign-up (showBankTransfer) and the club has them; absent otherwise, and for a player the desk
+   * registered as paid. The club's account only with a buy-in to transfer now (PaymentInstructionsDto,
+   * the one with `accountNumber`), else NothingToTransferDto. Only in this answer, to whoever made the
+   * sign-up (and staff): never in a list, a public read or the TV.
+   */
+  paymentInstructions?: SignUpPaymentDto;
+};
+
+/** The most characters a New Zealand bank transfer takes in its Particulars, Code and Reference fields. */
+export const BANK_TRANSFER_FIELD_MAX = 12;
+
+/** `text` with its spacing tidied, cut to `max` characters (whole characters, never half an emoji). */
+function fitField(text: string, max = BANK_TRANSFER_FIELD_MAX): string {
+  return Array.from(text.trim().replace(/\s+/g, " ")).slice(0, max).join("").trimEnd();
+}
+
+/**
+ * The Reference a player puts on their transfer (the owner, 2026-11-16): their name, cut to the 12
+ * characters the field takes ("Tama Rangi"; "Alexandra Fitzgerald" → "Alexandra Fi"). The desk finds
+ * the transfer by searching for the name.
+ */
+export const paymentReference = (playerName: string): string => fitField(playerName);
+
+/** "Wed 18 Nov": the tournament's day, in the club's time zone. */
+function tournamentDay(start: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-NZ", { timeZone, weekday: "short", day: "numeric", month: "short" }).formatToParts(start);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((candidate) => candidate.type === type)?.value ?? "";
+  return `${part("weekday")} ${part("day")} ${part("month")}`;
+}
+
+/**
+ * The Particulars suggested for the transfer: the tournament's short name, which is its name when that
+ * fits the 12 characters, else its day ("Wed 18 Nov") in the club's time zone (an IANA zone).
+ */
+export function paymentParticulars(tournament: { name: string; startDateTime: Date }, timeZone: string): string {
+  const name = tournament.name.trim().replace(/\s+/g, " ");
+  return name !== "" && Array.from(name).length <= BANK_TRANSFER_FIELD_MAX ? name : fitField(tournamentDay(tournament.startDateTime, timeZone));
+}
+
+/**
+ * Round 8 (bank transfer payments): what the player who has just signed up needs to pay the buy-in
+ * ahead by transfer. Sent only in the sign-up's own answer (RegistrationCreatedDto) for a tournament
+ * that shows it, with a buy-in to transfer now; the screen also says they may pay at the door, and
+ * that the TD confirms payments.
+ */
+export interface PaymentInstructionsDto {
+  /** The club's account (shared/api/clubs BankDetails). */
+  accountName: string;
+  accountNumber: string;
+  bankName: string | null;
+  /** The club's own note for players paying by transfer. */
+  instructions: string | null;
+  /** What to transfer: the buy-in only (the high hand is paid at the door); never 0. */
+  amountDueCents: Cents;
+  /** For the transfer's Particulars (paymentParticulars). */
+  particulars: string;
+  /** For its Reference: the player's name, cut to 12 characters (paymentReference). */
+  reference: string;
+  /** The high-hand entry the player ticked, paid at the door ("High hand ($5) — pay at the door"); 0 when none. */
+  highHandAtDoorCents: Cents;
+  /** Never on the waiting list: a waiting-list sign-up is told NothingToTransferDto. */
+  waitingList: false;
+}
+
+/**
+ * A sign-up for a tournament that shows bank details, with nothing to transfer now (R8REV0-PRIV-01):
+ * on the waiting list behind a full field ("don't pay yet; the club will tell you if a spot opens"),
+ * or with no buy-in to pay (a free entry, a $0 game). The club's account is left out: only someone
+ * about to send it money is given it.
+ */
+export interface NothingToTransferDto {
+  /** The entry's buy-in once it is accepted (0 for a free entry or a $0 game): from the waiting list, not to pay yet. */
+  amountDueCents: Cents;
+  /** The high-hand entry the player ticked, paid at the door; 0 when none. */
+  highHandAtDoorCents: Cents;
+  waitingList: boolean;
+}
+
+/** What a sign-up's answer says about paying by transfer: the account to pay into (`accountNumber` in it), or nothing to transfer now. */
+export type SignUpPaymentDto = PaymentInstructionsDto | NothingToTransferDto;
 
 /**
  * PATCH /api/registrations/:id/confirm-payment (staff), round 5: accepts the player, which past Max

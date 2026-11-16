@@ -130,7 +130,7 @@ function TopUpSteps({ tournament, kind, registrations, heading, onClose }: TopUp
   const takePayment = async (registration: PublicRegistration) => {
     setRefusal(null);
     try {
-      await confirmPayment.mutateAsync(registration.id);
+      await confirmPayment.mutateAsync({ registrationId: registration.id });
     } catch (error) {
       setRefusal(errorMessage(error, "The payment could not be confirmed"));
       return;

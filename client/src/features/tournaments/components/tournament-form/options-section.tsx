@@ -21,7 +21,10 @@ interface OptionsSectionProps {
   highHandEntrants: number;
 }
 
-/** The high-hand side pot, late registration and season points (none for a one-off game, or without a points system). */
+/**
+ * The high-hand side pot (its settings right under its box), late registration and season points (none
+ * for a one-off game, or without a points system).
+ */
 export function OptionsSection({ control, rakeLabel, moneyLocked, highHandEntrants }: OptionsSectionProps) {
   const highHand = useWatch({ control, name: "enableHighHand" });
   const [seasonId, pointsSystemId] = useWatch({ control, name: ["seasonId", "pointsSystemId"] });

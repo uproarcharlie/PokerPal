@@ -4,7 +4,7 @@ import { http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { server } from "@test/msw/server";
 import { apiError, mockSignedIn, renderWithApp } from "@test/helpers/web";
-import { clubDto, recordBodies, registrationDto, tournamentDto } from "@test/helpers/f1-tournaments";
+import { clubDto, noBankDetails, recordBodies, registrationDto, tournamentDto } from "@test/helpers/f1-tournaments";
 import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { EditTournamentDialog } from "./edit-tournament-dialog";
@@ -13,6 +13,7 @@ function mockSave(answer?: (body: unknown) => Response, registrations: PublicReg
   const saved = recordBodies();
   server.use(
     http.get("/api/seasons", () => HttpResponse.json([])),
+    noBankDetails(),
     http.get("/api/tournaments/t1/registrations", () => HttpResponse.json(registrations)),
     http.put("/api/tournaments/t1", async ({ request }) => {
       const body = await saved.record(request);

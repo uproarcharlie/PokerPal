@@ -95,6 +95,13 @@ const configFields = {
   openTableAt: nullableIntegerSchema(1, SEATING_LIMITS.maxSeats),
   autoSeat: z.enum(AUTO_SEAT_MODES).nullable().optional(),
   tableShape: z.enum(TABLE_SHAPES).nullable().optional(),
+  /**
+   * Round 8: "Show bank transfer details after sign-up": each sign-up's answer tells the player how to
+   * pay the buy-in into the club's account (shared/api/registrations PaymentInstructionsDto). Turning it
+   * on needs the club's bank details (GET /api/clubs/:id/payments): 400 VALIDATION on showBankTransfer
+   * without them. A value resent unchanged is accepted, whatever the club has now.
+   */
+  showBankTransfer: z.boolean().optional(),
 };
 
 
