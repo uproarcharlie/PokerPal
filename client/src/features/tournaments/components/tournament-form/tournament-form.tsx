@@ -23,8 +23,8 @@ interface TournamentFormProps {
   clubChoices: readonly ClubDto[] | null;
   club?: ClubDto;
   /**
-   * A completed or cancelled tournament keeps the money and points settings it was paid and scored
-   * with: those fields are shown but cannot be changed.
+   * A completed or cancelled tournament keeps the money, season and points settings it was paid and
+   * scored with: those fields are shown but cannot be changed.
    */
   moneyLocked?: boolean;
   /** Editing: the re-buys, add-ons and high-hand entries already recorded, which keep those parts on. */
@@ -64,8 +64,8 @@ export function TournamentForm({
         />
         {moneyLocked ? (
           <p className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground" data-testid="money-locked-note">
-            This tournament is closed: its buy-ins, {label}, payouts, high hand and points settings stay as they were paid and
-            scored.
+            This tournament is closed: its buy-ins, {label}, payouts, high hand, season and points settings stay as they were
+            paid and scored.
           </p>
         ) : null}
         <fieldset disabled={moneyLocked} className="space-y-6">

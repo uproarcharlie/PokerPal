@@ -19,12 +19,15 @@ import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { playerName } from "../player-name";
 import TournamentDetailsPage from "./tournament-details";
 
+/** A normal entry, as the club's staff get it: no free entry (round 7). */
+const NOT_FREE = { freeEntry: false, freeEntryFunded: false, freeEntryReason: null, freeEntryNote: null } as const;
+
 /** Ann signed up first and Cat last: the bust sheet lists the newest first. All paid: only paid players are in the pool (round 6). */
 const field: ManagedRegistration[] = [
   registrationDto("r1", "Ann", 2, { registrationTime: "2026-10-23T06:00:00.000Z" }),
   registrationDto("r2", "Bob", 2, { registrationTime: "2026-10-23T06:10:00.000Z" }),
   registrationDto("r3", "Cat", 1, { registrationTime: "2026-10-23T06:20:00.000Z" }),
-].map((registration) => ({ ...registration, paymentConfirmed: true }));
+].map((registration) => ({ ...registration, ...NOT_FREE, paymentConfirmed: true }));
 
 function mockDesk({
   tournament = {},
@@ -147,7 +150,8 @@ describe("TournamentDetailsPage on a phone: the tab bar", () => {
     const first = renderPhone();
     await first.user.click(await screen.findByRole("tab", { name: "Money" }));
     expect(first.location()).toBe("/admin/tournaments/t1?tab=money");
-    expect(await screen.findByTestId("prize-pool")).toHaveTextContent("$475");
+    // $475 available, paid out as $237 + $142 + $95 (round 7).
+    expect(await screen.findByTestId("prize-pool")).toHaveTextContent("$474");
     await first.user.click(screen.getByRole("tab", { name: "Players" }));
     expect(first.location()).toBe("/admin/tournaments/t1");
     first.unmount();
@@ -238,6 +242,7 @@ describe("TournamentDetailsPage on a phone: the quick actions", () => {
       "Re-buy",
       "Add-on",
       "Take payment",
+      "Free entry",
       "Approve requests1 waiting",
     ]);
   });
@@ -250,6 +255,7 @@ describe("TournamentDetailsPage on a phone: the quick actions", () => {
       "Register player",
       "Bust a player",
       "Take payment",
+      "Free entry",
       "Approve requests",
     ]);
     unmount();
@@ -258,6 +264,53 @@ describe("TournamentDetailsPage on a phone: the quick actions", () => {
     renderPhone();
     expect(await screen.findByRole("tab", { name: "Players" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Quick actions" })).not.toBeInTheDocument();
+  });
+
+  it("gives a free entry from the quick actions: who has not paid, why, then Give (round 7, item 6)", async () => {
+    const unpaidBob = { ...field[1], paymentConfirmed: false };
+    mockDesk({ registrations: [field[0], unpaidBob, field[2]] });
+    const { bodies, record } = recordBodies();
+    server.use(
+      http.post("/api/registrations/r2/free-entry", async ({ request }) => {
+        await record(request);
+        return HttpResponse.json({
+          ...unpaidBob,
+          paymentConfirmed: true,
+          freeEntry: true,
+          freeEntryFunded: false,
+          freeEntryReason: "staff",
+          freeEntryNote: null,
+          seating: null,
+          highHandUnawardedCents: 0,
+        });
+      }),
+    );
+    const { user } = renderPhone();
+
+    await quickAction(user, "Free entry");
+    const sheet = await screen.findByRole("dialog", { name: "Free entry" });
+    // Only the field's unpaid sign-ups are offered: Ann and Cat have paid.
+    expect(within(sheet).getByTestId("free-entry-pick-r2")).toHaveTextContent("Not paid yet");
+    expect(within(sheet).queryByTestId("free-entry-pick-r1")).not.toBeInTheDocument();
+    await user.click(within(sheet).getByTestId("free-entry-pick-r2"));
+
+    const form = await screen.findByRole("dialog", { name: "Free entry for Bob" });
+    await user.click(within(form).getByRole("button", { name: "Staff" }));
+    await user.click(within(form).getByRole("button", { name: "Give free entry" }));
+
+    await waitFor(() => expect(bodies).toEqual([{ action: "give", reason: "staff", note: null, funded: false }]));
+    expect(await notifications().findByText("Bob is in with a free entry.")).toBeInTheDocument();
+  });
+
+  it("offers no free entry in a game with no buy-in, which accepts its players instead (round 7, item 8)", async () => {
+    mockDesk({ tournament: { buyInAmount: "0.00" } });
+    const { user } = renderPhone();
+
+    await user.click(await screen.findByRole("button", { name: "Quick actions" }));
+    const items = within(await screen.findByRole("menu")).getAllByRole("menuitem").map((item) => item.textContent);
+    expect(items).toContain("Accept players");
+    expect(items).not.toContain("Free entry");
+    expect(items).not.toContain("Take payment");
   });
 
   it("registers a player and says where automatic seating put them", async () => {
@@ -632,8 +685,10 @@ describe("TournamentDetailsPage on a phone: the Money tab", () => {
     );
     const { user } = renderPhone("/admin/tournaments/t1?tab=money");
 
-    expect(await screen.findByTestId("prize-pool")).toHaveTextContent("$475");
+    expect(await screen.findByTestId("prize-pool")).toHaveTextContent("$474");
     expect(await screen.findByText("AP (buy-ins $5 per entry)")).toBeInTheDocument();
+    // The staff see where the $1 the rounding leaves goes.
+    expect(screen.getByTestId("pool-summary")).toHaveTextContent("Leftover $1 → AP");
     const confirm = await screen.findByTestId("confirm-payment-r3");
     await user.click(confirm);
 
@@ -704,8 +759,8 @@ describe("TournamentDetailsPage on a phone: taking payments without leaving the 
 describe("TournamentDetailsPage on a phone: the waiting list (round 5, item 15)", () => {
   const staffPlayer = (id: string, name: string) => ({ id, name, email: null, phone: null, imageUrl: null, createdAt: null, canEdit: true }) as const;
   /** Three accepted (paid) players fill a field of three; Eve, then Dee, signed up after it filled. */
-  const paid = (registration: PublicRegistration): ManagedRegistration => ({ ...registration, waitingListPosition: null, paymentConfirmed: true });
-  const waitingOn = (registration: PublicRegistration, waitingListPosition: number): ManagedRegistration => ({ ...registration, waitingListPosition, paymentConfirmed: false });
+  const paid = (registration: PublicRegistration): ManagedRegistration => ({ ...registration, ...NOT_FREE, waitingListPosition: null, paymentConfirmed: true });
+  const waitingOn = (registration: PublicRegistration, waitingListPosition: number): ManagedRegistration => ({ ...registration, ...NOT_FREE, waitingListPosition, paymentConfirmed: false });
   const dee = waitingOn(registrationDto("r4", "Dee", 1, { registrationTime: "2026-10-23T06:40:00.000Z" }), 2);
   const eve = waitingOn(registrationDto("r5", "Eve", 1, { registrationTime: "2026-10-23T06:30:00.000Z" }), 1);
   const fullField = [...field.map(paid), dee, eve];
@@ -819,5 +874,78 @@ describe("TournamentDetailsPage on a phone: the clock keeps ticking in the heade
     expect(clock).toHaveTextContent(/Clock, running:L1(5:00|4:59)200\/400/);
     await act(() => new Promise((resolve) => setTimeout(resolve, 1100)));
     expect(clock).toHaveTextContent(/4:5\d/);
+  });
+});
+
+describe("TournamentDetailsPage on a phone: free entries (round 7, item 6)", () => {
+  const unpaidCat: ManagedRegistration = { ...field[2], paymentConfirmed: false };
+
+  it("gives a free entry from the quick actions: the sign-ups not paid yet first, then why", async () => {
+    mockDesk({ registrations: [field[0], field[1], unpaidCat] });
+    const sent: Array<{ id: string; body: unknown }> = [];
+    server.use(
+      http.post("/api/registrations/:id/free-entry", async ({ params, request }) => {
+        sent.push({ id: String(params.id), body: await request.json() });
+        return HttpResponse.json({ ...unpaidCat, paymentConfirmed: true, freeEntry: true, freeEntryReason: "staff", seating: null, highHandUnawardedCents: 0 });
+      }),
+    );
+    const { user } = renderPhone();
+
+    await quickAction(user, "Free entry");
+    const sheet = await screen.findByRole("dialog", { name: "Free entry" });
+    // Only Cat has not paid: Ann and Bob are not offered.
+    expect(within(sheet).getByTestId("free-entry-pick-r3")).toHaveTextContent("Not paid yet");
+    expect(within(sheet).queryByTestId("free-entry-pick-r1")).not.toBeInTheDocument();
+    await user.click(within(sheet).getByTestId("free-entry-pick-r3"));
+
+    const form = await screen.findByRole("dialog", { name: "Free entry for Cat" });
+    expect(within(form).getByRole("heading", { name: "Free entry for Cat" })).toHaveFocus();
+    await user.click(within(form).getByRole("button", { name: "Staff" }));
+    expect(within(form).getByRole("button", { name: "Staff" })).toHaveClass("h-11");
+    await user.click(within(form).getByRole("button", { name: "Give free entry" }));
+
+    await waitFor(() => expect(sent).toEqual([{ id: "r3", body: { action: "give", reason: "staff", note: null, funded: false } }]));
+    expect(await notifications().findByText("Cat is in with a free entry.")).toBeInTheDocument();
+  });
+
+  it("goes back to the players from the reasons", async () => {
+    mockDesk({ registrations: [field[0], field[1], unpaidCat] });
+    const { user } = renderPhone();
+
+    await quickAction(user, "Free entry");
+    await user.click(within(await screen.findByRole("dialog", { name: "Free entry" })).getByTestId("free-entry-pick-r3"));
+    await user.click(within(await screen.findByRole("dialog", { name: "Free entry for Cat" })).getByRole("button", { name: "Choose someone else" }));
+
+    expect(within(await screen.findByRole("dialog", { name: "Free entry" })).getByTestId("free-entry-pick-r3")).toBeInTheDocument();
+  });
+
+  it("says when nobody is left to let in free", async () => {
+    mockDesk();
+    const { user } = renderPhone();
+
+    await quickAction(user, "Free entry");
+    const sheet = await screen.findByRole("dialog", { name: "Free entry" });
+    expect(within(sheet).getByText(/Everyone signed up has paid or has a free entry/)).toBeInTheDocument();
+  });
+
+  it("marks a player who came in free FREE in the players list, for the club's staff", async () => {
+    const freeCat: ManagedRegistration = { ...field[2], freeEntry: true, freeEntryFunded: false, freeEntryReason: "promo", freeEntryNote: null };
+    mockDesk({ registrations: [field[0], field[1], freeCat] });
+    renderPhone();
+
+    const cat = within(await screen.findByTestId("player-row-r3"));
+    expect(cat.getByTestId("free-entry-badge")).toHaveTextContent("Free entry: Promo");
+    expect(within(screen.getByTestId("player-row-r1")).queryByTestId("free-entry-badge")).not.toBeInTheDocument();
+  });
+
+  it("accepts players in a game with no buy-in, and offers no free entry (round 7, item 8)", async () => {
+    mockDesk({ tournament: { buyInAmount: "0.00" }, registrations: [field[0], field[1], unpaidCat] });
+    const { user } = renderPhone();
+
+    await user.click(await screen.findByRole("button", { name: "Quick actions" }));
+    const accept = await screen.findByRole("menuitem", { name: /Accept players/ });
+    await waitFor(() => expect(accept).toHaveTextContent("Accept players1 waiting to be accepted"));
+    expect(screen.queryByRole("menuitem", { name: "Free entry" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /Take payment/ })).not.toBeInTheDocument();
   });
 });

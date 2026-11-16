@@ -21,6 +21,7 @@ import { liveRegistrationsInterval, liveTournamentInterval } from "@/lib/live-re
 import { cn } from "@/lib/utils";
 import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
+import { toCents } from "@shared/domain/money";
 import { rakeLabel } from "@shared/domain/prize-pool";
 import { isClosedStatus } from "@shared/domain/tournaments";
 import { EditTournamentDialog } from "../components/edit-tournament-dialog";
@@ -221,6 +222,8 @@ function TournamentDesk({ tournament, registrations }: TournamentDeskProps) {
 
       <RegisterPlayerDialog
         tournamentId={tournament.id}
+        buyInCents={toCents(tournament.buyInAmount)}
+        rakeLabel={rakeLabel(club.data)}
         onOpenSeating={() => setTab("seating")}
         returnFocusTo={phone ? quickActions : undefined}
         {...dialogs.propsFor("register")}

@@ -154,8 +154,8 @@ function FinalizeDialogBody({ tournamentId, onClose }: { tournamentId: string; o
               </div>
               <ClubTakeTile prizePool={plan.prizePool} />
             </div>
-            {/* Where the money the prizes leave (or need) goes: kept, carried over, added (round 5, item 16). */}
-            <PoolSummary figures={liveSummary(plan.prizePool.breakdown, plan.prizePool.rakeLabel, plan.prizePool.carryTarget)} testId="finalize-summary" />
+            {/* What the prizes leave goes to the club's fee ("Leftover $3 → AP"), or what the club adds (round 7). */}
+            <PoolSummary figures={liveSummary(plan.prizePool.breakdown, plan.prizePool.rakeLabel)} testId="finalize-summary" />
 
             {!alreadyFinalized ? (
               <UnpaidPlayers

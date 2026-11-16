@@ -18,6 +18,15 @@ interface ToggleFieldProps {
   keptOnBecause?: string;
 }
 
+interface CheckboxFieldProps extends ToggleFieldProps {
+  /**
+   * Why the option is off whatever it holds (a one-off game scores no points): shown unticked and
+   * disabled, with this said in place of the description. The value is left alone, so the option
+   * comes back as it was once the reason goes; the request body applies the rule.
+   */
+  offBecause?: string;
+}
+
 /** A setting that opens more fields: a labelled switch in its own box. */
 export function SwitchField({ control, name, label, description, testId, keptOnBecause }: ToggleFieldProps) {
   return (
@@ -51,28 +60,29 @@ export function SwitchField({ control, name, label, description, testId, keptOnB
 }
 
 /** A yes/no option: a labelled checkbox. */
-export function CheckboxField({ control, name, label, description, testId, keptOnBecause }: ToggleFieldProps) {
+export function CheckboxField({ control, name, label, description, testId, keptOnBecause, offBecause }: CheckboxFieldProps) {
   return (
     <FormField
       control={control}
       name={name}
       render={({ field }) => {
-        const kept = keptOnBecause !== undefined && field.value;
+        const off = offBecause !== undefined;
+        const kept = !off && keptOnBecause !== undefined && field.value;
         return (
           <FormItem className="flex flex-row items-start gap-3 space-y-0">
             <FormControl>
               <Checkbox
                 ref={field.ref}
-                checked={field.value}
+                checked={!off && field.value}
                 onCheckedChange={(checked) => field.onChange(checked === true)}
                 onBlur={field.onBlur}
-                disabled={kept}
+                disabled={kept || off}
                 data-testid={testId}
               />
             </FormControl>
             <div className="space-y-1 leading-none">
               <FormLabel className="text-sm font-medium">{label}</FormLabel>
-              <FormDescription>{kept ? keptOnBecause : description}</FormDescription>
+              <FormDescription>{off ? offBecause : kept ? keptOnBecause : description}</FormDescription>
               <FormMessage />
             </div>
           </FormItem>

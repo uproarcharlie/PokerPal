@@ -22,11 +22,12 @@ interface ActiveTournamentsCardProps {
 
 function columnsFor(clubs: readonly ClubDto[], seasons: readonly PublicSeason[] | undefined): ResponsiveColumn<TournamentListItemDto>[] {
   const clubOf = (tournament: TournamentListItemDto) => clubs.find((club) => club.id === tournament.clubId);
-  // While the seasons load, a tournament's season line waits rather than saying "Unknown".
-  const seasonName = (tournament: TournamentListItemDto) => {
-    if (!tournament.seasonId) return "No Season";
+  // While the seasons load, a tournament's season line waits rather than saying "Unknown". A game with no
+  // season is a one-off (round 7, item 7), named as the tournament form names it.
+  const seasonLine = (tournament: TournamentListItemDto) => {
+    if (!tournament.seasonId) return "One-off game";
     if (!seasons) return null;
-    return seasons.find((season) => season.id === tournament.seasonId)?.name ?? "Unknown";
+    return `Season: ${seasons.find((season) => season.id === tournament.seasonId)?.name ?? "Unknown"}`;
   };
 
   // The tournaments page's own columns (P3REV5-CQ-06), with each one's season under its name.
@@ -38,9 +39,7 @@ function columnsFor(clubs: readonly ClubDto[], seasons: readonly PublicSeason[] 
       cell: (tournament) => (
         <div className="text-left">
           <p className="font-medium text-foreground">{tournament.name}</p>
-          {seasonName(tournament) !== null ? (
-            <p className="text-sm font-normal text-muted-foreground">Season: {seasonName(tournament)}</p>
-          ) : null}
+          {seasonLine(tournament) !== null ? <p className="text-sm font-normal text-muted-foreground">{seasonLine(tournament)}</p> : null}
         </div>
       ),
     },

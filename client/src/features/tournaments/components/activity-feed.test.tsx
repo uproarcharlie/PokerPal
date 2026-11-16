@@ -51,6 +51,22 @@ describe("ActivityFeed (P2REV4-CQ-07)", () => {
     }
   });
 
+  it("labels a free entry given or taken back as one, apart from a payment (round 7)", async () => {
+    server.use(
+      http.get("/api/tournaments/t1/activity", () =>
+        HttpResponse.json([
+          entry("1", "payment_confirmed", "Free entry for Ann (Season prize)", { eventData: JSON.stringify({ freeEntry: "given", funded: false }) }),
+          entry("2", "payment_confirmed", "Payment confirmed for Bob"),
+          entry("3", "payment_confirmed", "Payment confirmed for Cat", { eventData: "not json" }),
+        ]),
+      ),
+    );
+    renderWithApp(<ActivityFeed tournamentId="t1" live />);
+
+    expect(await screen.findByText("Free Entry")).toBeInTheDocument();
+    expect(screen.getAllByText("Payment")).toHaveLength(2);
+  });
+
   it("names the player and when it happened", async () => {
     const twoMinutesAgo = new Date(Date.now() - 2 * 60_000).toISOString();
     server.use(

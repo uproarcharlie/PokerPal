@@ -15,8 +15,11 @@ import { seatingDto, seatingMutation, seatMove, seatRef } from "@test/helpers/se
 import { visitorView } from "@test/helpers/f2-public";
 import TournamentDetails from "./tournament-details";
 
+/** A normal entry, as the club's staff get it: no free entry (round 7). */
+const NOT_FREE = { freeEntry: false, freeEntryFunded: false, freeEntryReason: null, freeEntryNote: null } as const;
+
 /** As the club's staff get them: only paid players are in the pool (round 6). */
-const paid = (registration: PublicRegistration): ManagedRegistration => ({ ...registration, paymentConfirmed: true });
+const paid = (registration: PublicRegistration): ManagedRegistration => ({ ...registration, ...NOT_FREE, paymentConfirmed: true });
 const field = [registrationDto("r1", "Ann", 2), registrationDto("r2", "Bob", 2), registrationDto("r3", "Cat", 1)].map(paid);
 
 function mockPage(
@@ -48,15 +51,17 @@ beforeEach(() => {
 });
 
 describe("TournamentDetails", () => {
-  it("shows the pool and payouts with the shared v2 maths and the club's AP label", async () => {
+  it("shows the pool and payouts with the shared v3 maths and the club's AP label, and the staff where the rounding goes (round 7)", async () => {
     mockPage(true);
     renderDetails();
 
-    expect(await screen.findByTestId("prize-pool")).toHaveTextContent("$475");
-    expect(screen.getByTestId("payout-1")).toHaveTextContent("$238");
+    // $475 available pays $237 + $142 + $95: the pool is what they add up to, and the $1 left is the club's.
+    expect(await screen.findByTestId("prize-pool")).toHaveTextContent("$474");
+    expect(screen.getByTestId("payout-1")).toHaveTextContent("$237");
     expect(screen.getByTestId("payout-2")).toHaveTextContent("$142");
     expect(screen.getByTestId("payout-3")).toHaveTextContent("$95");
     expect(await screen.findByText("AP (buy-ins $5 per entry)")).toBeInTheDocument();
+    expect(screen.getByTestId("pool-summary")).toHaveTextContent("Leftover $1 → AP");
   });
 
   it("opens the finalize preview from End Tournament for the club's staff", async () => {
@@ -72,7 +77,7 @@ describe("TournamentDetails", () => {
     await user.click(await screen.findByTestId("end-tournament"));
 
     expect(await screen.findByRole("dialog")).toHaveTextContent("Check the finishing order and the payouts");
-    expect(await screen.findByTestId("finalize-pool")).toHaveTextContent("$475");
+    expect(await screen.findByTestId("finalize-pool")).toHaveTextContent("$474");
   });
 
   it("says how many player requests are waiting beside End Tournament and Confirm Actions, since ending discards them (P2REV1-02)", async () => {
@@ -99,20 +104,20 @@ describe("TournamentDetails", () => {
   });
 
   it("says whose money the pool holds: paid players only, with the way to the payment desk (round 6)", async () => {
-    mockPage(true, { registrations: [...field, { ...registrationDto("r4", "Dee", 1), paymentConfirmed: false }] });
+    mockPage(true, { registrations: [...field, { ...registrationDto("r4", "Dee", 1), ...NOT_FREE, paymentConfirmed: false }] });
     renderDetails();
 
     expect(await screen.findByTestId("paid-players-note")).toHaveTextContent("Prize pool from 3 paid players · 1 not paid yet (not in the pool)");
     expect(screen.getByRole("link", { name: "Take payments" })).toHaveAttribute("href", "/admin/registrations/t1");
-    // Dee's $100 is not in it: five paid buy-ins less $5 AP each.
-    expect(screen.getByTestId("prize-pool")).toHaveTextContent("$475");
+    // Dee's $100 is not in it: five paid buy-ins less $5 AP each, paid out as $474.
+    expect(screen.getByTestId("prize-pool")).toHaveTextContent("$474");
   });
 
   it("hides the staff controls from someone who does not run the club", async () => {
     mockPage(false);
     renderDetails();
 
-    expect(await screen.findByTestId("prize-pool")).toHaveTextContent("$475");
+    expect(await screen.findByTestId("prize-pool")).toHaveTextContent("$474");
     expect(screen.queryByTestId("end-tournament")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Delete/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Edit/ })).not.toBeInTheDocument();
@@ -125,12 +130,13 @@ describe("TournamentDetails", () => {
     server.use(http.get("/api/tournaments/t1/prize-pool", () => void breakdownAsked++));
     renderDetails();
 
-    // They are not sent who has paid: the pool is the server's, from the paid players.
-    expect(await screen.findByTestId("prize-pool")).toHaveTextContent("$475");
-    expect(await screen.findByTestId("payout-1")).toHaveTextContent("$238");
+    // They are not sent who has paid: the pool is the server's, from the paid players. Nor where the rounding's $1 goes.
+    expect(await screen.findByTestId("prize-pool")).toHaveTextContent("$474");
+    expect(await screen.findByTestId("payout-1")).toHaveTextContent("$237");
     expect(screen.getByTestId("payout-3")).toHaveTextContent("$95");
     expect(screen.queryByTestId("ap-panel")).not.toBeInTheDocument();
     expect(screen.queryByText(/^AP/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Leftover/)).not.toBeInTheDocument();
     expect(breakdownAsked).toBe(0);
   });
 
@@ -147,14 +153,17 @@ describe("TournamentDetails", () => {
     expect(await screen.findByRole("button", { name: /Delete/ })).toBeInTheDocument();
   });
 
-  it("warns that places beyond the entrants are not paid, and totals only what finalize would pay (MONEY-REV-01)", async () => {
+  it("warns the staff that places beyond the entrants are not paid, and that what they would pay is the club's (MONEY-REV-01, R7FREV0-MONEY-01)", async () => {
     mockPage(true, { registrations: [registrationDto("r1", "Ann", 1), registrationDto("r2", "Bob", 1)].map(paid) });
     renderDetails();
 
-    // Standard pays three places, but two players can only take two of them: $190 net, $38 unpaid.
-    expect(await screen.findByTestId("undistributed")).toHaveTextContent("Only 2 players: $38 of the pool is not paid out unless more players enter.");
+    // Standard pays three places, but two players can only take two of them: $190 for prizes, $152 paid, 3rd's $38 the club's.
+    expect(await screen.findByTestId("undistributed")).toHaveTextContent(
+      /^Only 2 players: places below 2nd are not paid, so the \$38 they would pay goes to \w+ unless more players enter\.$/,
+    );
     expect(screen.getByTestId("payout-1")).toHaveTextContent("$95");
     expect(screen.queryByTestId("payout-3")).not.toBeInTheDocument();
+    expect(screen.getByTestId("prize-pool")).toHaveTextContent("$152");
   });
 
   it("counts the paid players when some of the field has not paid: their places wait for the payments (R6REV0-MONEY-02)", async () => {
@@ -162,7 +171,9 @@ describe("TournamentDetails", () => {
     renderDetails();
 
     // Three in the field, two paid: the same two places as above, and the third waits for Cat's payment.
-    expect(await screen.findByTestId("undistributed")).toHaveTextContent("Only 2 paid players: $38 of the pool is not paid out until more payments are confirmed.");
+    expect(await screen.findByTestId("undistributed")).toHaveTextContent(
+      /^Only 2 paid players: places below 2nd are not paid, so the \$38 they would pay goes to \w+ until more payments are confirmed\.$/,
+    );
     expect(screen.queryByTestId("payout-3")).not.toBeInTheDocument();
   });
 
@@ -200,6 +211,61 @@ describe("TournamentDetails", () => {
 
     expect(await screen.findByText("Dee Visitor is in.")).toBeInTheDocument();
     expect(registered).toEqual({ playerId: "p-dee", buyIns: 1, rebuys: 0, addons: 0 });
+  });
+
+  it("registers a player with a free entry: why is needed, and goes with the sign-up (round 7, item 6)", async () => {
+    mockPage(true);
+    let registered: unknown;
+    server.use(
+      http.get("/api/public/tournaments/t1/players", () => HttpResponse.json([{ id: "p-dee", name: "Dee Visitor", imageUrl: null }])),
+      http.post("/api/tournaments/t1/registrations", async ({ request }) => {
+        registered = await request.json();
+        return HttpResponse.json(
+          {
+            ...registrationDto("r9", "Dee Visitor"),
+            ...NOT_FREE,
+            playerId: "p-dee",
+            player: { id: "p-dee", name: "Dee Visitor", imageUrl: null },
+            paymentConfirmed: true,
+            freeEntry: true,
+            freeEntryReason: "other",
+            freeEntryNote: "Birthday",
+            seating: { status: "waiting", reason: "no_tables" },
+          } satisfies RegistrationCreatedDto,
+          { status: 201 },
+        );
+      }),
+    );
+    const user = userEvent.setup();
+    renderDetails();
+
+    await user.click(await screen.findByTestId("register-player"));
+    await user.type(screen.getByRole("searchbox", { name: "Player" }), "Dee");
+    await user.click(await screen.findByTestId("player-option-p-dee"));
+    // Off until the TD turns it on: no reasons asked for a normal sign-up.
+    expect(screen.queryByRole("button", { name: "Season prize" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("switch", { name: "Free entry" }));
+    await user.click(screen.getByTestId("register-player-final"));
+    expect(await screen.findByText("Choose why they get a free entry")).toBeInTheDocument();
+    expect(registered).toBeUndefined();
+
+    await user.click(screen.getByRole("button", { name: "Other" }));
+    await user.type(screen.getByRole("textbox", { name: "Note (optional)" }), "Birthday");
+    await user.click(screen.getByTestId("register-player-final"));
+
+    expect(await screen.findByText("Dee Visitor is in with a free entry.")).toBeInTheDocument();
+    expect(registered).toEqual({ playerId: "p-dee", buyIns: 1, rebuys: 0, addons: 0, freeEntry: { reason: "other", note: "Birthday", funded: false } });
+  });
+
+  it("offers no free entry when registering for a game with no buy-in (round 7, item 8)", async () => {
+    mockPage(true, { overrides: { buyInAmount: "0.00" } });
+    const user = userEvent.setup();
+    renderDetails();
+
+    await user.click(await screen.findByTestId("register-player"));
+
+    expect(await screen.findByRole("searchbox", { name: "Player" })).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Free entry" })).not.toBeInTheDocument();
   });
 
   it("says a late walk-in is waiting for a seat while the tables are in play, and seats them in one tap (TDN2-WAITING-NOT-FLAGGED)", async () => {
@@ -342,7 +408,8 @@ describe("TournamentDetails", () => {
     mockPage(true, { overrides: { status: "completed" }, registrations: handEntered });
     renderDetails();
 
-    expect(await screen.findByTestId("prize-pool")).toHaveTextContent(/^\$190\s*\(estimated: prizes not recorded\)$/);
+    // Estimated from what today's rules would pay its 2 players: $95 + $57 of the $190.
+    expect(await screen.findByTestId("prize-pool")).toHaveTextContent(/^\$152\s*\(estimated: prizes not recorded\)$/);
     expect(screen.getByTestId("no-payouts")).toHaveTextContent("what each place was paid was never recorded");
   });
 
@@ -442,13 +509,13 @@ describe("TournamentDetails", () => {
         http.get("/api/tournaments/t1/registrations", () => HttpResponse.json(registrations)),
       );
       renderDetails();
-      expect(await screen.findByTestId("prize-pool")).toHaveTextContent("$475");
+      expect(await screen.findByTestId("prize-pool")).toHaveTextContent("$474");
 
       // Dee signs up from the QR page: her $100 entry is not in the pool until she pays (round 6).
-      registrations = [...field, { ...registrationDto("r4", "Dee", 1), paymentConfirmed: false }];
+      registrations = [...field, { ...registrationDto("r4", "Dee", 1), ...NOT_FREE, paymentConfirmed: false }];
       await vi.advanceTimersByTimeAsync(LIVE_REFRESH_MS + 100);
       await waitFor(() => expect(screen.getByTestId("unpaid-count")).toHaveTextContent("1 not paid yet"));
-      expect(screen.getByTestId("prize-pool")).toHaveTextContent("$475");
+      expect(screen.getByTestId("prize-pool")).toHaveTextContent("$474");
 
       // She pays at the desk on another device: one more $100 entry, $5 AP.
       registrations = [...field, paid(registrationDto("r4", "Dee", 1))];

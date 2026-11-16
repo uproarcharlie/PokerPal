@@ -21,12 +21,13 @@ import { choose, tableRows, tableWithColumn, toast } from "./support/ui";
 const { defaultBrowserType: _browser, ...pixel7 } = devices["Pixel 7"];
 
 /**
- * 4 buy-ins at $25, one $25 re-buy and one $20 add-on: $145. The AP is 10% of the buy-ins ($10), so the
- * pool is $135. Standard pays 50/30/20: $67.50, $40.50 and $27 floored to $67, $40 and $27, and the
- * leftover $1 goes to 1st. (Rounding each place, as before v2, would have paid $68 + $41 + $27 = $136.)
+ * 4 buy-ins at $25, one $25 re-buy and one $20 add-on: $145. The AP is 10% of the buy-ins ($10), so $135
+ * is left for prizes. Standard pays 50/30/20: $67.50, $40.50 and $27 floored to $67, $40 and $27. The
+ * pool everyone is shown is what the places pay, $134, and the $1 left over goes to the AP (round 7;
+ * before it went to 1st, and before v2 rounding each place would have paid $68 + $41 + $27 = $136).
  */
-const POOL = "$135";
-const PAYOUTS = ["$68", "$40", "$27"];
+const POOL = "$134";
+const PAYOUTS = ["$67", "$40", "$27"];
 
 /** The admin page's Prize Structure cards, 1st to 3rd. */
 async function expectPrizeStructure(page: Page) {

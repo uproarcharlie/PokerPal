@@ -66,16 +66,19 @@ export function PoolLine({ label, value, note, testId, tone = "plain", className
 /** How each difference line counts towards the net pool: money in (+) or out (−) of it. */
 const DIFFERENCE_SIGNS: Readonly<Partial<Record<DifferenceLine["kind"], "+" | "-">>> = {
   carried_in: "+",
+  added_for_free_entries: "+",
   kept_by_club: "-",
   carried_over: "-",
   added_by_club: "+",
 };
 
 /**
- * The lines between the AP and the net pool that say where money came from or went (round 5, item 16):
- * carried in from an earlier tournament, kept by the club, carried over, added by the club. So the lines
- * above the net pool always add up to it (P2REV1-MONEY-03). A leftover added to the places is part of the
- * net pool already: the card says so under it instead (`LeftoverNote`).
+ * The lines between the AP and the net pool that say where money came from or went: carried in from an
+ * earlier tournament, added by the club for free entries (round 7), the leftover to the club's fee
+ * ("Leftover → AP", the rounding included), added by the club (and, frozen before round 7, carried
+ * over). So the lines above the net pool always add up to it (P2REV1-MONEY-03). A leftover a snapshot
+ * from before round 7 added to the places is part of the net pool already: the card says so under it
+ * instead (`LeftoverNote`). Staff-only.
  */
 export function DifferenceRows({ lines }: { lines: readonly DifferenceLine[] }) {
   return (
@@ -97,7 +100,7 @@ export function DifferenceRows({ lines }: { lines: readonly DifferenceLine[] }) 
   );
 }
 
-/** Under the net pool: the leftover the places were paid on top of what they were set to ("Includes $50 left over, added to 1st"). */
+/** Under a pool frozen before round 7: the leftover the places were paid on top of what they were set to ("Includes $50 left over, added to 1st"). */
 export function LeftoverNote({ lines }: { lines: readonly DifferenceLine[] }) {
   const added = lines.find((line) => line.kind === "added_to_prizes");
   if (!added) return null;

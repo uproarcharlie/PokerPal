@@ -54,7 +54,7 @@ export default function Privacy() {
         <List
           items={[
             "your name;",
-            "your phone number, so a club can recognise you when you come back and contact you about a game;",
+            "your phone number, if you give one, so a club can recognise you when you come back and contact you about a game;",
             "a photo of you, only if you choose to take or upload one;",
             "your tournament entries and results: buy-ins, re-buys and add-ons, finishing places, knockouts, points and prizes.",
           ]}
@@ -75,7 +75,7 @@ export default function Privacy() {
           items={[
             "to let clubs run their tournaments: who is playing, who has paid, who went out and who won;",
             "to show tournament standings and season leaderboards;",
-            "to recognise a returning player by their phone number, so the same person is not signed up twice;",
+            "to recognise a returning player by their phone number, or without one by letting them pick themselves from the club's players with the same name, so the same person is not signed up twice;",
             "to protect the site from misuse, such as too many sign-ups from one network.",
           ]}
         />

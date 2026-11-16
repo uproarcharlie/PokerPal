@@ -7,12 +7,14 @@
  * test/helpers/legacy-money.ts.)
  *
  * Precedence: a manual prize pool beats the manual AP total (`rakeOverride`), which beats the AP the
- * club's rates give. High-hand money is a separate pot and is never part of the AP override. When the
- * prizes as set (a manual pool, or custom places) are not exactly the money available for prizes, the
- * tournament's choice says where the difference goes (./prize-difference, round 5 item 16).
+ * club's rates give. High-hand money is a separate pot and is never part of the AP override. Each place
+ * is paid its share rounded down to whole dollars (or its fixed amount); whatever the prizes as set
+ * leave of the money available for prizes, the rounding included, goes to the club's fee, and whatever
+ * they need beyond it the club adds (./prize-difference, round 7).
  *
- * Only paid players are in the pool (owner, 2026-10-26: "prize pool should only show confirmed players
- * that have paid"): see poolEntries.
+ * Only accepted players are in the pool: those who have paid (owner, 2026-10-26: "prize pool should
+ * only show confirmed players that have paid") and those given a free entry (round 7, item 6), whose
+ * buy-ins bring in nothing unless the club pays them in. See poolEntries.
  */
 import {
   isAmountSet,
@@ -23,25 +25,16 @@ import {
   type MoneyInput,
 } from "./money";
 import {
-  allocatePayouts,
   outOfOrderPlaces,
   PAYOUT_ALGORITHM,
-  placeAmounts,
+  prizesAsSet,
   resolvePayoutStructure,
   sharesOfAmounts,
-  undistributedCents,
   type Payout,
   type PayoutAlgorithm,
   type ResolvedPayoutStructure,
 } from "./payouts";
-import {
-  carriedInCents,
-  readCarriedIn,
-  readPrizeDifference,
-  settleDifference,
-  type CarriedIn,
-  type PrizeDifference,
-} from "./prize-difference";
+import { carriedInCents, readCarriedIn, settleDifference, type CarriedIn, type LegacyDifference, type PrizeDifference } from "./prize-difference";
 import { fieldEntries, type WaitingListEntry } from "./waiting-list";
 
 export const DEFAULT_RAKE_LABEL = "Rake";
@@ -73,8 +66,6 @@ export interface PrizePoolInput {
   highHandPayouts?: number | null;
   /** Round 5 (item 15): who is on the waiting list behind a full field (unpaidEntries leaves them out). */
   maxPlayers?: number | null;
-  /** Round 5 (item 16): where a difference between the prizes as set and the money available goes (null: the club keeps it). */
-  prizeDifference?: string | null;
   /** Round 5 (item 16): money carried over into this pool from earlier tournaments (tournaments.carried_in). */
   carriedIn?: unknown;
   /** With prizePoolSnapshot: whether the tournament was completed before finalize kept snapshots (poolEntries). */
@@ -92,16 +83,45 @@ export interface EntryInput extends WaitingListEntry {
   rebuys?: number | null;
   addons?: number | null;
   enteringHighHands?: boolean | null;
+  /** Round 7 (item 6): given a free entry. Its buy-ins bring in nothing; it is accepted as a paid entry is. */
+  freeEntry?: boolean | null;
+  /** Round 7: the club pays the free entry's buy-ins into the prize pool, in full and with no AP taken. */
+  freeEntryFunded?: boolean | null;
+  /**
+   * How many registrations the entry stands for: 1 (a registration), unless it is a row of totals (the
+   * dashboard's). The places paid are counted from it.
+   */
+  registrationCount?: number;
 }
 
 export interface EntryCounts {
   registrations: number;
+  /** Every buy-in, free entries' included: the chips in play count them all. */
   buyIns: number;
   rebuys: number;
   addons: number;
   highHandEntrants: number;
+  /** Round 7: how many of the registrations have a free entry. */
+  freeEntries: number;
+  /** Round 7: how many of those the club pays in for. */
+  fundedFreeEntries: number;
+  /** Round 7: the free entries' buy-ins (part of `buyIns`), which nobody paid. */
+  freeBuyIns: number;
+  /** Round 7: the free buy-ins the club pays into the pool (part of `freeBuyIns`). */
+  fundedBuyIns: number;
 }
 
+/** What the free entries in a pool bring (round 7, item 6): staff-only, like the AP. */
+export interface FreeEntriesBreakdown {
+  /** How many registrations have a free entry. */
+  entries: number;
+  /** How many of them the club pays in for. */
+  funded: number;
+  /** What the club pays into the pool for them: their buy-ins at the buy-in price, with no AP taken ("Added by the club for free entries"). */
+  addedCents: Cents;
+}
+
+/** The money paid in: a free entry's buy-ins are not part of it. */
 export interface ComponentAmounts {
   buyIn: number;
   rebuy: number;
@@ -136,25 +156,36 @@ export interface PrizePoolBreakdown {
   /** In cents. */
   gross: ComponentAmounts;
   rake: RakeBreakdown;
-  /** gross.total + carriedInCents - rake.applied: the money available for prizes. */
+  /** gross.total + carriedInCents + freeEntries.addedCents - rake.applied: the money available for prizes. */
   netAfterAp: Cents;
   manualPrizePool: Cents | null;
   /**
-   * What the payouts add up to: the prizes as set (manualPrizePool ?? netAfterAp for a share table, or
-   * the custom places' own amounts) plus any difference added to them.
+   * What the payouts add up to: the prizes as set from manualPrizePool ?? netAfterAp (a share table's
+   * shares rounded down to whole dollars, or the custom places' own amounts), for the places with an
+   * accepted player in them. The prize pool every screen shows (round 7).
    */
   net: Cents;
   netSource: NetSource;
   /**
-   * gross.total + carriedInCents - net - difference.carriedOverCents: what the club keeps (its AP and
-   * any difference it keeps); negative when it adds money to the pool.
+   * gross.total + carriedInCents - net: what the club keeps in all (its AP and the leftover, less what
+   * it adds and pays in for free entries); negative when it puts more into the pool than it takes.
    */
   impliedRake: Cents;
   structure: ResolvedPayoutStructure;
-  /** What each place pays: they add up to `net` exactly. Empty when net <= 0. */
+  /**
+   * What each place with an accepted player in it pays (places beyond them are not paid: legacy D28):
+   * they add up to `net` exactly. Empty when net <= 0.
+   */
   payouts: Payout[];
-  /** Where a difference between the prizes as set and netAfterAp goes (round 5, item 16). */
-  difference: PrizeDifference;
+  /**
+   * The difference between what the places pay (`net`) and netAfterAp: the leftover (the rounding, a
+   * pool set below what came in, and what places with no player in them would pay) goes to the club's
+   * fee, a shortfall the club adds. Only a correction's plan (./finalize) may also record money carried
+   * over before round 7 that another pool holds (LegacyDifference: carriedOverCents, carryTarget).
+   */
+  difference: PrizeDifference & LegacyDifference;
+  /** What free entries bring (round 7). */
+  freeEntries: FreeEntriesBreakdown;
   /** Money carried over into this pool from earlier tournaments, each named. */
   carriedIn: CarriedIn[];
   carriedInCents: Cents;
@@ -164,6 +195,24 @@ export interface PrizePoolBreakdown {
 /** Whether the TD has confirmed the entry's payment at the desk: only then is its money in the prize pool. */
 export function hasPaid(entry: Pick<EntryInput, "paymentConfirmed">): boolean {
   return entry.paymentConfirmed === true;
+}
+
+/** Whether the entry has a free entry (round 7): its buy-ins are nobody's money, unless the club pays them in. */
+export function isFreeEntry(entry: Pick<EntryInput, "freeEntry">): boolean {
+  return entry.freeEntry === true;
+}
+
+/**
+ * Whether the entry is accepted into the field: paid, or given a free entry (round 7, which also stores
+ * it as paid). Only accepted entries are in the prize pool, are paid and are ranked.
+ */
+export function isAccepted(entry: Pick<EntryInput, "paymentConfirmed" | "freeEntry">): boolean {
+  return hasPaid(entry) || isFreeEntry(entry);
+}
+
+/** A whole game free to enter (round 7, item 8: a $0 buy-in): the pool is whatever the club puts up (a manual prize pool). */
+export function isFreeTournament(tournament: Pick<PrizePoolInput, "buyInAmount">): boolean {
+  return toCents(tournament.buyInAmount) === 0;
 }
 
 /**
@@ -177,36 +226,38 @@ function completedBeforeSnapshots(tournament: Pick<PrizePoolInput, "status" | "p
 }
 
 /**
- * The registrations a prize pool counts: only those whose payment is confirmed (the owner's decision,
- * 2026-10-26), with all their buy-ins, re-buys, add-ons and their high-hand entry. A sign-up that has
- * not paid, whether it has played or not, and the waiting list (./waiting-list) add nothing until the TD
- * confirms the payment. Admin, public, TV, dashboard and finalize all count through here, so they agree.
- * An entry that carries no payment status (a public registration) counts nothing: the server works out
- * a pool for anyone who cannot see who paid. A paid entry is never on the waiting list (paying accepts
- * it), but a list that carries its places is read as it is. A tournament completed before snapshots
- * counts its field as it always has (completedBeforeSnapshots).
+ * The registrations a prize pool counts: only the accepted ones (isAccepted: the payment confirmed, the
+ * owner's decision of 2026-10-26, or a free entry, round 7), with all their buy-ins, re-buys, add-ons
+ * and their high-hand entry (a free entry's buy-ins bring in money only when the club pays them in:
+ * computePrizePool). A sign-up that has not paid, whether it has played or not, and the waiting list
+ * (./waiting-list) add nothing until the TD accepts them. Admin, public, TV, dashboard and finalize all
+ * count through here, so they agree. An entry that carries no payment status (a public registration)
+ * counts nothing: the server works out a pool for anyone who cannot see who paid. An accepted entry is
+ * never on the waiting list (accepting it takes it off), but a list that carries its places is read as
+ * it is. A tournament completed before snapshots counts its field as it always has
+ * (completedBeforeSnapshots).
  */
 export function poolEntries<T extends EntryInput>(
   tournament: Pick<PrizePoolInput, "maxPlayers" | "status" | "prizePoolSnapshot">,
   entries: readonly T[],
 ): T[] {
   const field = fieldEntries(entries, tournament.maxPlayers);
-  return completedBeforeSnapshots(tournament) ? field : field.filter(hasPaid);
+  return completedBeforeSnapshots(tournament) ? field : field.filter(isAccepted);
 }
 
 /**
- * The players in the field (everyone but the waiting list) whose payment is not confirmed yet: they
- * play, and their chips count on the table, but their money is not in the prize pool until the TD
- * confirms it. What the TD's screens and finalize warn about.
+ * The players in the field (everyone but the waiting list) not accepted yet (neither paid nor given a
+ * free entry): they play, and their chips count on the table, but their money is not in the prize pool
+ * until the TD confirms it. What the TD's screens and finalize warn about.
  */
 export function unpaidEntries<T extends EntryInput>(tournament: Pick<PrizePoolInput, "maxPlayers">, entries: readonly T[]): T[] {
-  return fieldEntries(entries, tournament.maxPlayers).filter((entry) => !hasPaid(entry));
+  return fieldEntries(entries, tournament.maxPlayers).filter((entry) => !isAccepted(entry));
 }
 
 /**
  * Every entry recorded in the field (the waiting list left out), paid or not: what a new price would
  * re-price, since the desk asks every player for their entries at today's prices and the pool counts
- * each one once paid. The prize pool itself counts only paid entries (computePrizePool's `counts`).
+ * each one once paid. The prize pool itself counts only accepted entries (computePrizePool's `counts`).
  */
 export function recordedEntryCounts(tournament: Pick<PrizePoolInput, "maxPlayers">, entries: readonly EntryInput[]): EntryCounts {
   return countEntries(fieldEntries(entries, tournament.maxPlayers));
@@ -214,17 +265,21 @@ export function recordedEntryCounts(tournament: Pick<PrizePoolInput, "maxPlayers
 
 /**
  * Works out a tournament's pool from its settings and the registrations passed in, as poolEntries
- * counts them: paid players only.
+ * counts them: accepted players only. A free entry's buy-ins are not in the gross and take no AP; the
+ * club's payment for a funded one is added to the money available as it is.
  */
 export function computePrizePool(tournament: PrizePoolInput, entries: readonly EntryInput[]): PrizePoolBreakdown {
   const counts = countEntries(poolEntries(tournament, entries));
 
-  const buyIn = counts.buyIns * toCents(tournament.buyInAmount);
+  const buyInPrice = toCents(tournament.buyInAmount);
+  const paidBuyIns = counts.buyIns - counts.freeBuyIns;
+  const buyIn = paidBuyIns * buyInPrice;
   const rebuy = counts.rebuys * toCents(tournament.rebuyAmount);
   const addon = counts.addons * toCents(tournament.addonAmount);
   const gross = { buyIn, rebuy, addon, total: buyIn + rebuy + addon };
+  const freeEntries = { entries: counts.freeEntries, funded: counts.fundedFreeEntries, addedCents: counts.fundedBuyIns * buyInPrice };
 
-  const buyInRake = rakeCents(tournament.rakeType, tournament.rakeAmount, counts.buyIns, buyIn);
+  const buyInRake = rakeCents(tournament.rakeType, tournament.rakeAmount, paidBuyIns, buyIn);
   const rebuyRake = rakeCents(tournament.rebuyRakeType, tournament.rebuyRakeAmount, counts.rebuys, rebuy);
   const addonRake = rakeCents(tournament.addonRakeType, tournament.addonRakeAmount, counts.addons, addon);
   const calculated = buyInRake + rebuyRake + addonRake;
@@ -234,18 +289,16 @@ export function computePrizePool(tournament: PrizePoolInput, entries: readonly E
   const carriedIn = readCarriedIn(tournament.carriedIn);
   const carriedInTotal = carriedInCents(carriedIn);
   const manualPrizePool = isAmountSet(tournament.manualPrizePool) ? toCents(tournament.manualPrizePool) : null;
-  const netAfterAp = gross.total + carriedInTotal - applied;
+  const netAfterAp = gross.total + carriedInTotal + freeEntries.addedCents - applied;
   // The pool the prizes are set from: a percentage place is a share of it.
   const setPool = manualPrizePool ?? netAfterAp;
   const netSource: NetSource =
     manualPrizePool !== null ? "manual_pool" : override !== null ? "ap_override" : "calculated";
 
   const resolved = resolvePayoutStructure(tournament.payoutStructure, tournament.customPayouts, setPool);
-  const prizes = prizesAsSet(setPool, resolved);
-  const settled = settleDifference(prizes.amounts, prizes.setCents, netAfterAp, readPrizeDifference(tournament.prizeDifference));
-  const { difference } = settled;
-  const net = prizes.setCents + difference.addedToPrizesCents;
-  const { structure, payouts } = paidPlaces(resolved, settled.amounts, net, difference.addedToPrizesCents > 0);
+  const { structure, payouts, net } = paidPlaces(resolved, prizesAsSet(setPool, resolved), counts.registrations);
+  // A stored prize_difference (round 5) is not read: whatever the prizes leave is the club's (round 7).
+  const difference = settleDifference(net, netAfterAp);
 
   return {
     algorithm: PAYOUT_ALGORITHM,
@@ -256,10 +309,11 @@ export function computePrizePool(tournament: PrizePoolInput, entries: readonly E
     manualPrizePool,
     net,
     netSource,
-    impliedRake: gross.total + carriedInTotal - net - difference.carriedOverCents,
+    impliedRake: gross.total + carriedInTotal - net,
     structure,
     payouts,
     difference,
+    freeEntries,
     carriedIn,
     carriedInCents: carriedInTotal,
     highHand: highHandCents(tournament, counts.highHandEntrants),
@@ -267,57 +321,70 @@ export function computePrizePool(tournament: PrizePoolInput, entries: readonly E
 }
 
 /**
- * The prizes as the tournament sets them from `setPool`: a share table splits the pool (each share
- * floored to whole dollars, the rest to 1st, so they add up to it exactly; a pool of zero or less pays
- * nothing), custom places pay their own amounts (placeAmounts). `setCents` is what they add up to: the
- * pool itself for a share table, whatever its sign, so a pool that came out below zero stays as it is.
- */
-function prizesAsSet(setPool: Cents, structure: ResolvedPayoutStructure): { amounts: Cents[]; setCents: Cents } {
-  if (structure.places) {
-    const amounts = placeAmounts(setPool, structure.places);
-    return { amounts, setCents: amounts.reduce((sum, amount) => sum + amount, 0) };
-  }
-  const amounts = setPool > 0 ? allocatePayouts(setPool, structure.basisPoints).map((payout) => payout.amountCents) : structure.basisPoints.map(() => 0);
-  return { amounts, setCents: setPool };
-}
-
-/**
- * The payouts of `amounts` (adding up to `net`), and the structure as paid: a share table keeps its
- * shares while nothing was added to its places; otherwise each place's share is its share of what is
- * paid. Places that, as paid, pay more than the place above them are named in `structure.warning`.
+ * What is paid of the prizes as set (`asSet`: every place's amount, and what they add up to), and the
+ * structure as set: a share table keeps its shares; custom places are each given their share of what
+ * they pay as set, and places that pay more than the place above them are named in `structure.warning`.
+ * Only the places with a player in them are paid (`players`: places beyond the accepted players are not,
+ * legacy D28), so `net` is what those places add up to and what the rest would pay is left for the
+ * club's fee with the rest of the leftover (round 7). Nothing is paid from a pool of zero or less: its
+ * prizes "add up to" the pool as it is.
  */
 function paidPlaces(
   resolved: ResolvedPayoutStructure,
-  amounts: readonly Cents[],
-  net: Cents,
-  added: boolean,
-): { structure: ResolvedPayoutStructure; payouts: Payout[] } {
+  asSet: { amounts: readonly Cents[]; setCents: Cents },
+  players: number,
+): { structure: ResolvedPayoutStructure; payouts: Payout[]; net: Cents } {
+  const { amounts, setCents } = asSet;
   const custom = resolved.places !== undefined;
-  const basisPoints = custom || added ? sharesOfAmounts(amounts) : resolved.basisPoints;
-  const [outOfOrder] = custom && net > 0 ? outOfOrderPlaces(net, amounts) : [];
+  const [outOfOrder] = custom && setCents > 0 ? outOfOrderPlaces(amounts) : [];
   const structure: ResolvedPayoutStructure = {
     ...resolved,
-    basisPoints: custom && net <= 0 ? resolved.basisPoints : basisPoints,
+    basisPoints: custom && setCents > 0 ? sharesOfAmounts(amounts) : resolved.basisPoints,
     ...(outOfOrder ? { warning: outOfOrder.message } : {}),
   };
-  if (net <= 0) return { structure, payouts: [] };
-  const payouts = amounts.map((amountCents, i) => ({
+  if (setCents <= 0) return { structure, payouts: [], net: setCents };
+  const paid = amounts.slice(0, Math.max(0, players));
+  const net = paid.reduce((sum, amount) => sum + amount, 0);
+  if (net <= 0) return { structure, payouts: [], net };
+  const payouts = paid.map((amountCents, i) => ({
     position: i + 1,
     basisPoints: structure.basisPoints[i],
     percentage: structure.basisPoints[i] / 100,
     amountCents,
     ...(resolved.places ? { kind: resolved.places[i].kind } : {}),
   }));
-  return { structure, payouts };
+  return { structure, payouts, net };
+}
+
+/**
+ * What the places with no accepted player in them would pay as set (0 when every place has one, or
+ * nothing is paid): part of the leftover the club keeps (round 7), which the staff's screens name so the
+ * TD knows why the leftover is what it is.
+ */
+export function unfilledPlacesCents(pool: Pick<PrizePoolBreakdown, "manualPrizePool" | "netAfterAp" | "structure" | "counts">): Cents {
+  const { amounts, setCents } = prizesAsSet(pool.manualPrizePool ?? pool.netAfterAp, pool.structure);
+  if (setCents <= 0) return 0;
+  return amounts.slice(pool.counts.registrations).reduce((sum, amount) => sum + amount, 0);
 }
 
 function countEntries(entries: readonly EntryInput[]): EntryCounts {
-  const counts = { registrations: entries.length, buyIns: 0, rebuys: 0, addons: 0, highHandEntrants: 0 };
+  const counts = { registrations: 0, buyIns: 0, rebuys: 0, addons: 0, highHandEntrants: 0, freeEntries: 0, fundedFreeEntries: 0, freeBuyIns: 0, fundedBuyIns: 0 };
   for (const entry of entries) {
-    counts.buyIns += entry.buyIns ?? 0;
+    const registrations = entry.registrationCount ?? 1;
+    const buyIns = entry.buyIns ?? 0;
+    counts.registrations += registrations;
+    counts.buyIns += buyIns;
     counts.rebuys += entry.rebuys ?? 0;
     counts.addons += entry.addons ?? 0;
-    if (entry.enteringHighHands) counts.highHandEntrants += 1;
+    if (entry.enteringHighHands) counts.highHandEntrants += registrations;
+    if (isFreeEntry(entry)) {
+      counts.freeEntries += registrations;
+      counts.freeBuyIns += buyIns;
+      if (entry.freeEntryFunded === true) {
+        counts.fundedFreeEntries += registrations;
+        counts.fundedBuyIns += buyIns;
+      }
+    }
   }
   return counts;
 }
@@ -326,13 +393,14 @@ function countEntries(entries: readonly EntryInput[]): EntryCounts {
  * What one registration owes (or paid): every buy-in, re-buy and add-on at the tournament's prices,
  * plus the high-hand entry when it entered the high hand (money-18). An entry counts in the high hand
  * exactly when the pot counts it (`enteringHighHands`), so the payment desk asks for what the pot holds.
+ * A free entry (round 7) owes nothing for its buy-ins, only for the rest.
  */
 export function amountDueCents(
   tournament: Pick<PrizePoolInput, "buyInAmount" | "rebuyAmount" | "addonAmount" | "highHandAmount">,
   entry: EntryInput,
 ): Cents {
   return (
-    toCents(tournament.buyInAmount) * (entry.buyIns ?? 0) +
+    (isFreeEntry(entry) ? 0 : toCents(tournament.buyInAmount) * (entry.buyIns ?? 0)) +
     toCents(tournament.rebuyAmount) * (entry.rebuys ?? 0) +
     toCents(tournament.addonAmount) * (entry.addons ?? 0) +
     (entry.enteringHighHands ? toCents(tournament.highHandAmount) : 0)
@@ -457,8 +525,9 @@ export interface PayoutDisplayTournament {
  *   Screens say the prizes were not recorded rather than showing $0 (P2-PRODDATA-01).
  * - "cancelled": a cancelled tournament pays nothing (finalize refuses it, the dashboard counts it as
  *   $0), so screens say so and show no places (P2REV1-MONEY-04).
- * - "live": any other tournament: what finalize would pay now, the v2 payouts of the current pool for
- *   as many places as there are paid players (places beyond them are not paid: legacy D28).
+ * - "live": any other tournament: what finalize would pay now, the payouts of the current pool for as
+ *   many places as there are accepted players (places beyond them are not paid: legacy D28; what they
+ *   would pay is the club's, with the rest of the leftover: round 7).
  */
 export type PayoutDisplaySource = "snapshot" | "stored" | "unrecorded" | "cancelled" | "live";
 
@@ -476,8 +545,9 @@ export interface PayoutDisplay {
   /** What the rows pay, together. */
   totalCents: Cents;
   /**
-   * The part of the pool nobody is paid: places beyond the number of entrants (live), or what the
-   * snapshot's pool left unpaid. 0 for stored prizes, whose pool was not recorded.
+   * What a snapshot frozen before round 7 left unpaid of its pool (places beyond the number of
+   * entrants). 0 otherwise: since round 7 the pool is what the places pay (a live pool, and every
+   * snapshot since), and stored prizes recorded no pool.
    */
   undistributedCents: Cents;
 }
@@ -529,11 +599,8 @@ export function payoutsForDisplay(
     if (stored.length === 0 && prizePool.net > 0) return { source: "unrecorded", rows: [], totalCents: 0, undistributedCents: 0 };
     return { source: "stored", rows: stored, totalCents: sumAmounts(stored), undistributedCents: 0 };
   }
-  const entrants = prizePool.counts.registrations;
-  const rows = prizePool.payouts
-    .filter((p) => p.position <= entrants)
-    .map((p) => ({ position: p.position, amountCents: p.amountCents, percentage: p.percentage }));
-  return { source: "live", rows, totalCents: sumAmounts(rows), undistributedCents: undistributedCents(prizePool.payouts, entrants) };
+  const rows = prizePool.payouts.map((p) => ({ position: p.position, amountCents: p.amountCents, percentage: p.percentage }));
+  return { source: "live", rows, totalCents: sumAmounts(rows), undistributedCents: 0 };
 }
 
 function sumAmounts(rows: readonly { amountCents: Cents }[]): Cents {
@@ -547,8 +614,8 @@ function sumAmounts(rows: readonly { amountCents: Cents }[]): Cents {
  *   recorded), else, when no prize was recorded at all ("unrecorded"), its calculated pool, as the
  *   dashboard counted it before Phase 2;
  * - anything else: its current pool, never below zero.
- * `entries` may be per registration, or one row of totals of the paid entries (marked paid, with no
- * id): only the sums matter.
+ * `entries` may be per registration, or rows of totals (marked paid or not, with no id, each with the
+ * `registrationCount` it sums): only the sums, and how many players are in the pool, matter.
  */
 export function prizeMoneyCents(
   tournament: PrizePoolInput & PayoutDisplayTournament,

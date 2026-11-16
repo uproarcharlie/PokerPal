@@ -42,7 +42,7 @@ export function qrDestination(display: Pick<LiveDisplayDto, "qr" | "season">, ch
   if (!qr) return "The TV shows no QR code.";
   if (qr.target === "season" && season) return `The QR code opens the ${season.name} leaderboard.`;
   if (qr.target === "seats") return "The QR code opens the seat finder.";
-  return chosen === "season" ? "The QR code opens this tournament's live results (it has no season)." : "The QR code opens this tournament's live results.";
+  return chosen === "season" ? "The QR code opens this tournament's live results (a one-off game, with no season)." : "The QR code opens this tournament's live results.";
 }
 
 /**

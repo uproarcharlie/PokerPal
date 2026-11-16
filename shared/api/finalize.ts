@@ -2,8 +2,8 @@
  * POST /api/tournaments/:id/finalize/preview and /finalize (spec §5.2 #21-#22, §5.5, D18-D20).
  *
  * Finalize runs in one transaction: lock the tournament and its registrations, build the plan with
- * shared/domain (computePrizePool + allocatePayouts: whole-dollar shares floored, the leftover
- * dollars and cents to 1st, so the places add up to the pool exactly), check `expectedPlanHash`,
+ * shared/domain (computePrizePool + allocatePayouts: whole-dollar shares rounded down, whatever they
+ * leave of the money available going to the club's fee: round 7), check `expectedPlanHash`,
  * write positions, prizes, points, status "completed", finalizedAt/By and the immutable snapshot,
  * then the activity entry and the audit row. What the preview shows is what finalize pays.
  */
@@ -29,8 +29,8 @@ export const planHashSchema = z.string().regex(/^[0-9a-f]{32}$/, "Invalid plan h
  * - expectedPlanHash: the preview's planHash. If the plan changed since (a late rebuy, an edit),
  *   409 PLAN_CHANGED with `details: { preview }`. Required with `force` (400 PLAN_HASH_REQUIRED).
  * - force: re-finalize a completed tournament (never a cancelled one), after a preview.
- * - excludeUnpaid (round 6): only paid players are in the prize pool, so while anyone in the field has
- *   not paid finalize refuses (409 UNPAID_PLAYERS, details: { unpaid }) until each payment is confirmed
+ * - excludeUnpaid (round 6): only accepted players (paid, or given a free entry: round 7) are in the
+ *   prize pool, so while anyone in the field has not paid finalize refuses (409 UNPAID_PLAYERS, details: { unpaid }) until each payment is confirmed
  *   (PATCH /api/registrations/:id/confirm-payment) or this leaves them out: not ranked, paid or scored,
  *   and any place, prize or points an earlier finalize stored for them cleared. The finishing order is
  *   then of the paid players still in.
@@ -131,8 +131,9 @@ export interface FinalizePreviewDto {
    */
   unpaid: UnpaidPlayerDto[];
   /**
-   * E.g. pool not locked, the unpaid players left out, $X undistributed, AP override or manual pool
-   * active, player requests that will be discarded, points that change on a correction.
+   * E.g. pool not locked, the unpaid players left out, places with no player whose prizes go to the
+   * club's fee, AP override or manual pool active, player requests that will be discarded, points or
+   * place prizes that change on a correction, money carried over before round 7 that stays elsewhere.
    */
   warnings: string[];
   /**

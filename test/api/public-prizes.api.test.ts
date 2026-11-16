@@ -2,8 +2,9 @@
  * GET /api/public/tournaments/:id/prizes (round 6): the prize pool as the players see it, worked out on
  * the server from who has paid (shared/api/live-display toPublicPrizes: computePrizePool, payoutsForDisplay),
  * so the public page needs none of the club's takings to show it. The same body for every viewer, never
- * cached; only paid players' money is in it, and a payment confirmed at the desk raises it on the
- * public page and the TV alike.
+ * cached; only paid players' money is in it (and what the club pays in for free entries), and a payment
+ * confirmed at the desk raises it on the public page and the TV alike. The pool headlined is what the
+ * places pay (round 7: each rounded down to whole dollars, what they leave being the club's, never said).
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import { findForbiddenKeys, findTakingsKeys } from "@shared/api/public";
@@ -97,8 +98,9 @@ describe("GET /api/public/tournaments/:id/prizes", () => {
     expect((await owner.agent.patch(`/api/registrations/${unpaid[0].id}/confirm-payment`)).status).toBe(200);
 
     const [prizes, display] = await Promise.all([prizesOf(tournament.id), (await anon()).get(`/api/public/tournaments/${tournament.id}/display`)]);
-    expect(prizes.body.poolCents).toBe(31_500);
-    expect(display.body.money).toMatchObject({ show: true, netCents: 31_500, payouts: prizes.body.payouts });
+    // $350 less $35 AP is $315, paid out as $157 + $94 + $63 = $314.
+    expect(prizes.body.poolCents).toBe(31_400);
+    expect(display.body.money).toMatchObject({ show: true, netCents: 31_400, payouts: prizes.body.payouts });
     // The players on the TV are everyone playing, paid or not.
     expect(display.body.stats).toMatchObject({ entrants: 8, buyIns: 8 });
   });
@@ -113,7 +115,19 @@ describe("GET /api/public/tournaments/:id/prizes", () => {
 
     const { body } = await prizesOf(tournament.id);
 
-    expect(body).toMatchObject({ poolCents: 13_500, highHandPotCents: 3_000 });
+    // $150 less $15 AP is $135, paid out as $67 + $40 + $27.
+    expect(body).toMatchObject({ poolCents: 13_400, highHandPotCents: 3_000 });
+  });
+
+  it("counts what the club pays in for a free entry, in full, and nothing for one it does not, saying nothing of either (round 7)", async () => {
+    // 3 paid: $150 less $15 AP; a funded free entry adds its $50 with no AP: $185, paid out as $92 + $55 + $37. The unfunded one adds nothing.
+    const { tournament } = await world(game, [...entries(3), { paymentConfirmed: true, freeEntry: true, freeEntryFunded: true }, { paymentConfirmed: true, freeEntry: true }]);
+
+    const { body } = await prizesOf(tournament.id);
+
+    expect(body).toMatchObject({ poolCents: 18_400, payouts: [{ amountCents: 9_200 }, { amountCents: 5_500 }, { amountCents: 3_700 }], undistributedCents: 0 });
+    expect(findTakingsKeys(body)).toEqual([]);
+    expect(JSON.stringify(body)).not.toMatch(/free|funded/i);
   });
 
   it("says where money carried in from an earlier game came from and how much, and nothing of where any goes", async () => {
@@ -122,7 +136,8 @@ describe("GET /api/public/tournaments/:id/prizes", () => {
 
     const { body } = await prizesOf(tournament.id);
 
-    // $400 in, $40 AP, $200 carried in: $560 available; the prizes are fixed at $500 and $60 carried over (never said).
+    // $400 in, $40 AP, $200 carried in: $560 available; the prizes are fixed at $500 and the $60 left is the club's (never said),
+    // though a TD chose before round 7 to carry it over.
     expect(body).toMatchObject({ poolCents: 50_000, carriedIn: [{ fromName: "Week 3", amountCents: 20_000 }] });
     expect(findTakingsKeys(body)).toEqual([]);
     expect(JSON.stringify(body)).not.toMatch(/co1|carryOverId|Winter League/);
@@ -141,10 +156,10 @@ describe("GET /api/public/tournaments/:id/prizes", () => {
     const paid = (await prizesOf(tournament.id)).body;
     const none = (await prizesOf(cancelled.tournament.id)).body;
 
-    // 3 × $50 less $15 AP: $135, 50/30/20 floored to whole dollars, the rest to 1st.
-    expect(paid).toMatchObject({ source: "snapshot", estimated: false, poolCents: 13_500, deal: null });
+    // 3 × $50 less $15 AP: $135, 50/30/20 each rounded down to whole dollars, the $1 left the club's (round 7).
+    expect(paid).toMatchObject({ source: "snapshot", estimated: false, poolCents: 13_400, undistributedCents: 0, deal: null });
     expect(paid.payouts).toEqual([
-      { position: 1, amountCents: 6_800, registrationId: first.id },
+      { position: 1, amountCents: 6_700, registrationId: first.id },
       { position: 2, amountCents: 4_000, registrationId: second.id },
       { position: 3, amountCents: 2_700, registrationId: third.id },
     ]);
@@ -168,5 +183,26 @@ describe("GET /api/public/tournaments/:id/prizes", () => {
     }
     // Who has paid is the staff's (P2REV0-SEC-04), so the public cannot work the pool out: the server does.
     expect(JSON.stringify(registrationsRead.body)).not.toContain("paymentConfirmed");
+  });
+
+  it("never sends the public a prize pool fixed by hand, which beside the pool shown would tell the club's leftover (R7FREV0-LEAK-01)", async () => {
+    // A $1,000 pool fixed by hand on custom places 1st $500, 2nd $300: the places pay $800, and $200 is the club's.
+    const places = '{"v":2,"places":[{"amountCents":50000},{"amountCents":30000}]}';
+    const { owner, tournament } = await world({ ...game, manualPrizePool: "1000.00", payoutStructure: "custom", customPayouts: places }, entries(8));
+
+    const visitor = await anon();
+    const [detail, list, prizes] = await Promise.all([
+      visitor.get(`/api/tournaments/${tournament.id}`),
+      visitor.get(`/api/tournaments?clubId=${tournament.clubId}`),
+      prizesOf(tournament.id, visitor),
+    ]);
+
+    expect(prizes.body.poolCents).toBe(80_000);
+    for (const { body } of [detail, list, prizes]) {
+      expect(findTakingsKeys(body)).toEqual([]);
+      expect(JSON.stringify(body)).not.toMatch(/manualPrizePool|1000\.00/);
+    }
+    // Its staff still get it, for the AP panel and the payout editor.
+    expect((await owner.agent.get(`/api/tournaments/${tournament.id}`)).body).toMatchObject({ manualPrizePool: "1000.00" });
   });
 });

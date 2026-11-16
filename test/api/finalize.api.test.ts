@@ -391,7 +391,7 @@ describe("POST /api/tournaments/:id/finalize", () => {
     expect(row.finalizedAt).toBeInstanceOf(Date);
     expect(response.body.snapshot).toMatchObject({
       v: 1,
-      algorithm: "v2-floor-remainder-first",
+      algorithm: "v3-floor-remainder-fee",
       entrants: 3,
       finishOrderSource: "eliminations",
       pool: { grossCents: 15_000, netCents: 15_000, netSource: "calculated" },
@@ -532,8 +532,8 @@ describe("POST /api/tournaments/:id/finalize", () => {
 });
 
 describe("what finalize pays (money-04, money-01, money-02, MONEY-20)", () => {
-  it("pays exactly the pool: whole-dollar shares floored, the leftover to 1st ($475 pays $238 + $142 + $95)", async () => {
-    // 10 x $50 less 5% = $475 at 50/30/20 is 237.50 + 142.50 + 95; legacy rounding paid $476.
+  it("pays each place its share rounded down to whole dollars, the remainder to the club's fee ($475 pays $237 + $142 + $95: round 7)", async () => {
+    // 10 x $50 less 5% = $475 at 50/30/20 is 237.50 + 142.50 + 95; legacy rounding paid $476, and v2 gave 1st the remainder ($238).
     const { scenario, agent } = await ownedScenario({
       players: 10,
       buyIn: "50.00",
@@ -541,9 +541,14 @@ describe("what finalize pays (money-04, money-01, money-02, MONEY-20)", () => {
       eliminations: bustInOrder(10),
     });
 
-    await agent.post(finalizePath(scenario));
+    const response = await agent.post(finalizePath(scenario));
 
-    expect(prizes((await standings(scenario)).slice(0, 4))).toEqual(["238.00", "142.00", "95.00", null]);
+    expect(prizes((await standings(scenario)).slice(0, 4))).toEqual(["237.00", "142.00", "95.00", null]);
+    // The prize pool is what is paid; the $1 the rounding leaves is the club's, frozen with the AP and logged to the staff's feed.
+    expect(response.body.snapshot.pool).toMatchObject({ netCents: 47_400, impliedRakeCents: 2_600, rakeCalculatedCents: 2_500 });
+    expect(response.body.snapshot.pool.difference).toEqual({ availableCents: 47_500, setCents: 47_400, cents: 100, keptByClubCents: 100, addedByClubCents: 0 });
+    const descriptions = (await testDb().select().from(activityLog).where(eq(activityLog.tournamentId, scenario.tournament.id))).map((entry) => entry.description);
+    expect(descriptions).toContain("Leftover $1 → Rake: the prizes add up to $474 of the $475 available for prizes");
   });
 
   it("pays from the manual prize pool when one is set", async () => {
@@ -908,7 +913,7 @@ describe("players who have not paid (round 6: only paid players are in the prize
     const response = await agent.post(previewPath(scenario));
 
     expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({ ok: false, code: "UNPAID_PLAYERS", rows: [], prizePool: { breakdown: { net: 47_500, counts: { registrations: 10 } } } });
+    expect(response.body).toMatchObject({ ok: false, code: "UNPAID_PLAYERS", rows: [], prizePool: { breakdown: { net: 47_400, counts: { registrations: 10 } } } });
     expect(response.body).not.toHaveProperty("planHash");
     expect(response.body.unpaid.map((player: { registrationId: string }) => player.registrationId)).toEqual([0, 1].map((i) => scenario.registrations[i].id));
   });
@@ -922,11 +927,11 @@ describe("players who have not paid (round 6: only paid players are in the prize
 
     expect(response.status).toBe(200);
     const rows = await standings(scenario);
-    expect(prizes(rows).slice(0, 4)).toEqual(["238.00", "142.00", "95.00", null]);
+    expect(prizes(rows).slice(0, 4)).toEqual(["237.00", "142.00", "95.00", null]);
     expect(rows.slice(0, 2).map((row) => row.player)).toEqual([11, 10]);
     expect(rows.filter((row) => row.position === null)).toEqual([0, 1].map((player) => ({ player, position: null, prize: null, points: null })));
     expect(rows.filter((row) => row.points === 10)).toHaveLength(10);
-    expect(response.body.snapshot).toMatchObject({ entrants: 10, pool: { netCents: 47_500 } });
+    expect(response.body.snapshot).toMatchObject({ entrants: 10, pool: { netCents: 47_400 } });
     const [audit] = await auditRows(scenario);
     expect(audit.data).toMatchObject({ unpaidLeftOut: [0, 1].map((i) => scenario.registrations[i].id) });
     expect(audit.data).not.toHaveProperty("resultsCleared");
@@ -935,7 +940,8 @@ describe("players who have not paid (round 6: only paid players are in the prize
   it("pays a player whose payment is confirmed before finalizing, from a pool that grew by their entry", async () => {
     const { scenario, agent } = await ownedScenario({ players: 3, buyIn: "50.00", paid: [0, 2], eliminations: bustInOrder(3) });
     const before = await agent.post(previewPath(scenario));
-    expect(before.body).toMatchObject({ code: "UNPAID_PLAYERS", prizePool: { breakdown: { net: 10_000 } } });
+    // $100 from the 2 paid players fills 2 places, $50 + $30: what 3rd would pay is the club's until a 3rd pays.
+    expect(before.body).toMatchObject({ code: "UNPAID_PLAYERS", prizePool: { breakdown: { net: 8_000, difference: { keptByClubCents: 2_000 } } } });
 
     expect((await agent.patch(`/api/registrations/${scenario.registrations[1].id}/confirm-payment`)).status).toBe(200);
     const after = await agent.post(previewPath(scenario));
@@ -987,10 +993,10 @@ describe("POST /api/tournaments/:id/finalize/preview", () => {
       warnings: ["The prize pool is not locked"],
       unpaid: [],
       previous: null,
-      prizePool: { tournamentId: scenario.tournament.id, breakdown: { net: 47_500 }, display: { source: "live" } },
+      prizePool: { tournamentId: scenario.tournament.id, breakdown: { net: 47_400, netAfterAp: 47_500 }, display: { source: "live" } },
     });
     expect(response.body.rows.slice(0, 4)).toEqual([
-      { registrationId: scenario.registrations[9].id, playerId: scenario.players[9].id, playerName: scenario.players[9].name, finalPosition: 1, amountCents: 23_800, prizeAmount: "238.00", pointsAwarded: null },
+      { registrationId: scenario.registrations[9].id, playerId: scenario.players[9].id, playerName: scenario.players[9].name, finalPosition: 1, amountCents: 23_700, prizeAmount: "237.00", pointsAwarded: null },
       expect.objectContaining({ finalPosition: 2, amountCents: 14_200, prizeAmount: "142.00" }),
       expect.objectContaining({ finalPosition: 3, amountCents: 9_500, prizeAmount: "95.00" }),
       expect.objectContaining({ finalPosition: 4, amountCents: 0, prizeAmount: null }),
@@ -1021,7 +1027,8 @@ describe("POST /api/tournaments/:id/finalize/preview", () => {
     expect(response.status).toBe(200);
     const paid = (await standings(scenario)).map((row) => row.prize);
     expect(paid).toEqual(preview.body.rows.map((row: { prizeAmount: string | null }) => row.prizeAmount));
-    expect(paid).toEqual(["84.75", "50.00", "33.00", null, null]);
+    // $167.75 pays $83 + $50 + $33; the $1.75 the rounding leaves is the club's (round 7).
+    expect(paid).toEqual(["83.00", "50.00", "33.00", null, null]);
   });
 
   it("refuses a plan that changed since the preview (a late re-buy) and writes nothing", async () => {

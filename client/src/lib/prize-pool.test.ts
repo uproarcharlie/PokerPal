@@ -10,7 +10,7 @@ const tournament = {
   payoutStructure: "standard",
   prizePoolSnapshot: null,
 };
-/** Five paid buy-ins at $100 with $5 AP each: a $475 pool. */
+/** Five paid buy-ins at $100 with $5 AP each: $475 for prizes, of which the places pay $474. */
 const registrations = [
   { id: "r1", buyIns: 2, paymentConfirmed: true },
   { id: "r2", buyIns: 2, paymentConfirmed: true },
@@ -20,15 +20,17 @@ const registrations = [
 const amounts = (rows: { position: number; amountCents: number }[]) => rows.map((row) => [row.position, row.amountCents]);
 
 describe("tournamentMoney", () => {
-  it("splits a live pool with the v2 rule: whole dollars per place, the remainder to 1st, summing exactly", () => {
+  it("splits a live pool with the v3 rule: whole dollars per place, the remainder to the club's fee, the headline what the places pay", () => {
     const { breakdown, display, poolCents } = tournamentMoney(tournament, registrations);
 
-    expect(poolCents).toBe(47_500);
+    // Round 7: the pool shown everywhere is what the places pay; the $1 the rounding leaves goes to the AP.
+    expect(poolCents).toBe(47_400);
     expect(breakdown.rake.applied).toBe(2_500);
+    expect([breakdown.netAfterAp, breakdown.difference.keptByClubCents]).toEqual([47_500, 100]);
     expect(display.source).toBe("live");
-    // Legacy Math.round per place paid $238 + $143 + $95 = $476 from a $475 pool.
-    expect(amounts(display.rows)).toEqual([[1, 23_800], [2, 14_200], [3, 9_500]]);
-    expect(display.totalCents).toBe(47_500);
+    // Legacy Math.round per place paid $238 + $143 + $95 = $476 from a $475 pool; v2 gave the $1 to 1st.
+    expect(amounts(display.rows)).toEqual([[1, 23_700], [2, 14_200], [3, 9_500]]);
+    expect(display.totalCents).toBe(47_400);
   });
 
   it("headlines nothing for a cancelled tournament, which pays nothing (P2REV1-MONEY-04)", () => {
@@ -39,7 +41,8 @@ describe("tournamentMoney", () => {
   });
 
   it("pays a manual prize pool ahead of a manual AP total, and the AP total ahead of the rates", () => {
-    expect(tournamentMoney({ ...tournament, rakeOverride: "75.00" }, registrations).poolCents).toBe(42_500);
+    // $500 less a $75 AP total: $425, paid $212 + $127 + $85 = $424 (the $1 to the AP).
+    expect(tournamentMoney({ ...tournament, rakeOverride: "75.00" }, registrations).poolCents).toBe(42_400);
     expect(
       tournamentMoney({ ...tournament, rakeOverride: "75.00", manualPrizePool: "600.00" }, registrations).poolCents,
     ).toBe(60_000);

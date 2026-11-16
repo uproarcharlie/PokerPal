@@ -160,7 +160,7 @@ export function ClockScreen({ display, derived, offline, controls }: ClockScreen
   const overlay = clock && derived && !isClosedStatus(display.tournament.status) ? clock.displaySettings.overlay : "none";
   const playing = Boolean(clock && derived) && !isClosedStatus(display.tournament.status);
   const tiles = playing && settings ? displayTiles(display, derived, settings) : [];
-  const money = playing && settings ? moneyText(display.money, settings.showPrizePool, display.stats.entrants) : null;
+  const money = playing && settings ? moneyText(display.money, settings.showPrizePool) : null;
   const caption = display.qr ? qrCaption(display.qr, display.season) : null;
   const clubName = display.club.name.trim() !== display.tournament.name.trim() ? display.club.name : null;
   const showLevel = settings?.showLevel ?? false;
@@ -247,7 +247,7 @@ export function ClockScreen({ display, derived, offline, controls }: ClockScreen
       ) : null}
       {overlay === "seating" && strip ? <SeatingOverlay tournamentId={display.tournament.id} strip={strip} size={size} padding={edgePadding(prefs.applied)} /> : null}
       {overlay === "payouts" && strip && clock ? (
-        <PayoutsOverlay money={display.money} entrants={display.stats.entrants} settings={clock.displaySettings} strip={strip} size={size} padding={edgePadding(prefs.applied)} />
+        <PayoutsOverlay money={display.money} settings={clock.displaySettings} strip={strip} size={size} padding={edgePadding(prefs.applied)} />
       ) : null}
       {controls?.(tools)}
       <ScreenSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} prefs={prefs} onChange={saveSettings} sound={sound} handheld={handheld} />

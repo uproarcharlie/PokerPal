@@ -4,36 +4,42 @@ import { delay, http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it } from "vitest";
 import { server } from "@test/msw/server";
 import { apiError, mockSignedIn, renderWithApp } from "@test/helpers/web";
-import { clubDto, phoneLayout, registrationDto, screenWidth, tournamentDto } from "@test/helpers/f1-tournaments";
-import type { ConfirmedRegistrationDto, PendingRegistrationDto } from "@shared/api/registrations";
+import { clubDto, freeEntryStatus, phoneLayout, registrationDto, screenWidth, tournamentDto } from "@test/helpers/f1-tournaments";
+import type { ConfirmedRegistrationDto, FreeEntryChangedDto, PendingRegistrationDto } from "@shared/api/registrations";
 import AdminRegistrationsPage from "./admin-registrations";
 
 const staffPlayer = (id: string, name: string, phone: string | null) =>
   ({ id, name, email: null, phone, imageUrl: null, createdAt: null, canEdit: true }) as const;
 
+/** A normal entry: no free entry (round 7). */
+const NOT_FREE = freeEntryStatus();
+
 const ann: PendingRegistrationDto = {
   ...registrationDto("r1", "Ann", 2, { rebuys: 1, addons: 1 }),
+  ...NOT_FREE,
   paymentConfirmed: false,
   player: staffPlayer("p-r1", "Ann", "021 555 0101"),
   amountOwed: 175,
 };
 const visitor: PendingRegistrationDto = {
   ...registrationDto("r2", "Vic", 1, { enteringHighHands: true }),
+  ...NOT_FREE,
   paymentConfirmed: false,
   player: { id: "p-r2", name: "Vic", email: null, phone: null, imageUrl: null, createdAt: null, canEdit: false },
   amountOwed: 60.5,
 };
 const bob: ConfirmedRegistrationDto = {
   ...registrationDto("r3", "Bob", 1),
+  ...NOT_FREE,
   paymentConfirmed: true,
   player: staffPlayer("p-r3", "Bob", null),
   amountPaid: 50,
 };
 
-function mockDesk({ canManage = true, pending = [ann, visitor], confirmed = [bob], maxPlayers = 20 } = {}) {
+function mockDesk({ canManage = true, pending = [ann, visitor], confirmed = [bob], maxPlayers = 20, buyInAmount = "100.00" } = {}) {
   const lists: string[] = [];
   server.use(
-    http.get("/api/tournaments/t1", () => HttpResponse.json(tournamentDto({ maxPlayers, viewer: { canManage, canOwn: canManage } }))),
+    http.get("/api/tournaments/t1", () => HttpResponse.json(tournamentDto({ maxPlayers, buyInAmount, viewer: { canManage, canOwn: canManage } }))),
     http.get("/api/clubs/c1", () => HttpResponse.json(clubDto())),
     http.get("/api/tournaments/t1/pending-registrations", () => {
       lists.push("pending");
@@ -361,5 +367,164 @@ describe("AdminRegistrationsPage: the early-bird bonus", () => {
     expect(await screen.findByText("Could not change the early-bird bonus")).toBeInTheDocument();
     expect(screen.getByText("This tournament is over")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Early-bird bonus for Ann" })).toBeChecked();
+  });
+});
+
+describe("AdminRegistrationsPage: free entries (round 7, item 6)", () => {
+  /** Bob came in free: his Winter League prize, the club paying his buy-in into the pool. */
+  const freeBob: ConfirmedRegistrationDto = {
+    ...bob,
+    freeEntry: true,
+    freeEntryFunded: true,
+    freeEntryReason: "season_prize",
+    freeEntryNote: "Winter League",
+    amountPaid: 0,
+  };
+  /** The server's answer to a free-entry change: the registration as it now stands. */
+  const answer = (registration: PendingRegistrationDto | ConfirmedRegistrationDto, overrides: Partial<FreeEntryChangedDto> = {}): FreeEntryChangedDto => {
+    const { amountOwed: _owed, amountPaid: _paid, player: _player, ...row } = { amountOwed: 0, amountPaid: 0, ...registration };
+    return { ...registrationDto(row.id, "Ann"), ...NOT_FREE, paymentConfirmed: true, seating: null, highHandUnawardedCents: 0, ...overrides };
+  };
+
+  function recordFreeEntries(reply: (id: string, body: unknown) => Response) {
+    const sent: { id: string; body: unknown }[] = [];
+    server.use(
+      http.post("/api/registrations/:id/free-entry", async ({ params, request }) => {
+        const body = await request.json();
+        sent.push({ id: String(params.id), body });
+        return reply(String(params.id), body);
+      }),
+    );
+    return sent;
+  }
+
+  it("gives a sign-up a free entry: a reason must be chosen, the note and the club's funding go with it", async () => {
+    mockDesk();
+    const sent = recordFreeEntries(() =>
+      HttpResponse.json(
+        answer(ann, {
+          freeEntry: true,
+          freeEntryFunded: true,
+          freeEntryReason: "season_prize",
+          freeEntryNote: "Winter League",
+          seating: { status: "seated", seat: { tableId: "tb1", tableNumber: 1, tableName: "Table 1", seatNumber: 4 } },
+        }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderDesk();
+
+    await user.click(await screen.findByRole("button", { name: "Free entry for Ann" }));
+    const sheet = await screen.findByRole("dialog", { name: "Free entry for Ann" });
+    // Not funded by default: the buy-in adds nothing to the pool.
+    expect(within(sheet).getByText("Off: their $100 buy-in adds nothing to the prize pool.")).toBeInTheDocument();
+
+    await user.click(within(sheet).getByRole("button", { name: "Give free entry" }));
+    expect(await within(sheet).findByText("Choose why they get a free entry")).toBeInTheDocument();
+    expect(sent).toEqual([]);
+
+    const reasons = within(sheet).getByRole("group", { name: /Why is it free\?/ });
+    await user.click(within(reasons).getByRole("button", { name: "Season prize" }));
+    expect(within(reasons).getByRole("button", { name: "Season prize" })).toHaveAttribute("aria-pressed", "true");
+    await user.type(within(sheet).getByRole("textbox", { name: "Note (optional)" }), "Winter League");
+    await user.click(within(sheet).getByRole("switch", { name: "Club pays their buy-in into the pool" }));
+    expect(within(sheet).getByText("Adds $100 to the prize pool, with no AP taken from it.")).toBeInTheDocument();
+    await user.click(within(sheet).getByRole("button", { name: "Give free entry" }));
+
+    await waitFor(() => expect(sent).toEqual([{ id: "r1", body: { action: "give", reason: "season_prize", note: "Winter League", funded: true } }]));
+    expect(await screen.findByText("Free entry given")).toBeInTheDocument();
+    expect(screen.getByText("Ann is in with a free entry. Seated at Table 1, Seat 4.")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Free entry for Ann" })).not.toBeInTheDocument());
+  });
+
+  it("sends no note when none is typed, and no funding unless it is switched on", async () => {
+    mockDesk();
+    const sent = recordFreeEntries(() => HttpResponse.json(answer(ann, { freeEntry: true, freeEntryReason: "promo" })));
+    const user = userEvent.setup();
+    renderDesk();
+
+    await user.click(await screen.findByRole("button", { name: "Free entry for Ann" }));
+    const sheet = await screen.findByRole("dialog", { name: "Free entry for Ann" });
+    await user.click(within(sheet).getByRole("button", { name: "Promo" }));
+    await user.click(within(sheet).getByRole("button", { name: "Give free entry" }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toEqual({ id: "r1", body: { action: "give", reason: "promo", note: null, funded: false } });
+  });
+
+  it("says the tournament is full when a free entry would pass Max players, and keeps the sheet open", async () => {
+    const FULL = "20 of 20 players accepted: raise Max players to accept more";
+    mockDesk();
+    recordFreeEntries(() => apiError(409, "TOURNAMENT_FULL", FULL));
+    const user = userEvent.setup();
+    renderDesk();
+
+    await user.click(await screen.findByRole("button", { name: "Free entry for Ann" }));
+    const sheet = await screen.findByRole("dialog", { name: "Free entry for Ann" });
+    await user.click(within(sheet).getByRole("button", { name: "Staff" }));
+    await user.click(within(sheet).getByRole("button", { name: "Give free entry" }));
+
+    expect(await screen.findByText("Tournament full")).toBeInTheDocument();
+    expect(screen.getByText(FULL)).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Free entry for Ann" })).toBeInTheDocument();
+  });
+
+  it("marks a free entry FREE among the confirmed, says why, and counts it under the total", async () => {
+    mockDesk({ confirmed: [freeBob] });
+    renderDesk();
+
+    const paid = await screen.findByRole("table", { name: "Players who have paid" });
+    const row = within(paid).getByTestId("confirmed-registration-r3");
+    const badge = within(row).getByTestId("free-entry-badge");
+    expect(badge).toHaveTextContent("Free entry: Season prize: Winter League · club pays the buy-in");
+    expect(within(row).queryByText("Confirmed")).not.toBeInTheDocument();
+    expect(screen.getByText("confirmed · 1 free entry")).toBeInTheDocument();
+  });
+
+  it("takes a free entry back, or marks it paid, each telling its own outcome", async () => {
+    mockDesk({ confirmed: [freeBob] });
+    const sent = recordFreeEntries((_id, body) =>
+      (body as { action: string }).action === "mark_paid"
+        ? apiError(409, "NOT_FREE_ENTRY", "Bob does not have a free entry")
+        : HttpResponse.json(answer(freeBob, { paymentConfirmed: false })),
+    );
+    const user = userEvent.setup();
+    renderDesk();
+
+    await user.click(await screen.findByRole("button", { name: "Mark Bob paid" }));
+    expect(await screen.findByText("Could not mark the payment")).toBeInTheDocument();
+    expect(screen.getByText("Bob does not have a free entry")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Undo Bob's free entry" }));
+    expect(await screen.findByText("Free entry taken back")).toBeInTheDocument();
+    expect(screen.getByText("Bob is a normal entry again and has not paid yet.")).toBeInTheDocument();
+    expect(sent).toEqual([
+      { id: "r3", body: { action: "mark_paid" } },
+      { id: "r3", body: { action: "take_back" } },
+    ]);
+  });
+
+  it("offers no free entry in a game with no buy-in, which accepts its players instead (round 7, item 8)", async () => {
+    mockDesk({ buyInAmount: "0.00" });
+    renderDesk();
+
+    expect(await screen.findByRole("heading", { name: "Free tournament — accept players" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Accept Ann" })).toHaveTextContent("Accept");
+    expect(screen.queryByRole("button", { name: "Free entry for Ann" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Accepted Players" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("confirmed-registration-r3")).getByText("Accepted")).toBeInTheDocument();
+  });
+
+  it("says a player is accepted, not that they paid, in a game with no buy-in (round 7, item 8)", async () => {
+    mockDesk({ buyInAmount: "0.00" });
+    server.use(http.patch("/api/registrations/r1/confirm-payment", () => HttpResponse.json({ ...ann, paymentConfirmed: true, seating: null })));
+    const user = userEvent.setup();
+    renderDesk();
+
+    await user.click(await screen.findByRole("button", { name: "Accept Ann" }));
+
+    expect(await screen.findByText("Player accepted")).toBeInTheDocument();
+    expect(screen.getByText("Ann is in.")).toBeInTheDocument();
+    expect(screen.queryByText("Payment Confirmed")).not.toBeInTheDocument();
   });
 });

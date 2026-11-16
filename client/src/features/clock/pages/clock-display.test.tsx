@@ -274,30 +274,20 @@ describe("the TV clock", () => {
     expect(within(money).queryByTestId("display-carried-in")).not.toBeInTheDocument();
   });
 
-  it("says what of the pool no place is paid while fewer players are in than the places it pays (MONEY-AP-05)", async () => {
-    // A $500 pool paying 3 places, with 2 players in: 1st and 2nd take $400, the 3rd place's $100 is not paid.
-    serveDisplay({
-      stats: { entrants: 2, remaining: 2 },
-      clock: runningClock(Date.now(), { displaySettings: { ...clockDto().displaySettings, overlay: "payouts" } }),
-      money: { show: true, estimated: true, netCents: 50_000, payouts: [{ position: 1, amountCents: 25_000 }, { position: 2, amountCents: 15_000 }] },
-    });
-    showPage();
-    const note = "Only 2 players: $100 of the pool is not paid out unless more players enter.";
-    expect(await within(await screen.findByTestId("display-money")).findByTestId("display-unpaid")).toHaveTextContent(note);
-    expect(within(screen.getByRole("region", { name: "Payouts" })).getByText(note)).toBeInTheDocument();
-  });
-
-  it("counts the paid players while some of the room has not paid, and never says more players must enter (R6REV0-MONEY-02)", async () => {
-    // 12 playing, 2 paid: the pool pays two places, and the 3rd place's $100 waits for the payments.
+  it("lists the places with a player in the pool, whose prizes are the pool, and never what the others would pay (R7FREV0-MONEY-01)", async () => {
+    // A $500 pool paying 3 places, with 2 of the 12 playing paid: 1st and 2nd's $400 is the pool; 3rd's $100 is the club's, never said.
     serveDisplay({
       stats: { entrants: 12, remaining: 12 },
       clock: runningClock(Date.now(), { displaySettings: { ...clockDto().displaySettings, overlay: "payouts" } }),
-      money: { show: true, estimated: true, netCents: 50_000, payouts: [{ position: 1, amountCents: 25_000 }, { position: 2, amountCents: 15_000 }] },
+      money: { show: true, estimated: true, netCents: 40_000, payouts: [{ position: 1, amountCents: 25_000 }, { position: 2, amountCents: 15_000 }] },
     });
     showPage();
-    const note = "Only 2 paid players: $100 of the pool is not paid out yet.";
-    expect(await within(await screen.findByTestId("display-money")).findByTestId("display-unpaid")).toHaveTextContent(note);
-    expect(within(screen.getByRole("region", { name: "Payouts" })).getByText(note)).toBeInTheDocument();
+    const money = await screen.findByTestId("display-money");
+    expect(await within(money).findByText("$400")).toBeInTheDocument();
+    const payouts = screen.getByRole("region", { name: "Payouts" });
+    expect(within(payouts).getByText("$250")).toBeInTheDocument();
+    expect(within(payouts).getByText("$150")).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/not paid out|\$100|left ?over/i);
   });
 
   it("says nothing is unpaid when every place is paid", async () => {

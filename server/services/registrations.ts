@@ -11,13 +11,24 @@
  * payment, or anything else that puts a waiting-list entry in the field (a re-buy, add-on, knockout or
  * bust), is 409 TOURNAMENT_FULL once Max players are in, with no override. Registrations answer with
  * their `waitingListPosition`.
+ *
+ * Free entries (round 7, item 6; staff only): an entry given one is accepted like a paid entry
+ * (paymentConfirmed true, so the waiting list, seating, finalize and points treat it as paid) and marked
+ * freeEntry, whose buy-ins the prize pool counts only when the club funds them (shared/domain/prize-pool).
+ * Giving one is accepting, so it meets the same TOURNAMENT_FULL refusal. Nothing public reads or writes it.
  */
 import type { Request } from "express";
-import type {
-  AdjustCountsInput,
-  StaffRegistrationInput,
-  UpdateRegistrationInput,
+import {
+  FREE_ENTRY_REASON_LABELS,
+  isFreeEntryReason,
+  type AdjustCountsInput,
+  type FreeEntryChangeInput,
+  type FreeEntryInput,
+  type FreeEntryStatus,
+  type StaffRegistrationInput,
+  type UpdateRegistrationInput,
 } from "@shared/api/registrations";
+import type { AuditData } from "@shared/api/admin";
 import { pickFields, PUBLIC_REGISTRATION_FIELDS } from "@shared/api/public";
 import type { ActivityEventType } from "@shared/api/tournaments";
 import { centsToDecimalString, centsToDollars, formatMoney, toCents, type Cents } from "@shared/domain/money";
@@ -35,7 +46,7 @@ import {
 } from "@shared/domain/prize-pool";
 import type { InsertTournamentRegistration, PendingAction, Player, Tournament, TournamentRegistration } from "@shared/schema";
 import { db, type Transaction } from "../db";
-import { viewerFor, type ClubScope } from "../http/authz";
+import { actingUserId, viewerFor, type ClubScope } from "../http/authz";
 import { badRequest, conflict, HttpError, notFound } from "../http/errors";
 import { insertActivity } from "../repositories/activity";
 import { clockElapsedMsNow } from "../repositories/clock";
@@ -62,9 +73,23 @@ export function toPublicRegistration(registration: TournamentRegistration, playe
   };
 }
 
-/** The registration as the club's staff see it (ManagedRegistration): the public row, plus whether it has paid. */
+/**
+ * Whether the registration is a free entry, and why, as the club's staff see it (FreeEntryStatus). Who
+ * gave it never leaves the server. A reason stored as anything but a reason chip reads as "other".
+ */
+export function freeEntryStatus(registration: TournamentRegistration): Required<FreeEntryStatus> {
+  if (registration.freeEntry !== true) return { freeEntry: false, freeEntryFunded: false, freeEntryReason: null, freeEntryNote: null };
+  return {
+    freeEntry: true,
+    freeEntryFunded: registration.freeEntryFunded === true,
+    freeEntryReason: isFreeEntryReason(registration.freeEntryReason) ? registration.freeEntryReason : "other",
+    freeEntryNote: registration.freeEntryNote ?? null,
+  };
+}
+
+/** The registration as the club's staff see it (ManagedRegistration): the public row, plus whether it has paid or has a free entry. */
 export function toManagedRegistration(registration: TournamentRegistration, player: Player | null | undefined, waitingList?: ReadonlyMap<string, number>) {
-  return { ...toPublicRegistration(registration, player, waitingList), paymentConfirmed: registration.paymentConfirmed };
+  return { ...toPublicRegistration(registration, player, waitingList), paymentConfirmed: registration.paymentConfirmed, ...freeEntryStatus(registration) };
 }
 
 /** Each waiting-list entry's place on the list (1 = next in), by registration id (round 5, item 15). */
@@ -128,6 +153,7 @@ export async function listPaymentRegistrations(scope: ClubScope, tournamentId: s
     const row = {
       ...pickFields(registration, PUBLIC_REGISTRATION_FIELDS),
       paymentConfirmed: registration.paymentConfirmed,
+      ...freeEntryStatus(registration),
       waitingListPosition: waitingList.get(registration.id) ?? null,
       player: player ? toClubPlayer(player, canEdit(player.id)) : null,
     };
@@ -453,8 +479,14 @@ export interface SignUpCaller {
  * game is in progress, as they always have: `enableLateRegistration` is not enforced until the Phase 4
  * clock knows when late registration ends. A player with no home club yet gets the club of their
  * first surviving registration (usually this one; an earlier one an older build wrote, if any).
+ * Staff may register a player with a free entry (round 7): accepted like a paid entry, logged for
+ * the staff and audited.
  */
-export async function registerPlayer(tournamentId: string, input: StaffRegistrationInput, caller: SignUpCaller) {
+export async function registerPlayer(req: Request, tournamentId: string, input: StaffRegistrationInput, caller: SignUpCaller) {
+  const free = caller.staff ? input.freeEntry : undefined;
+  if (free && input.paymentConfirmed === false) {
+    throw badRequest("A free entry is accepted like a paid one: leave out paymentConfirmed, or send true");
+  }
   return db.transaction(async (tx) => {
     const tournament = await registrationsRepo.lockTournamentForRegistrationWrite(tx, tournamentId);
     if (!tournament) throw notFound("Tournament not found");
@@ -480,7 +512,7 @@ export async function registerPlayer(tournamentId: string, input: StaffRegistrat
     if (await registrationsRepo.lockPlayerRegistration(tx, tournament.id, player.id)) {
       throw conflict("ALREADY_REGISTERED", "Player is already registered for this tournament");
     }
-    const opening = { rebuys: input.rebuys ?? 0, addons: input.addons ?? 0, paymentConfirmed: input.paymentConfirmed ?? false };
+    const opening = { rebuys: input.rebuys ?? 0, addons: input.addons ?? 0, paymentConfirmed: free !== undefined || (input.paymentConfirmed ?? false) };
     await assertRoomToAccept(tx, tournament, {}, opening);
     const before = input.enteringHighHands ? await registrationsRepo.registrationsOf(tx, tournament.id) : undefined;
 
@@ -490,6 +522,7 @@ export async function registerPlayer(tournamentId: string, input: StaffRegistrat
       buyIns: input.buyIns ?? 1,
       enteringHighHands: input.enteringHighHands ?? false,
       ...opening,
+      ...(free ? freeEntryColumns(req, free) : {}),
     });
     if (before) {
       assertHighHandAwardsFit({ tournament, registrations: before }, { tournament, registrations: [...before, registration] });
@@ -503,6 +536,9 @@ export async function registerPlayer(tournamentId: string, input: StaffRegistrat
       "registration",
       place === undefined ? `${playerName(player)} registered for the tournament` : `${playerName(player)} registered for the tournament: #${place} on the waiting list`,
     );
+    if (free) {
+      await recordFreeEntry(req, tx, { tournament, before: { ...registration, ...NO_FREE_ENTRY, paymentConfirmed: false }, after: registration, player, change: "given" });
+    }
     const seating = await autoSeatNewRegistration(tx, tournament, registration.id);
     const dto = caller.staff ? toManagedRegistration(registration, player, waitingList) : toPublicRegistration(registration, player, waitingList);
     return { ...dto, seating };
@@ -660,6 +696,10 @@ export async function updateRegistration(req: Request, registrationId: string, i
     if (isClosed(tournament) && changed.some((field) => !EDITABLE_WHEN_CLOSED.has(field))) throw closedRefusal(tournament);
     if (input.eliminatedBy !== undefined && input.isEliminated !== true) {
       throw badRequest("Send eliminatedBy only when eliminating a player (isEliminated: true)");
+    }
+    if (current.freeEntry && changed.includes("paymentConfirmed")) {
+      const name = playerName(await getPlayer(tx, current.playerId));
+      throw conflict("FREE_ENTRY", `${name} has a free entry: take it back to make it a normal unpaid entry`);
     }
     assertEliminationIntent(input, current, changed);
 
@@ -861,5 +901,130 @@ export async function confirmPayment(registrationId: string) {
     const highHandUnawardedCents = confirmed && registration.enteringHighHands ? await highHandLeftByPayment(tx, tournament) : 0;
     // Accepted: in the field, never on the waiting list.
     return { ...toManagedRegistration(confirmed ?? registration, player, new Map()), seating, highHandUnawardedCents };
+  });
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Free entries (round 7, item 6)
+
+/** A registration's columns with no free entry: what taking one back, or marking it paid, writes. */
+const NO_FREE_ENTRY = {
+  freeEntry: false,
+  freeEntryFunded: false,
+  freeEntryReason: null,
+  freeEntryNote: null,
+  freeEntryBy: null,
+  freeEntryAt: null,
+} as const satisfies RegistrationChanges;
+
+/** The columns a free entry given now writes: accepted, why, whether the club funds it, who and when. */
+function freeEntryColumns(req: Request, input: FreeEntryInput): RegistrationChanges {
+  return {
+    paymentConfirmed: true,
+    freeEntry: true,
+    freeEntryFunded: input.funded ?? false,
+    freeEntryReason: input.reason,
+    freeEntryNote: input.note ?? null,
+    freeEntryBy: actingUserId(req),
+    freeEntryAt: new Date(),
+  };
+}
+
+type FreeEntryChange = AuditData["registration.free_entry"]["change"];
+
+/** Why, as the staff's feed says it: "Season prize", and whether the club pays the buy-in. */
+function freeEntryTerms(registration: TournamentRegistration): string {
+  const { freeEntryReason, freeEntryFunded } = freeEntryStatus(registration);
+  const reason = freeEntryReason ? FREE_ENTRY_REASON_LABELS[freeEntryReason] : FREE_ENTRY_REASON_LABELS.other;
+  return `${reason}: ${freeEntryFunded ? "the club pays their buy-in into the prize pool" : "their buy-in is not in the prize pool"}`;
+}
+
+/**
+ * The staff-only feed entry (a "payment_confirmed" event, like the payment it stands in for, with
+ * `eventData.freeEntry` saying which change) and the audit row of a free-entry change. The note stays
+ * out of the feed: it is on the registration and in the audit log.
+ */
+async function recordFreeEntry(
+  req: Request,
+  tx: Transaction,
+  { tournament, before, after, player, change }: { tournament: Tournament; before: TournamentRegistration; after: TournamentRegistration; player: Player | undefined; change: FreeEntryChange },
+): Promise<void> {
+  const name = playerName(player);
+  const descriptions: Record<FreeEntryChange, string> = {
+    given: `Free entry for ${name} (${freeEntryTerms(after)})`,
+    changed: `${name}'s free entry changed (${freeEntryTerms(after)})`,
+    taken_back: `${name}'s free entry was taken back: not paid yet`,
+    marked_paid: `Payment confirmed for ${name}: no longer a free entry`,
+  };
+  // What the change is about: the free entry given, or the one taken back.
+  const entry = change === "given" || change === "changed" ? after : before;
+  const status = freeEntryStatus(entry);
+  await logActivity(tx, after, "payment_confirmed", descriptions[change], { freeEntry: change, funded: status.freeEntryFunded });
+  await recordAudit(
+    req,
+    {
+      action: "registration.free_entry",
+      targetType: "registration",
+      targetId: after.id,
+      data: {
+        tournamentId: tournament.id,
+        playerName: name,
+        change,
+        reason: status.freeEntryReason,
+        note: status.freeEntryNote,
+        funded: status.freeEntryFunded,
+        before: { freeEntry: before.freeEntry === true, funded: before.freeEntryFunded === true, paymentConfirmed: before.paymentConfirmed === true },
+      },
+    },
+    tx,
+  );
+}
+
+/** Whether giving `input` to `current` changes nothing: it has that very free entry already. */
+const sameFreeEntry = (current: TournamentRegistration, input: FreeEntryInput): boolean =>
+  current.freeEntry === true &&
+  current.paymentConfirmed === true &&
+  current.freeEntryReason === input.reason &&
+  (current.freeEntryNote ?? null) === (input.note ?? null) &&
+  current.freeEntryFunded === (input.funded ?? false);
+
+/**
+ * POST /api/registrations/:id/free-entry (the rules are on freeEntryChangeSchema): give or change a
+ * free entry, take it back (a normal unpaid entry) or mark it paid, in one transaction under the
+ * tournament's lock. Giving one to an unpaid sign-up accepts them as a payment does: Max players
+ * (TOURNAMENT_FULL), and auto-seat as on confirm-payment. Giving the same free entry again changes
+ * nothing and logs nothing.
+ */
+export async function changeFreeEntry(req: Request, registrationId: string, input: FreeEntryChangeInput) {
+  return db.transaction(async (tx) => {
+    const { tournament, registration: current } = await lockRegistrationById(tx, registrationId);
+    const player = await getPlayer(tx, current.playerId);
+    if (input.action !== "give" && current.freeEntry !== true) {
+      throw conflict("NOT_FREE_ENTRY", `${playerName(player)} does not have a free entry`);
+    }
+    const accepting = current.paymentConfirmed !== true && input.action === "give";
+    if (input.action === "give" && sameFreeEntry(current, input)) {
+      return { ...toManagedRegistration(current, player, await currentWaitingList(tx, tournament)), seating: null, highHandUnawardedCents: 0 };
+    }
+    if (accepting) await assertRoomToAccept(tx, tournament, current, { ...current, paymentConfirmed: true });
+
+    const change: FreeEntryChange =
+      input.action === "give" ? (current.freeEntry ? "changed" : "given") : input.action === "take_back" ? "taken_back" : "marked_paid";
+    const fields: RegistrationChanges =
+      input.action === "give" ? freeEntryColumns(req, input) : { ...NO_FREE_ENTRY, paymentConfirmed: input.action === "mark_paid" };
+    // Taken back, the entry is unpaid: its high-hand entry leaves the pot, which the awards made must still fit (as for a payment taken back).
+    const movesPot = change === "taken_back" && current.enteringHighHands === true && !isClosed(tournament);
+    const potBefore = movesPot ? await registrationsRepo.registrationsOf(tx, tournament.id) : undefined;
+    const updated = await registrationsRepo.updateTournamentRegistration(tx, current.id, fields);
+    if (!updated) throw notFound("Registration not found");
+    const everyone = await registrationsRepo.registrationsOf(tx, tournament.id);
+    if (potBefore) assertHighHandAwardsFit({ tournament, registrations: potBefore }, { tournament, registrations: everyone });
+    // A free entry's buy-in (unless funded) is not in the gross, nor an unpaid entry's money: a manual AP total must stay within it.
+    await assertApStillWithinGross(tx, tournament, everyone);
+
+    await recordFreeEntry(req, tx, { tournament, before: current, after: updated, player, change });
+    const seating = accepting && !isClosed(tournament) ? await autoSeatOnPayment(tx, tournament, updated.id) : null;
+    const highHandUnawardedCents = accepting && updated.enteringHighHands ? await highHandLeftByPayment(tx, tournament) : 0;
+    return { ...toManagedRegistration(updated, player, waitingListOf(tournament, everyone)), seating, highHandUnawardedCents };
   });
 }

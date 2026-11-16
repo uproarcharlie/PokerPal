@@ -9,13 +9,15 @@ import { plural } from "@/lib/format";
 import type { TournamentMoney } from "@/lib/prize-pool";
 import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
-import type { Cents } from "@shared/domain/money";
+import { toCents, type Cents } from "@shared/domain/money";
 import { isClosedStatus } from "@shared/domain/tournaments";
-import { unpaidEntries } from "@shared/domain/prize-pool";
+import { isFreeTournament, unpaidEntries } from "@shared/domain/prize-pool";
 import { acceptRefusal } from "@shared/domain/waiting-list";
 import { lineupOf, type Lineup } from "@/features/public-tournament/waiting-list";
 import type { WaitingCount } from "../desk/desk-actions";
 import type { DeskDialogs } from "../desk/desk-dialogs";
+import { freeEntryCandidates } from "../free-entry/free-entry-candidates";
+import { FreeEntrySheet } from "../free-entry/free-entry-sheet";
 import { StandingsTable } from "../standings/standings-table";
 import { BustSheet } from "./bust-sheet";
 import { MoneyTab } from "./money-tab";
@@ -65,7 +67,7 @@ function fieldText(tournament: TournamentDetailDto, lineup: Lineup<PublicRegistr
  * The TD's tournament page on a phone (round5-contracts §8.1): five tabs in a bottom bar (Players,
  * Seats, Clock, Money, More), each one the wide screen's tools for that part of the night, and the
  * quick-action button above the bar for the taps made most (register, bust, re-buy, add-on, take a
- * payment, requests), each opening a full-screen sheet. Hidden tabs leave the page, except the clock (a half-typed
+ * payment, a free entry, requests), each opening a full-screen sheet. Hidden tabs leave the page, except the clock (a half-typed
  * structure edit survives a look at the players).
  */
 export function PhoneDesk({
@@ -189,9 +191,19 @@ export function PhoneDesk({
           <PaymentsSheet
             tournamentId={tournament.id}
             timeZone={timeZone}
+            freeTournament={isFreeTournament(tournament)}
             full={acceptRefusal(registrations, tournament.maxPlayers)}
             returnFocusTo={quickActionsRef}
             {...dialogs.propsFor("payments")}
+          />
+          <FreeEntrySheet
+            tournamentId={tournament.id}
+            buyInCents={toCents(tournament.buyInAmount)}
+            rakeLabel={rakeLabel}
+            player={null}
+            candidates={freeEntryCandidates(registrations, tournament.maxPlayers)}
+            returnFocusTo={quickActionsRef}
+            {...dialogs.propsFor("freeEntry")}
           />
         </>
       ) : null}

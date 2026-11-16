@@ -32,13 +32,13 @@ const needsOrder = preview({
 const aliceFirst = preview({
   planHash: HASH_A,
   activePlayers: [alice, bob],
-  rows: [row(alice, 1, 23_800), row(bob, 2, 14_200), row(carl, 3, 9_500)],
+  rows: [row(alice, 1, 23_700), row(bob, 2, 14_200), row(carl, 3, 9_500)],
   warnings,
 });
 const bobFirst = preview({
   planHash: HASH_B,
   activePlayers: [bob, alice],
-  rows: [row(bob, 1, 23_800), row(alice, 2, 14_200), row(carl, 3, 9_500)],
+  rows: [row(bob, 1, 23_700), row(alice, 2, 14_200), row(carl, 3, 9_500)],
   warnings,
 });
 
@@ -65,7 +65,7 @@ describe("FinalizeDialog: players who have not paid (round 6)", () => {
     unpaid: [dee],
     warnings,
   });
-  const readyPlan = preview({ planHash: HASH_A, activePlayers: [alice], rows: [row(alice, 1, 23_800), row(bob, 2, 14_200), row(carl, 3, 9_500)], warnings });
+  const readyPlan = preview({ planHash: HASH_A, activePlayers: [alice], rows: [row(alice, 1, 23_700), row(bob, 2, 14_200), row(carl, 3, 9_500)], warnings });
   const leftOutPlan = preview({ ...readyPlan, unpaid: [dee], warnings: [...warnings, "1 player who has not paid is left out, not ranked, paid or scored: Dee"] });
 
   it("names who has not paid with what they owe, and finalizes only once they are left out", async () => {
@@ -150,17 +150,31 @@ describe("FinalizeDialog", () => {
     expect(screen.getByText("AP the club keeps")).toBeInTheDocument();
   });
 
-  it("says where the money the prizes leave goes before finalizing: carried over, kept or added (round 5, item 16)", async () => {
-    // $500 in, $25 AP: $475 available. The pool fixed at $400 carries $75 over to the season's next tournament.
+  it("says before finalizing that what a pool fixed by hand leaves goes to the club's fee, asking nothing (round 7)", async () => {
+    // $500 in, $25 AP: $475 available. The pool fixed at $400 leaves $75, the club's.
     const breakdown = computePrizePool(
-      { buyInAmount: "100.00", rakeType: "fixed", rakeAmount: "5.00", payoutStructure: "standard", manualPrizePool: "400.00", prizeDifference: "carry" },
+      { buyInAmount: "100.00", rakeType: "fixed", rakeAmount: "5.00", payoutStructure: "standard", manualPrizePool: "400.00" },
       [2, 2, 1].map((buyIns) => ({ buyIns, paymentConfirmed: true })),
     );
-    mockPreview(() => preview({ planHash: HASH_A, prizePool: { ...previewPrizePool, breakdown, carryTarget: "Winter League" } }));
+    mockPreview(() => preview({ planHash: HASH_A, prizePool: { ...previewPrizePool, breakdown } }));
     renderDialog();
 
-    expect(await screen.findByTestId("finalize-summary")).toHaveTextContent("Prize pool $400· AP $25· Carried over to Winter League $75");
+    expect(await screen.findByTestId("finalize-summary")).toHaveTextContent("Prize pool $400· AP $25· Leftover $75 → AP");
     expect(screen.getByTestId("finalize-pool")).toHaveTextContent("$400");
+    // The AP and the leftover together: what the club keeps of the $500.
+    expect(screen.getByTestId("finalize-ap")).toHaveTextContent("$100");
+    expect(screen.queryByText(/carr(y|ied) (it )?over/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+  });
+
+  it("shows the dollar the rounding leaves as the club's: the pool is what the places pay (round 7)", async () => {
+    // $475 available pays $237 + $142 + $95: the prize pool is $474, and the $1 left over is the club's.
+    mockPreview(() => preview({ planHash: HASH_A }));
+    renderDialog();
+
+    expect(await screen.findByTestId("finalize-pool")).toHaveTextContent("$474");
+    expect(screen.getByTestId("finalize-summary")).toHaveTextContent("Prize pool $474· AP $25· Leftover $1 → AP");
+    expect(screen.getByTestId("finalize-ap")).toHaveTextContent("$26");
   });
 
   it("opens full screen on a phone, Finalize kept in view under the plan", async () => {
@@ -173,10 +187,15 @@ describe("FinalizeDialog", () => {
   });
 
   it("shows no breakdown line when the prizes are exactly the money available", async () => {
-    mockPreview(() => preview({ planHash: HASH_A }));
+    // Four buy-ins: $380 available pays $190 + $114 + $76 to the cent.
+    const breakdown = computePrizePool(
+      { buyInAmount: "100.00", rakeType: "fixed", rakeAmount: "5.00", payoutStructure: "standard" },
+      [2, 1, 1].map((buyIns) => ({ buyIns, paymentConfirmed: true })),
+    );
+    mockPreview(() => preview({ planHash: HASH_A, prizePool: { ...previewPrizePool, breakdown } }));
     renderDialog();
 
-    expect(await screen.findByTestId("finalize-pool")).toBeInTheDocument();
+    expect(await screen.findByTestId("finalize-pool")).toHaveTextContent("$380");
     expect(screen.queryByTestId("finalize-summary")).not.toBeInTheDocument();
   });
 
@@ -188,8 +207,8 @@ describe("FinalizeDialog", () => {
 
     // The server's suggested order comes back with the payouts it pays.
     const plan = await screen.findByTestId("finalize-plan");
-    expect(within(plan).getAllByRole("row")[1]).toHaveTextContent("1stAlice$238");
-    expect(screen.getByTestId("finalize-pool")).toHaveTextContent("$475");
+    expect(within(plan).getAllByRole("row")[1]).toHaveTextContent("1stAlice$237");
+    expect(screen.getByTestId("finalize-pool")).toHaveTextContent("$474");
     expect(screen.getByTestId("finalize-warnings")).toHaveTextContent("The prize pool is not locked");
 
     await user.click(screen.getByRole("button", { name: "Move Bob up" }));
@@ -245,7 +264,7 @@ describe("FinalizeDialog", () => {
   });
 
   it("finalizes without an order when one player is left", async () => {
-    mockPreview(() => preview({ planHash: HASH_A, activePlayers: [alice], rows: [row(alice, 1, 23_800), row(bob, 2, 14_200)] }));
+    mockPreview(() => preview({ planHash: HASH_A, activePlayers: [alice], rows: [row(alice, 1, 23_700), row(bob, 2, 14_200)] }));
     const finalizes = mockFinalize(finalized);
     const user = userEvent.setup();
     renderDialog();
@@ -277,7 +296,7 @@ describe("FinalizeDialog", () => {
 
   it("drops a finishing order that went stale when another device busted all but one player, instead of getting stuck (P2REV1-06)", async () => {
     let bobBusted = false;
-    const lastOneIn = preview({ planHash: HASH_C, activePlayers: [alice], rows: [row(alice, 1, 23_800), row(bob, 2, 14_200), row(carl, 3, 9_500)] });
+    const lastOneIn = preview({ planHash: HASH_C, activePlayers: [alice], rows: [row(alice, 1, 23_700), row(bob, 2, 14_200), row(carl, 3, 9_500)] });
     const staleOrder = preview({
       ok: false,
       code: "INVALID_FINISH_ORDER",
@@ -306,7 +325,7 @@ describe("FinalizeDialog", () => {
 
   it("warns about player requests that finalizing would discard", async () => {
     const waiting = "1 player request still waiting will be discarded: Bob's re-buy ($100). Confirm or dismiss them under Confirm Actions first";
-    mockPreview(() => preview({ planHash: HASH_A, activePlayers: [alice], rows: [row(alice, 1, 23_800)], warnings: [waiting] }));
+    mockPreview(() => preview({ planHash: HASH_A, activePlayers: [alice], rows: [row(alice, 1, 23_700)], warnings: [waiting] }));
     renderDialog();
 
     expect(await screen.findByTestId("finalize-warnings")).toHaveTextContent("Bob's re-buy ($100)");

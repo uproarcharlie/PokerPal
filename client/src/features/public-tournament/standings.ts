@@ -1,8 +1,11 @@
 /**
- * The public page's prize structure: which places it lists and what each pays and scores. Display only:
- * finalize pays from shared/domain. The standings order is shared/domain/standings' `standingsFor`.
+ * The public page's prize structure: which places it lists and what each pays and scores, and whether
+ * it shows points at all. Display only: finalize pays from shared/domain. The standings order is
+ * shared/domain/standings' `standingsFor`.
  */
 import type { PublicPayoutDto } from "@shared/api/live-display";
+import type { PublicRegistration } from "@shared/api/public";
+import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { allocationFor, pointsForFinish, type PointsRules } from "@shared/domain/points";
 
 export interface PrizeRow {
@@ -39,4 +42,18 @@ export function prizeTable(payouts: readonly PublicPayoutDto[], rules: PointsRul
 
   const othersPoints = placePoints(last + 1);
   return { rows, others: othersPoints > 0 ? { from: last + 1, points: othersPoints } : null };
+}
+
+/**
+ * Whether the public page shows points: the tournament tracks them and something scores them. A game
+ * with no points system scores none (a one-off game, round 7; a tournament made before round 7 may
+ * still say trackPoints with no system, and its standings were a column of zeros), unless points were
+ * awarded before its system was deleted.
+ */
+export function showsPoints(
+  tournament: Pick<TournamentDetailDto, "trackPoints" | "pointsSystemId">,
+  registrations: readonly Pick<PublicRegistration, "pointsAwarded">[],
+): boolean {
+  if (tournament.trackPoints !== true) return false;
+  return tournament.pointsSystemId !== null || registrations.some((entry) => (entry.pointsAwarded ?? 0) > 0);
 }

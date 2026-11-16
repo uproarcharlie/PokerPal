@@ -6,7 +6,7 @@
  * (data-integrity-10).
  */
 import { z } from "zod";
-import { idSchema, integerSchema, moneySchema } from "./common";
+import { idSchema, integerSchema, moneySchema, optionalText } from "./common";
 import type { ClubPlayer } from "./players";
 import type { PublicRegistration, PublicRegistrationRow, WaitingListPlace } from "./public";
 import type { Cents } from "../domain/money";
@@ -34,17 +34,50 @@ export const publicRegistrationSchema = z.object({
 });
 export type PublicRegistrationInput = z.infer<typeof publicRegistrationSchema>;
 
+/* ---------- free entries (round 7, item 6: staff only) ---------- */
+
+/** Why a player was given a free entry: the reason chips staff pick from. */
+export const FREE_ENTRY_REASONS = ["season_prize", "promo", "staff", "other"] as const;
+export type FreeEntryReason = (typeof FREE_ENTRY_REASONS)[number];
+
+export const FREE_ENTRY_REASON_LABELS: Readonly<Record<FreeEntryReason, string>> = Object.freeze({
+  season_prize: "Season prize",
+  promo: "Promo",
+  staff: "Staff",
+  other: "Other",
+});
+
+export const isFreeEntryReason = (value: unknown): value is FreeEntryReason =>
+  typeof value === "string" && (FREE_ENTRY_REASONS as readonly string[]).includes(value);
+
+/**
+ * A free entry as staff give it: why (a reason chip, and an optional note), and whether the club pays
+ * the player's buy-in into the prize pool (`funded`: the full buy-in, no AP taken). Without `funded`
+ * the buy-in adds nothing to the pool. The entry's re-buys, add-ons and high-hand entry are paid as
+ * normal.
+ */
+export const freeEntrySchema = z.object({
+  reason: z.enum(FREE_ENTRY_REASONS, { message: "Choose why they get a free entry" }),
+  note: optionalText(200),
+  funded: z.boolean().optional(),
+});
+export type FreeEntryInput = z.infer<typeof freeEntrySchema>;
+
 /**
  * The same endpoint for someone who manages the tournament's club: may also set the opening counts
  * and payment. Registering a player as paid, or with re-buys or add-ons, accepts them: past Max
  * players that is 409 TOURNAMENT_FULL ("18 of 18 players accepted: raise Max players to accept more"),
  * with no override (round 5, item 15). The lock and closed-tournament rules still apply.
+ * `freeEntry` (round 7) registers them with a free entry: accepted like a paid entry (the same
+ * TOURNAMENT_FULL refusal), so it cannot be sent with `paymentConfirmed: false` (400). The public
+ * sign-up's schema has no such field: a QR sign-up can never claim one.
  */
 export const staffRegistrationSchema = publicRegistrationSchema.extend({
   buyIns: integerSchema(1, 20).optional(),
   rebuys: integerSchema(0, 1000).optional(),
   addons: integerSchema(0, 1000).optional(),
   paymentConfirmed: z.boolean().optional(),
+  freeEntry: freeEntrySchema.optional(),
 });
 export type StaffRegistrationInput = z.infer<typeof staffRegistrationSchema>;
 
@@ -118,16 +151,53 @@ export const adjustCountsSchema = z
   .refine((input) => Object.values(input).some((value) => value !== undefined && value !== 0), "Nothing to change");
 export type AdjustCountsInput = z.infer<typeof adjustCountsSchema>;
 
+/**
+ * POST /api/registrations/:id/free-entry (staff of the tournament's club), round 7:
+ * - "give": gives the entry a free entry, or changes its reason, note or funding. Giving one to an
+ *   unpaid sign-up accepts them like a payment does: past Max players, 409 TOURNAMENT_FULL (no
+ *   override), and under "once they've paid" auto-seat seats them. Giving one to an entry that has paid
+ *   takes its buy-in back out of the pool (unless funded), so a manual AP total must still be within
+ *   what came in (400 AP_EXCEEDS_GROSS).
+ * - "take_back": a normal unpaid entry again (accepted no more, as when a payment is taken back: the
+ *   high-hand awards must still fit the pot, 409 HIGH_HAND_OVER_POOL / HIGH_HAND_AWARDED, and a manual
+ *   AP total the gross, 400 AP_EXCEEDS_GROSS).
+ * - "mark_paid": a normal paid entry: the player has paid their buy-in after all.
+ * "take_back" and "mark_paid" on an entry with no free entry are 409 NOT_FREE_ENTRY. Allowed after the
+ * game too, like payments (reconciled at the end of the night). Each change is a staff-only activity
+ * entry ("payment_confirmed", eventData.freeEntry) and an audit row ("registration.free_entry").
+ */
+export const freeEntryChangeSchema = z.discriminatedUnion("action", [
+  freeEntrySchema.extend({ action: z.literal("give") }),
+  z.object({ action: z.literal("take_back") }),
+  z.object({ action: z.literal("mark_paid") }),
+]);
+export type FreeEntryChangeInput = z.infer<typeof freeEntryChangeSchema>;
+
 /** Whether the entry has paid at the desk: for the club's staff only (P2REV0-SEC-04). */
 export interface PaymentStatus {
   paymentConfirmed: boolean | null;
 }
 
 /**
+ * Whether the entry is a free entry (round 7), and why: for the club's staff only, never on a public
+ * page, the TV or a public response. A free entry is always accepted (paymentConfirmed true). Who gave
+ * it stays on the server (the audit log names them). Every staff registration list, sign-up, payment
+ * confirmation, update and free-entry change answers with all four; optional only because a row made
+ * before round 7 (a cached answer, a test's fixture) has none, which reads as no free entry.
+ */
+export interface FreeEntryStatus {
+  freeEntry?: boolean;
+  /** The club pays the buy-in into the prize pool. */
+  freeEntryFunded?: boolean;
+  freeEntryReason?: FreeEntryReason | null;
+  freeEntryNote?: string | null;
+}
+
+/**
  * A registration as the club's staff get it: every staff write's response, and each row of GET
  * /api/tournaments/:id/registrations for someone who runs the club (everyone else gets PublicRegistration).
  */
-export type ManagedRegistration = PublicRegistration & PaymentStatus;
+export type ManagedRegistration = PublicRegistration & PaymentStatus & FreeEntryStatus;
 
 /**
  * POST /api/tournaments/:id/registrations (201), round 5: the registration (ManagedRegistration for
@@ -159,14 +229,24 @@ export type PaymentConfirmedDto = ManagedRegistration & {
   highHandUnawardedCents: Cents;
 };
 
+/**
+ * POST /api/registrations/:id/free-entry: the registration as it now stands, where auto-seat put a
+ * player the free entry accepted (as on confirm-payment), and what of the high-hand pot no award pays.
+ */
+export type FreeEntryChangedDto = PaymentConfirmedDto;
+
 /** A registration for staff screens: the player's contact details only when `player.canEdit` (ClubPlayer). */
-export type StaffRegistrationDto = PublicRegistrationRow & PaymentStatus & WaitingListPlace & { player: ClubPlayer | null };
+export type StaffRegistrationDto = PublicRegistrationRow & PaymentStatus & FreeEntryStatus & WaitingListPlace & { player: ClubPlayer | null };
 
 /**
  * GET /api/tournaments/:id/pending-registrations (staff). amountOwed is dollars, as today, but now
- * buyIns × buy-in + re-buys × re-buy + add-ons × add-on + the high-hand entry (money-18).
+ * buyIns × buy-in + re-buys × re-buy + add-ons × add-on + the high-hand entry (money-18). A free entry
+ * is never pending: it is accepted.
  */
 export type PendingRegistrationDto = StaffRegistrationDto & { amountOwed: number };
 
-/** GET /api/tournaments/:id/confirmed-registrations (staff). amountPaid uses the same formula. */
+/**
+ * GET /api/tournaments/:id/confirmed-registrations (staff): the accepted entries, free entries among
+ * them (`freeEntry`). amountPaid uses the same formula, by which nobody pays a free entry's buy-ins.
+ */
 export type ConfirmedRegistrationDto = StaffRegistrationDto & { amountPaid: number };

@@ -7,7 +7,7 @@ import type { PrizePoolDto } from "@shared/api/prize-pool";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import type { Cents } from "@shared/domain/money";
 import { offersAddons, offersHighHand, offersRebuys } from "@shared/domain/player-actions";
-import { carryTargetName, differenceLines, type DifferenceLine } from "@shared/domain/prize-difference";
+import { differenceLines, type DifferenceLine } from "@shared/domain/prize-difference";
 import type { NetSource } from "@shared/domain/prize-pool";
 import { rateText } from "@shared/domain/rake-rates";
 
@@ -62,9 +62,10 @@ function TakeLine({ impliedCents, source, label, note, inAll = false }: TakeLine
   );
 }
 
-/** The difference lines that change what the club keeps or adds (round 5, item 16); the rest are the prize pool card's. */
+/** The difference lines that change what the club keeps or adds; the rest are the prize pool card's. */
 const TAKE_LINES: Readonly<Partial<Record<DifferenceLine["kind"], { sign: string; note: string }>>> = {
-  kept_by_club: { sign: "+", note: "Left over from the prizes as set" },
+  kept_by_club: { sign: "+", note: "What the prizes leave of the money available, the rounding included" },
+  added_for_free_entries: { sign: "−", note: "The club pays the free entries' buy-ins into the prize pool, with no AP" },
   carried_over: { sign: "", note: "Not the club's: a later tournament can add it to its prize pool" },
   added_by_club: { sign: "−", note: "The prizes as set are more than the money available" },
 };
@@ -134,7 +135,7 @@ export function LiveBreakdown({ tournament, prizePool, label, timeZone }: LiveBr
     breakdown.manualPrizePool !== null
       ? `The prize pool is fixed by hand at ${formatMoney(breakdown.manualPrizePool)} (the rates leave ${formatMoney(breakdown.netAfterAp)})`
       : undefined;
-  const lines = differenceLines(breakdown, prizePool.carryTarget).filter((line) => TAKE_LINES[line.kind]);
+  const lines = differenceLines(breakdown, label).filter((line) => TAKE_LINES[line.kind]);
   return (
     <div className="space-y-5">
       <Group title={`${label} by rule`}>
@@ -179,7 +180,7 @@ interface FrozenBreakdownProps {
 export function FrozenBreakdown({ tournament, pool, highHand, label }: FrozenBreakdownProps) {
   const fixedPool = pool.manualPrizePoolCents !== null ? `The prize pool was fixed by hand at ${formatMoney(pool.manualPrizePoolCents)}` : undefined;
   // Snapshots from before round 5 record no difference: their take line says it as it always has.
-  const lines = differenceLines(pool, pool.difference?.carryTarget ?? carryTargetName(null)).filter((line) => TAKE_LINES[line.kind]);
+  const lines = differenceLines(pool, label).filter((line) => TAKE_LINES[line.kind]);
   return (
     <div className="space-y-5">
       <Group title="As finalized">

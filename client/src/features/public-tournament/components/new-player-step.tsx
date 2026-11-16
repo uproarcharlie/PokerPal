@@ -1,6 +1,7 @@
 import { useId } from "react";
 import { useWatch } from "react-hook-form";
 import { UserRound } from "lucide-react";
+import { normaliseName, normalisePhone } from "@shared/api/players";
 import type { ClubDto } from "@shared/api/public";
 import { isBuiltInAvatarUrl } from "@shared/domain/avatars";
 import { PlayerAvatar } from "@/components/image/player-avatar";
@@ -9,7 +10,9 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { MOBILE_LABEL } from "../registration";
 import type { RegistrationFlow } from "../use-registration-flow";
+import { SameNameSuggestion } from "./player-search";
 import { PrivacyNotice } from "./privacy-notice";
 
 const QUESTION = "text-base font-semibold text-foreground";
@@ -20,7 +23,7 @@ interface NewPlayerStepProps {
   club: ClubDto | undefined;
 }
 
-/** Step 2 for a first-timer: their picture first, then their name and phone number. */
+/** Step 2 for a first-timer: their picture first, then their name and, if they like, their mobile number. */
 export function NewPlayerStep({ flow, club }: NewPlayerStepProps) {
   return <Form {...flow.form}>{flow.view === "details" ? <DetailsStage flow={flow} /> : <PhotoStage flow={flow} club={club} />}</Form>;
 }
@@ -91,11 +94,18 @@ function PhotoStage({ flow, club }: NewPlayerStepProps) {
   );
 }
 
-/** Their picture as chosen (with a way back to change it), their name and phone number, then the sign-up. */
+/**
+ * Their picture as chosen (with a way back to change it), their name and mobile number (optional), then
+ * the sign-up. The club's players with that name come first ("That's me"), with or without a number
+ * (R7FREV1-02), while the name and number are still the ones they were found for.
+ */
 function DetailsStage({ flow }: { flow: RegistrationFlow }) {
   const { form, photoUploading, creatingPlayer, photoLocked } = flow;
-  const [imageUrl, name] = useWatch({ control: form.control, name: ["imageUrl", "name"] });
+  const [imageUrl, name, phone] = useWatch({ control: form.control, name: ["imageUrl", "name", "phone"] });
   const picture = imageUrl ? (isBuiltInAvatarUrl(imageUrl) ? "Your avatar" : "Your photo") : "No photo";
+  const found = flow.sameName?.details;
+  const sameName =
+    found && normaliseName(found.name) === normaliseName(name) && normalisePhone(found.phone) === normalisePhone(phone) ? flow.sameName : null;
   return (
     <form onSubmit={(event) => void flow.submitNewPlayer(event)} className="space-y-4" noValidate>
       <div className="flex items-center gap-3 rounded-lg border border-border p-3" data-testid="photo-summary">
@@ -143,7 +153,7 @@ function DetailsStage({ flow }: { flow: RegistrationFlow }) {
         name="phone"
         render={({ field }) => (
           <FormItem>
-            <FormLabel>Phone Number</FormLabel>
+            <FormLabel>{MOBILE_LABEL}</FormLabel>
             <FormControl>
               <Input
                 type="tel"
@@ -165,13 +175,20 @@ function DetailsStage({ flow }: { flow: RegistrationFlow }) {
           <AlertDescription>{flow.signUpError}</AlertDescription>
         </Alert>
       ) : null}
+      {sameName ? <SameNameSuggestion players={sameName.players} onChoose={flow.claimPlayer} /> : null}
       <div className="flex gap-2">
         <Button type="button" variant="outline" className="h-11 flex-1" onClick={flow.back} data-testid="step2-back">
           Back
         </Button>
-        <Button type="submit" className="h-11 flex-1" disabled={photoUploading} busy={creatingPlayer} data-testid="step2-next">
-          {photoUploading ? "Uploading photo..." : creatingPlayer ? "Creating..." : "Continue"}
-        </Button>
+        {sameName ? (
+          <Button type="button" variant="outline" className="h-11 flex-1" onClick={flow.notClaimed} data-testid="same-name-new">
+            No, I&apos;m new here
+          </Button>
+        ) : (
+          <Button type="submit" className="h-11 flex-1" disabled={photoUploading} busy={creatingPlayer} data-testid="step2-next">
+            {photoUploading ? "Uploading photo..." : creatingPlayer ? "Creating..." : "Continue"}
+          </Button>
+        )}
       </div>
     </form>
   );

@@ -97,6 +97,8 @@ const RUNS_THE_CLUB: ReadonlySet<Visitor> = new Set<Visitor>(["owner", "admin"])
 const STAFF_TAKINGS_READS: ReadonlySet<string> = new Set([
   "GET /api/tournaments",
   "GET /api/tournaments/:id",
+  // The desk's rows: who paid, and who came in on a free entry and whether the club funds it (round 7).
+  "GET /api/tournaments/:id/registrations",
   "GET /api/tournaments/:tournamentId/activity",
 ]);
 
@@ -182,6 +184,8 @@ async function buildWorld(): Promise<World> {
   await ok(manager.agent.put(`/api/registrations/${liveRegistrations[4].id}`).send({ isEliminated: true, eliminatedBy: players[3].id }));
   await ok(manager.agent.put(`/api/registrations/${liveRegistrations[0].id}`).send({ highHandWinner: true, highHandAmount: "15.00" }));
   await ok(anonymous.post(`/api/tournaments/${live.id}/pending-actions`).send({ playerId: players[2].id, actionType: "addon" }), 201);
+  // A free entry the club pays into the pool (round 7): the staff's bookkeeping, as a payment is.
+  await ok(manager.agent.post(`/api/registrations/${liveRegistrations[2].id}/free-entry`).send({ action: "give", reason: "promo", note: "PII free-entry note", funded: true }));
   await ok(owner.agent.put(`/api/tournaments/${live.id}/prize-pool/rates`).send({ rakeType: "percentage", rakeAmount: "10.00" }));
   await ok(
     owner.agent.put(`/api/tournaments/${live.id}/prize-pool/adjustment`).send({ mode: "ap_override", amount: "20.00", reason: "Low turnout" }),
@@ -260,8 +264,9 @@ describe("public reads", () => {
 
         expect(response.status, url).toBe(200);
         expect(findTakingsKeys(response.body), url).toEqual([]);
-        // Nor the reason given for the manual AP total, in any words.
+        // Nor the reason given for the manual AP total, or a free entry's note, in any words.
         expect(JSON.stringify(response.body), url).not.toContain("Low turnout");
+        expect(JSON.stringify(response.body), url).not.toContain("PII free-entry note");
       }
     });
   });
@@ -291,13 +296,17 @@ describe("public reads", () => {
   it("show the club's own staff the takings they edit: the AP rates, the manual AP total and its reason", async () => {
     const owner = await agentFor("owner", world.staff);
 
-    const [detail, prizes, activity] = await Promise.all([
+    const [detail, prizes, activity, registrations] = await Promise.all([
       owner.get(`/api/tournaments/${world.live.id}`),
       owner.get(`/api/public/tournaments/${world.live.id}/prizes`),
       owner.get(`/api/tournaments/${world.live.id}/activity`),
+      owner.get(`/api/tournaments/${world.live.id}/registrations`),
     ]);
 
     expect(detail.body).toMatchObject({ rakeType: "percentage", rakeAmount: "10.00", rakeOverride: "20.00", prizePoolAdjustmentReason: "Low turnout" });
+    // The desk's rows say who came in free, and why (round 7); who gave it is never sent.
+    expect(registrations.body).toContainEqual(expect.objectContaining({ freeEntry: true, freeEntryFunded: true, freeEntryReason: "promo", freeEntryNote: "PII free-entry note" }));
+    expect(findForbiddenKeys(registrations.body)).toEqual([]);
     expect(activity.body.map((entry: { eventType: string }) => entry.eventType)).toContain("prize_pool_adjusted");
     // The public prize pool is the same for everyone, the TD looking at the public page included.
     expect(findTakingsKeys(prizes.body)).toEqual([]);

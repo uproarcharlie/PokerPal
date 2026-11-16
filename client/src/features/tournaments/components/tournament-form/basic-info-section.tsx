@@ -12,6 +12,10 @@ import type { ClubDto } from "@shared/api/public";
 import { usePointsSystems, useSeasons } from "@/features/seasons/hooks";
 import type { TournamentFormValues } from "../../tournament-form";
 import { FormSection } from "./form-section";
+import { ONE_OFF_NO_POINTS } from "./use-tournament-form";
+
+/** The season menu's one-off choice (a menu item cannot have an empty value); the form holds "" for it. */
+const NO_SEASON = "one-off";
 
 interface BasicInfoSectionProps {
   form: UseFormReturn<TournamentFormValues>;
@@ -34,6 +38,7 @@ export function BasicInfoSection({ form, clubs, clubName, pointsLocked, timeZone
   const pointsSystemsQuery = usePointsSystems(seasonId);
   const seasons = seasonsQuery.data ?? [];
   const pointsSystems = pointsSystemsQuery.data ?? [];
+  const oneOff = Boolean(clubId) && !seasonId;
   // An empty menu says why: still loading, or not loaded, is not "this club has none" (P3REV3-CQ-02).
   const noSeasonsText = !clubId
     ? "Select a club first"
@@ -133,10 +138,11 @@ export function BasicInfoSection({ form, clubs, clubName, pointsLocked, timeZone
           render={({ field }) => (
             <FormItem>
               <FormLabel>Season</FormLabel>
+              {/* No season is a choice of its own (round 7): a one-off game, outside every season and leaderboard. */}
               <Select
-                value={field.value}
+                value={clubId ? field.value || NO_SEASON : ""}
                 onValueChange={(value) => {
-                  field.onChange(value);
+                  field.onChange(value === NO_SEASON ? "" : value);
                   setValue("pointsSystemId", "");
                 }}
                 disabled={!clubId || pointsLocked}
@@ -147,6 +153,7 @@ export function BasicInfoSection({ form, clubs, clubName, pointsLocked, timeZone
                   </SelectTrigger>
                 </FormControl>
                 <SelectContent>
+                  <SelectItem value={NO_SEASON}>No season (one-off game)</SelectItem>
                   {seasons.length === 0 ? (
                     <SelectItem value="no-seasons" disabled>
                       {noSeasonsText}
@@ -172,10 +179,18 @@ export function BasicInfoSection({ form, clubs, clubName, pointsLocked, timeZone
           render={({ field }) => (
             <FormItem>
               <FormLabel>Points System</FormLabel>
-              <Select value={field.value} onValueChange={field.onChange} disabled={!seasonId || pointsLocked}>
+              <Select
+                value={field.value}
+                onValueChange={(value) => {
+                  field.onChange(value);
+                  // Choosing how points are scored is choosing to score them.
+                  setValue("trackPoints", true);
+                }}
+                disabled={!seasonId || pointsLocked}
+              >
                 <FormControl>
                   <SelectTrigger data-testid="points-system-select">
-                    <SelectValue placeholder="Select a points system" />
+                    <SelectValue placeholder={oneOff ? ONE_OFF_NO_POINTS : "Select a points system"} />
                   </SelectTrigger>
                 </FormControl>
                 <SelectContent>
@@ -193,7 +208,11 @@ export function BasicInfoSection({ form, clubs, clubName, pointsLocked, timeZone
                 </SelectContent>
               </Select>
               {seasonId ? <LoadFailed what="The season's points systems" query={pointsSystemsQuery} /> : null}
-              <FormDescription>Optional - Select a points system to award points based on player placement</FormDescription>
+              <FormDescription>
+                {oneOff
+                  ? "A one-off game is not part of a season: it awards no points and is on no leaderboard."
+                  : "Optional - Select a points system to award points based on player placement"}
+              </FormDescription>
               <FormMessage />
             </FormItem>
           )}

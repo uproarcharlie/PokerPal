@@ -72,7 +72,7 @@ describe("GET /api/tournaments/:id/prize-pool", () => {
       locked: false,
       estimated: true,
       breakdown: {
-        algorithm: "v2-floor-remainder-first",
+        algorithm: "v3-floor-remainder-fee",
         counts: { registrations: 8, buyIns: 8 },
         gross: { total: 40_000 },
         rake: { calculated: 4_000, override: null, applied: 4_000 },
@@ -122,7 +122,7 @@ describe("GET /api/tournaments/:id/prize-pool", () => {
   });
 
   it("shows a finalized tournament's payouts from its snapshot, with the players' names", async () => {
-    // $135 pays $67 + $40 + $27, and the leftover $1 to 1st.
+    // $135 pays $67 + $40 + $27; the $1 the rounding leaves is the club's (round 7).
     const { staff, tournament, registrations } = await poolTournament({}, 3);
     await testDb()
       .update(tournamentRegistrations)
@@ -141,11 +141,11 @@ describe("GET /api/tournaments/:id/prize-pool", () => {
     expect(response.body.display).toEqual({
       source: "snapshot",
       rows: [
-        { position: 1, amountCents: 6_800, percentage: 50, registrationId: registrations[2].id, playerName: "Player 3" },
+        { position: 1, amountCents: 6_700, percentage: 50, registrationId: registrations[2].id, playerName: "Player 3" },
         { position: 2, amountCents: 4_000, percentage: 30, registrationId: registrations[1].id, playerName: "Player 2" },
         { position: 3, amountCents: 2_700, percentage: 20, registrationId: registrations[0].id, playerName: "Player 1" },
       ],
-      totalCents: 13_500,
+      totalCents: 13_400,
       undistributedCents: 0,
     });
     expect(response.body).toMatchObject({ status: "completed", estimated: false });
@@ -255,47 +255,49 @@ describe("PUT /api/tournaments/:id/prize-pool/adjustment", () => {
 
     expect(response.status).toBe(200);
     expect(await row(tournament.id)).toMatchObject({ manualPrizePool: "250.00", rakeOverride: null });
-    expect(response.body.prizePool.breakdown).toMatchObject({ net: 25_000, netSource: "manual_pool", impliedRake: -15_000 });
-    expect((await activity(tournament.id))[0].description).toBe("Prize pool set manually to $250 (calculated $90); $160 added by the club");
+    // $250 on Standard pays $125 + $75 to the 2 players (3rd has nobody, R7FREV0-MONEY-01): the club adds $110 to the $90 available.
+    expect(response.body.prizePool.breakdown).toMatchObject({ net: 20_000, netSource: "manual_pool", impliedRake: -10_000 });
+    expect((await activity(tournament.id))[0].description).toBe("Prize pool set manually to $250 (calculated $90); Added by the club: $110");
   });
 
-  it("stores where a manual pool's difference goes, pays it that way, and says so (round 5, item 16)", async () => {
+  it("gives what a manual pool leaves of the money available to the club's fee, and says so to the staff (round 7)", async () => {
     // 8 buy-ins of $50 with 10% AP leave $360: a $300 pool leaves $60.
     const { staff, tournament } = await poolTournament({ name: "Test Wednesday" }, 8);
 
     const kept = await adjust(staff.owner.agent, tournament.id, { mode: "manual_pool", amount: "300.00" });
-    expect(kept.body.prizePool.breakdown).toMatchObject({ net: 30_000, impliedRake: 10_000, difference: { choice: "club", keptByClubCents: 6_000 } });
+
+    expect(kept.status).toBe(200);
+    expect(kept.body.prizePool.breakdown).toMatchObject({ net: 30_000, impliedRake: 10_000 });
+    expect(kept.body.prizePool.breakdown.difference).toEqual({ availableCents: 36_000, setCents: 30_000, cents: 6_000, keptByClubCents: 6_000, addedByClubCents: 0 });
+    expect(kept.body.prizePool.breakdown.payouts.map((payout: { amountCents: number }) => payout.amountCents)).toEqual([15_000, 9_000, 6_000]);
+    expect(kept.body.prizePool).not.toHaveProperty("carryTarget");
     expect((await row(tournament.id)).prizeDifference).toBeNull();
-    expect((await activity(tournament.id))[0].description).toBe("Prize pool set manually to $300 (calculated $360); $60 left over: the club keeps it");
-
-    const first = await adjust(staff.owner.agent, tournament.id, { mode: "manual_pool", amount: "300.00", prizeDifference: "first", reason: "Promo" });
-    expect(first.status).toBe(200);
-    expect((await row(tournament.id)).prizeDifference).toBe("first");
-    expect(first.body.prizePool.breakdown).toMatchObject({ net: 36_000, impliedRake: 4_000, difference: { addedToPrizesCents: 6_000 } });
-    expect(first.body.prizePool.breakdown.payouts.map((payout: { amountCents: number }) => payout.amountCents)).toEqual([21_000, 9_000, 6_000]);
-    const line = (await activity(tournament.id)).sort((a, b) => (a.timestamp ?? "").localeCompare(b.timestamp ?? "")).at(-1);
-    if (!line) throw new Error("nothing logged");
-    expect(line.description).toBe("Prize pool set manually to $300 (calculated $360); $60 left over: it goes to 1st - Promo");
-    expect(JSON.parse(line.eventData ?? "{}")).toMatchObject({ mode: "manual_pool", prizeDifference: "first", difference: { cents: 6_000, addedToPrizesCents: 6_000 } });
-    const [audit] = (await audits(tournament.id)).filter((entry) => entry.action === "prize_pool.adjust").slice(-1);
-    expect(audit.data).toMatchObject({ prizeDifference: { before: null, after: "first" } });
-
-    // The same choice again changes nothing; another one is a change.
-    const logged = (await activity(tournament.id)).length;
-    await adjust(staff.owner.agent, tournament.id, { mode: "manual_pool", amount: "300.00", prizeDifference: "first" });
-    expect(await activity(tournament.id)).toHaveLength(logged);
-    const carried = await adjust(staff.owner.agent, tournament.id, { mode: "manual_pool", amount: "300.00", prizeDifference: "carry" });
-    expect(carried.body.prizePool).toMatchObject({ carryTarget: "the next tournament", breakdown: { net: 30_000, impliedRake: 4_000, difference: { carriedOverCents: 6_000 } } });
-    expect(await activity(tournament.id)).toHaveLength(logged + 1);
+    const [line] = await activity(tournament.id);
+    expect(line.description).toBe("Prize pool set manually to $300 (calculated $360); Leftover $60 → AP");
+    expect(JSON.parse(line.eventData ?? "{}")).toMatchObject({ mode: "manual_pool", difference: { cents: 6_000, keptByClubCents: 6_000 } });
+    const [audit] = (await audits(tournament.id)).filter((entry) => entry.action === "prize_pool.adjust");
+    expect(audit.data).toMatchObject({ mode: "manual_pool", amountCents: 30_000, netCentsAfter: 30_000 });
+    expect(audit.data).not.toHaveProperty("prizeDifference");
   });
 
-  it("refuses a choice that is not one of the four", async () => {
-    const { staff, tournament } = await poolTournament({}, 2);
+  it("ignores where a page loaded before round 7 says a leftover goes, even a choice that never was one, and pays a stored choice as the club's", async () => {
+    const { staff, tournament } = await poolTournament({}, 8);
+    await adjust(staff.owner.agent, tournament.id, { mode: "manual_pool", amount: "300.00" });
 
-    const response = await adjust(staff.owner.agent, tournament.id, { mode: "manual_pool", amount: "50.00", prizeDifference: "rest" });
+    for (const prizeDifference of ["first", "pro_rata", "carry", "rest"]) {
+      const response = await adjust(staff.owner.agent, tournament.id, { mode: "manual_pool", amount: "300.00", prizeDifference });
 
-    expect(response.status).toBe(400);
-    expect(response.body.code).toBe("VALIDATION");
+      expect(response.status).toBe(200);
+      expect(response.body.prizePool.breakdown).toMatchObject({ net: 30_000, difference: { keptByClubCents: 6_000 } });
+    }
+    expect((await row(tournament.id)).prizeDifference).toBeNull();
+    expect(await activity(tournament.id)).toHaveLength(1);
+
+    // A tournament whose TD chose, before round 7, to add the leftover to 1st: the club's fee now, while it is open.
+    const { tournament: earlier } = await poolTournament({ manualPrizePool: "300.00", prizeDifference: "first" }, 8, staff);
+    const stored = await staff.owner.agent.get(poolPath(earlier.id));
+    expect(stored.body.breakdown.payouts.map((payout: { amountCents: number }) => payout.amountCents)).toEqual([15_000, 9_000, 6_000]);
+    expect(stored.body.breakdown).toMatchObject({ net: 30_000, impliedRake: 10_000, difference: { keptByClubCents: 6_000, addedByClubCents: 0 } });
   });
 
   it("goes back to the calculated pool, clearing both", async () => {
@@ -305,7 +307,8 @@ describe("PUT /api/tournaments/:id/prize-pool/adjustment", () => {
 
     expect(response.status).toBe(200);
     expect(await row(tournament.id)).toMatchObject({ manualPrizePool: null, rakeOverride: null, prizePoolAdjustmentReason: "Correction" });
-    expect((await activity(tournament.id))[0].description).toBe("Prize pool back to the calculated $90 - Correction");
+    // $90 available, of which the 2 players' places pay $45 + $27.
+    expect((await activity(tournament.id))[0].description).toBe("Prize pool back to the calculated $72 - Correction");
   });
 
   it("is allowed while the pool is locked (D14), and refused once the tournament is completed or cancelled", async () => {
@@ -395,7 +398,8 @@ describe("PUT /api/tournaments/:id/prize-pool/rates", () => {
       rebuyRakeAmount: "5.00",
       rakeOverride: null,
     });
-    expect(response.body.prizePool.breakdown).toMatchObject({ rake: { buyIn: 3_200, override: null }, net: 36_800 });
+    // $400 less $4 per entry leaves $368, paid out as $184 + $110 + $73 (round 7: the $1 left is the club's).
+    expect(response.body.prizePool.breakdown).toMatchObject({ rake: { buyIn: 3_200, override: null }, netAfterAp: 36_800, net: 36_700 });
     const [entry] = await activity(tournament.id);
     expect(entry).toMatchObject({
       eventType: "rake_rates_changed",

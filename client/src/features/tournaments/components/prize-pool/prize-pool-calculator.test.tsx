@@ -12,7 +12,6 @@ function renderCalculator(
   rows: ReadonlyArray<EntryInput & { id?: string; finalPosition?: number | null; prizeAmount?: string | null }>,
   rakeLabel?: string,
   highHandAwardsCents?: number[],
-  carryTarget?: string,
 ) {
   // Paid unless a row says otherwise: only paid players are in a pool (round 6).
   const registrations = rows.map((row, i) => ({ id: row.id ?? `r${i}`, paymentConfirmed: true, ...row }));
@@ -25,7 +24,6 @@ function renderCalculator(
       display={display}
       rakeLabel={rakeLabel}
       highHandAwardsCents={highHandAwardsCents}
-      carryTarget={carryTarget}
     />,
   );
 }
@@ -58,7 +56,24 @@ describe("PrizePoolCalculator", () => {
     expect(screen.getByTestId("gross-total")).toHaveTextContent("$1,550");
     expect(screen.getByText("Rake (buy-ins 10% + re-buys 10% + add-ons 10%)")).toBeInTheDocument();
     expect(screen.getByTestId("rake-amount")).toHaveTextContent("-$155");
-    expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$1,395");
+    // $1,395 for prizes: $697, $418 and $279 rounded down to whole dollars, the $1 left to the club's fee (round 7).
+    expect(screen.getByTestId("difference-kept-by-club")).toHaveTextContent("Leftover → Rake−$1");
+    expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$1,394");
+  });
+
+  it("shows free entries: their buy-ins bring nothing, and what the club pays in for them (round 7)", () => {
+    const withFree = entries.map((entry, i) => (i < 22 ? entry : { ...entry, freeEntry: true, freeEntryFunded: i === 22 }));
+
+    renderCalculator(tournament, withFree, "AP");
+
+    expect(screen.getByText("Buy-ins (22 × $50.00)")).toBeInTheDocument();
+    expect(screen.getByTestId("buyins-total")).toHaveTextContent("$1,100");
+    expect(screen.getByTestId("free-entries")).toHaveTextContent("$0");
+    expect(screen.getByText("Free entries (2)")).toBeInTheDocument();
+    expect(screen.getByText("The club pays 1 of their buy-ins into the pool")).toBeInTheDocument();
+    expect(screen.getByTestId("gross-total")).toHaveTextContent("$1,450");
+    expect(screen.getByTestId("difference-added-for-free-entries")).toHaveTextContent("Added by the club for free entries+$50");
+    expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$1,354");
   });
 
   it("uses the club's label and shows a manual AP total as such", () => {
@@ -212,7 +227,8 @@ describe("PrizePoolCalculator", () => {
     renderCalculator({ ...tournament, buyInAmount: "25.00", rakeType: "none", rakeAmount: "0.00", status: "completed" }, legacy);
 
     expect(screen.getByText("Net Prize Pool (recalculated)")).toBeInTheDocument();
-    expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$475");
+    // Today's rule pays $237/$142/$95 of the $475: the recalculation says so, beside the $476 really paid.
+    expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$474");
     expect(screen.getByTestId("paid-out")).toHaveTextContent("$476");
   });
 
@@ -241,32 +257,42 @@ describe("PrizePoolCalculator", () => {
 
       expect(screen.getByTestId("gross-total")).toHaveTextContent("$1,550");
       expect(screen.getByTestId("rake-amount")).toHaveTextContent("-$155");
-      expect(screen.getByTestId("difference-kept-by-club")).toHaveTextContent("Kept by the club−$95");
+      expect(screen.getByTestId("difference-kept-by-club")).toHaveTextContent("Leftover → Rake−$95");
       expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$1,300");
     });
 
-    it("says where the difference went when the TD chose: carried over, or added to the places (round 5, item 16)", () => {
-      renderCalculator({ ...tournament, manualPrizePool: "1300.00", prizeDifference: "carry" }, entries, "AP", [], "Winter League");
-      expect(screen.getByTestId("difference-carried-over")).toHaveTextContent("Carried over to Winter League−$95");
+    it("gives the leftover to the club's fee whatever was chosen before round 7", () => {
+      renderCalculator({ ...tournament, manualPrizePool: "1300.00", prizeDifference: "carry" } as CalculatorTournament, entries, "AP");
+      expect(screen.getByTestId("difference-kept-by-club")).toHaveTextContent("Leftover → AP−$95");
+      expect(screen.queryByTestId("difference-carried-over")).not.toBeInTheDocument();
       expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$1,300");
     });
 
-    it("adds money carried in from an earlier tournament, and notes a leftover the places were paid on top", () => {
+    it("adds money carried in from an earlier tournament", () => {
       const carriedIn = [{ carryOverId: "co1", fromTournamentId: "t0", fromName: "Test Wednesday", amountCents: 5_000 }];
-      renderCalculator({ ...tournament, manualPrizePool: "1300.00", prizeDifference: "first", carriedIn }, entries);
+      renderCalculator({ ...tournament, manualPrizePool: "1300.00", prizeDifference: "first", carriedIn } as CalculatorTournament, entries);
 
       expect(screen.getByTestId("difference-carried-in")).toHaveTextContent("Carried over from Test Wednesday+$50");
-      expect(screen.queryByTestId("difference-kept-by-club")).not.toBeInTheDocument();
-      expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$1,445");
-      expect(screen.getByTestId("leftover-note")).toHaveTextContent("Includes $145 left over, added to 1st");
+      expect(screen.getByTestId("difference-kept-by-club")).toHaveTextContent("Leftover → Rake−$145");
+      expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$1,300");
+      expect(screen.queryByTestId("leftover-note")).not.toBeInTheDocument();
     });
 
-    it("shows fixed prizes with nothing taken in yet: the club adds them all", () => {
+    it("shows fixed prizes for the places with a player: the club adds what they pay beyond what came in (R7FREV0-MONEY-01)", () => {
+      const fixed = { ...tournament, buyInAmount: "0.00", payoutStructure: "custom", customPayouts: '{"v":2,"places":[{"amountCents":30000},{"amountCents":20000}]}' };
+      renderCalculator(fixed, [{ buyIns: 1 }]);
+
+      // One player: 1st's $300 is paid, 2nd's $200 is not until a second player is in.
+      expect(screen.getByTestId("difference-added-by-club")).toHaveTextContent("Added by the club+$300");
+      expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$300");
+    });
+
+    it("pays nothing, and the club adds nothing, before anyone is in the pool", () => {
       const fixed = { ...tournament, payoutStructure: "custom", customPayouts: '{"v":2,"places":[{"amountCents":30000},{"amountCents":20000}]}' };
       renderCalculator(fixed, []);
 
-      expect(screen.getByTestId("difference-added-by-club")).toHaveTextContent("Added by the club+$500");
-      expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$500");
+      expect(screen.getByText("Prize pool will be calculated")).toBeInTheDocument();
+      expect(screen.queryByTestId("difference-added-by-club")).not.toBeInTheDocument();
     });
 
     it("adds up line by line once finalized, from the frozen pool: the rates' AP and the manual difference", () => {
@@ -288,7 +314,7 @@ describe("PrizePoolCalculator", () => {
 
       expect(screen.getByTestId("gross-total")).toHaveTextContent("$400");
       expect(screen.getByTestId("rake-amount")).toHaveTextContent("-$40");
-      expect(screen.getByTestId("difference-kept-by-club")).toHaveTextContent("Kept by the club−$60");
+      expect(screen.getByTestId("difference-kept-by-club")).toHaveTextContent("Leftover → Rake−$60");
       expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$300");
       expect(screen.getByTestId("manual-pool-note")).toHaveTextContent("Set manually (calculated: $360)");
     });

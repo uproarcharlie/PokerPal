@@ -42,3 +42,10 @@ export async function tableRows(table: Locator): Promise<string[][]> {
     ),
   );
 }
+
+/** Dismisses the toasts showing, so a screenshot shows the screen under them. */
+export async function dismissToasts(page: Page): Promise<void> {
+  const dismiss = page.getByRole("region", { name: "Notifications" }).getByRole("button", { name: "Dismiss notification" });
+  // A toast may leave on its own between the count and the tap: a tap that finds none is no failure.
+  for (let left = await dismiss.count(); left > 0; left = await dismiss.count()) await dismiss.first().click({ timeout: 2_000 }).catch(() => undefined);
+}

@@ -104,6 +104,8 @@ export const qk = {
     pendingActions: (id: string) => ["tournaments", "detail", id, "pending-actions"] as const,
     /** GET /api/public/tournaments/:id/players?q= (the QR page's "find yourself" search) */
     playerSearch: (id: string, q: string) => ["tournaments", "detail", id, "player-search", q.trim().toLowerCase()] as const,
+    /** GET /api/public/tournaments/:id/players?match=exact (who a new sign-up may already be: "That's me") */
+    sameNamePlayers: (id: string, name: string) => ["tournaments", "detail", id, "same-name", name.trim().replace(/\s+/g, " ").toLowerCase()] as const,
     /** GET /api/public/tournaments/:id/display: the clock and live figures (TV, clock panel, clock chip) */
     display: (id: string) => ["tournaments", "detail", id, "display"] as const,
     /** GET /api/tournaments/:id/seating (staff) */

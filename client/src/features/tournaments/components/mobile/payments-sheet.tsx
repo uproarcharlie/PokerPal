@@ -8,6 +8,8 @@ import { usePaymentConfirmations } from "../payment-desk/use-payment-confirmatio
 interface PaymentsSheetProps {
   tournamentId: string;
   timeZone: string;
+  /** The game has no buy-in (round 7, item 8): the sheet accepts players rather than taking payments. */
+  freeTournament: boolean;
   /** Why nobody more can be accepted now (Max players accepted already: round 5, item 15), or null. */
   full: string | null;
   open: boolean;
@@ -20,24 +22,35 @@ interface PaymentsSheetProps {
  * Confirm, one tap from wherever the TD is. Under "seat them once they've paid" confirming is what seats
  * a late arrival, and on the Money tab the list sat below the figures, the payouts and the AP.
  */
-export function PaymentsSheet({ tournamentId, timeZone, full, open, onOpenChange, returnFocusTo }: PaymentsSheetProps) {
+export function PaymentsSheet({ tournamentId, timeZone, freeTournament, full, open, onOpenChange, returnFocusTo }: PaymentsSheetProps) {
   const heading = useRef<HTMLHeadingElement>(null);
   return (
     <PhoneSheet side="bottom" open={open} onOpenChange={onOpenChange} returnFocusTo={returnFocusTo} initialFocus={heading}>
       <PhoneSheetHeader
         titleRef={heading}
         icon={<Banknote className="h-5 w-5 text-primary" aria-hidden="true" />}
-        title="Take payment"
-        description="Confirm each player's payment as you take it at the desk."
+        title={freeTournament ? "Accept players" : "Take payment"}
+        description={freeTournament ? "Free tournament: accept each player who signed up." : "Confirm each player's payment as you take it at the desk."}
       />
       {/* Followed only while open. */}
-      <PhoneSheetBody>{open ? <PendingList tournamentId={tournamentId} timeZone={timeZone} full={full} /> : null}</PhoneSheetBody>
+      <PhoneSheetBody>{open ? <PendingList tournamentId={tournamentId} timeZone={timeZone} freeTournament={freeTournament} full={full} /> : null}</PhoneSheetBody>
     </PhoneSheet>
   );
 }
 
-function PendingList({ tournamentId, timeZone, full }: { tournamentId: string; timeZone: string; full: string | null }) {
+function PendingList({ tournamentId, timeZone, freeTournament, full }: { tournamentId: string; timeZone: string; freeTournament: boolean; full: string | null }) {
   const pending = usePendingPayments(tournamentId);
-  const { confirmingIds, confirm, earlyBirds } = usePaymentConfirmations(tournamentId);
-  return <PendingPayments query={pending} timeZone={timeZone} confirmingIds={confirmingIds} onConfirm={confirm} earlyBirds={earlyBirds} full={full} />;
+  const { confirmingIds, confirm, earlyBirds } = usePaymentConfirmations(tournamentId, { freeTournament });
+  // A free entry has its own quick action (round 7): this sheet only takes payments.
+  return (
+    <PendingPayments
+      query={pending}
+      timeZone={timeZone}
+      confirmingIds={confirmingIds}
+      onConfirm={confirm}
+      freeTournament={freeTournament}
+      earlyBirds={earlyBirds}
+      full={full}
+    />
+  );
 }

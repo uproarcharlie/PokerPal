@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PublicRegistration } from "@shared/api/public";
 import { standingsFor } from "@shared/domain/standings";
-import { prizeTable } from "./standings";
+import { prizeTable, showsPoints } from "./standings";
 
 const entry = (id: string, extra: Partial<PublicRegistration> = {}): PublicRegistration => ({
   id,
@@ -87,5 +87,27 @@ describe("prizeTable", () => {
 
     expect(table.rows.map((row) => row.position)).toEqual([1, 2]);
     expect(table.others).toBeNull();
+  });
+});
+
+describe("showsPoints (round 7)", () => {
+  const scored = [entry("r1", { pointsAwarded: 0 }), entry("r2", { pointsAwarded: 40 })];
+  const unscored = [entry("r1", { pointsAwarded: 0 }), entry("r2")];
+
+  it("shows points for a game that tracks them with a points system", () => {
+    expect(showsPoints({ trackPoints: true, pointsSystemId: "ps1" }, [])).toBe(true);
+  });
+
+  it("shows none for a game that does not track them, whatever was scored", () => {
+    expect(showsPoints({ trackPoints: false, pointsSystemId: "ps1" }, scored)).toBe(false);
+    expect(showsPoints({ trackPoints: false, pointsSystemId: null }, scored)).toBe(false);
+  });
+
+  it("shows none for a game with no points system (a one-off, or one made before round 7), where nothing scores", () => {
+    expect(showsPoints({ trackPoints: true, pointsSystemId: null }, unscored)).toBe(false);
+  });
+
+  it("still shows the points a game scored before its points system was deleted", () => {
+    expect(showsPoints({ trackPoints: true, pointsSystemId: null }, scored)).toBe(true);
   });
 });

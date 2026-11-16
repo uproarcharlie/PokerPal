@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { undistributedNote } from "@/lib/prize-pool";
+import { PAYOUT_STRUCTURES } from "@shared/domain/payouts";
+import { undistributedNote, unfilledPlacesNote } from "@/lib/prize-pool";
 import { PlaceBadge, PlaceName, PODIUM, StandingStatus } from "./podium";
 
 describe("the podium (P3REV5-CQ-09)", () => {
@@ -18,22 +19,40 @@ describe("the podium (P3REV5-CQ-09)", () => {
 });
 
 describe("undistributedNote (P3REV5-CQ-09)", () => {
-  it("words the pool that is not paid out once, for every screen", () => {
-    expect(undistributedNote({ source: "live", undistributedCents: 4750 }, { paid: 1, field: 1 })).toBe(
-      "Only 1 player: $47.50 of the pool is not paid out unless more players enter.",
+  it("words what a pool paid before round 7 left unpaid, once for every screen", () => {
+    expect(undistributedNote({ undistributedCents: 2000 })).toBe("$20 of the pool was not paid out: there were fewer players than paid places.");
+    expect(undistributedNote({ undistributedCents: 0 })).toBeNull();
+  });
+});
+
+describe("unfilledPlacesNote (R7FREV0-MONEY-01)", () => {
+  // $180 for prizes on Standard: 1st $90, 2nd $54, 3rd $36.
+  const pool = (paid: number) => ({
+    manualPrizePool: null,
+    netAfterAp: 18_000,
+    structure: { requested: "standard", used: "standard" as const, basisPoints: PAYOUT_STRUCTURES.standard },
+    counts: { registrations: paid, buyIns: paid, rebuys: 0, addons: 0, highHandEntrants: 0, freeEntries: 0, fundedFreeEntries: 0, freeBuyIns: 0, fundedBuyIns: 0 },
+  });
+
+  it("tells the staff what the places with no player in the pool would pay goes to the club's fee", () => {
+    expect(unfilledPlacesNote(pool(2), { paid: 2, field: 2 }, "AP")).toBe(
+      "Only 2 players: places below 2nd are not paid, so the $36 they would pay goes to AP unless more players enter.",
     );
-    expect(undistributedNote({ source: "snapshot", undistributedCents: 2000 }, { paid: 2, field: 2 })).toBe(
-      "$20 of the pool was not paid out: there were fewer players than paid places.",
+    expect(unfilledPlacesNote(pool(1), { paid: 1, field: 1 }, "Rake")).toBe(
+      "Only 1 player: places below 1st are not paid, so the $90 they would pay goes to Rake unless more players enter.",
     );
-    expect(undistributedNote({ source: "live", undistributedCents: 0 }, { paid: 9, field: 9 })).toBeNull();
   });
 
   it("counts the paid players while some of the field has not paid: the money comes with the payments (R6REV0-MONEY-02)", () => {
-    // 12 playing, 2 paid, the standard 3 places: 3rd's $40 is not paid out.
-    const live = { source: "live", undistributedCents: 4_000 } as const;
-    expect(undistributedNote(live, { paid: 2, field: 12 }, "staff")).toBe("Only 2 paid players: $40 of the pool is not paid out until more payments are confirmed.");
-    expect(undistributedNote(live, { paid: 2, field: 12 })).toBe("Only 2 paid players: $40 of the pool is not paid out yet.");
-    expect(undistributedNote(live, { paid: 1, field: 3 })).toBe("Only 1 paid player: $40 of the pool is not paid out yet.");
+    expect(unfilledPlacesNote(pool(2), { paid: 2, field: 12 }, "AP")).toBe(
+      "Only 2 paid players: places below 2nd are not paid, so the $36 they would pay goes to AP until more payments are confirmed.",
+    );
+  });
+
+  it("says nothing while every place has a player, or nobody is in the pool yet", () => {
+    expect(unfilledPlacesNote(pool(3), { paid: 3, field: 3 }, "AP")).toBeNull();
+    expect(unfilledPlacesNote(pool(9), { paid: 9, field: 9 }, "AP")).toBeNull();
+    expect(unfilledPlacesNote(pool(0), { paid: 0, field: 4 }, "AP")).toBeNull();
   });
 });
 

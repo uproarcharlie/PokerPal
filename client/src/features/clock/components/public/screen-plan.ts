@@ -48,7 +48,7 @@ export interface MoneyText {
   payouts: Array<{ place: string; amount: string }>;
   /** Under the places: "Includes $200 carried over from Week 3" (carriedInNote), or null. */
   carried: string | null;
-  /** What of the pool no place pays yet, or that the pool is shown once locked. */
+  /** That the pool is shown once locked (in place of the pool), or null. */
   note: string | null;
 }
 

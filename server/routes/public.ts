@@ -16,14 +16,15 @@ export function publicRoutes(): Router {
    * players known at this tournament's club (registered there, or added by it). Its staff also find
    * players known at other clubs, to register a visitor (which grants them nothing over that player:
    * their home club is already recorded); a player no club has added or registered is found only by an
-   * admin, so nobody can make themselves that player's home club (SEC-P2-01).
+   * admin, so nobody can make themselves that player's home club (SEC-P2-01). `match=exact` finds the
+   * players called exactly `q`, for "That's me" (R7FREV1-01).
    */
   router.get("/api/public/tournaments/:id/players", asyncHandler(async (req, res) => {
     const query = parseOrThrow(publicPlayerSearchQuerySchema, req.query);
     const tournament = await requireTournament(req.params.id);
     const { canManage } = await viewerFor(req, tournament.clubId);
     const scope: PlayerSearchScope = isAdmin(req.user) ? "all" : canManage ? "known" : { clubId: tournament.clubId };
-    res.json(await searchPlayers({ q: query.q, limit: query.limit, scope }));
+    res.json(await searchPlayers({ q: query.q, match: query.match, limit: query.limit, scope }));
   }));
 
   /**

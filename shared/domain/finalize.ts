@@ -4,31 +4,32 @@
  * runtime imports outside shared/domain. The server hashes `planHashInput(plan)` and writes the rows
  * in one transaction; the preview shows exactly the same plan, so what the TD sees is what is paid.
  *
- * Money is the v2 rule (`allocatePayouts`: each place's share floored to whole dollars, the leftover
- * dollars and cents to 1st, so the places add up to the pool exactly), or for custom places each
- * place's own amount (`placeAmounts`), with any difference from the money available settled as the
- * tournament chose (./prize-difference, round 5 item 16: kept by the club, added to 1st, shared across
- * the places, carried over, or added by the club): finalize pays exactly the prizes set, and the
- * snapshot records where the difference went. Places beyond the number of entrants are not paid (as
- * before; the warnings say how much). The waiting list (round 5, item 15: sign-ups beyond Max players
- * nobody accepted) never played: it is not ranked, paid, scored or counted. Only paid players are in the
- * pool (round 6), so a plan with players in the field whose payment is not confirmed is refused
- * (UNPAID_PLAYERS) until the TD confirms them or leaves them out (`excludeUnpaid`): left out, they are
- * not ranked, paid or scored either, and any result an earlier finalize stored for them is cleared.
- * A deal (./deal) replaces what the players still in are paid, sharing exactly what their places pay
- * together.
+ * Money is the v3 rule (round 7: `allocatePayouts`, each place's share rounded down to whole dollars),
+ * or for custom places each place's own amount (`placeAmounts`). Finalize pays exactly the prizes set:
+ * whatever they leave of the money available, the rounding included, goes to the club's fee, and
+ * whatever they need beyond it the club adds (./prize-difference); the snapshot records which. Places
+ * beyond the number of entrants are not paid (as before), so what they would pay is part of that
+ * leftover (round 7; the warnings say how much). The waiting list
+ * (round 5, item 15: sign-ups beyond Max players nobody accepted) never played: it is not ranked, paid,
+ * scored or counted. Only accepted players (paid, or given a free entry: round 7) are in the pool
+ * (round 6), so a plan with players in the field not accepted yet is refused (UNPAID_PLAYERS) until the
+ * TD confirms them or leaves them out (`excludeUnpaid`): left out, they are not ranked, paid or scored
+ * either, and any result an earlier finalize stored for them is cleared. A deal (./deal) replaces what
+ * the players still in are paid, sharing exactly what their places pay together.
  */
 import { dealProblems, type Dealable, type DealInput, type DealProblem, type SnapshotDeal } from "./deal";
 import { centsToDecimalString, formatMoney, toCents, type Cents, type MoneyInput } from "./money";
-import { PAYOUT_ALGORITHM, undistributedCents, type PayoutAlgorithm, type PayoutPlace, type PayoutStructureKey } from "./payouts";
-import { carryTargetName, differenceSentence, type CarriedIn, type PrizeDifference } from "./prize-difference";
+import { PAYOUT_ALGORITHM, placeName, type PayoutAlgorithm, type PayoutPlace, type PayoutStructureKey } from "./payouts";
+import { differenceSentence, settleDifference, type CarriedIn, type LegacyDifference, type PrizeDifference } from "./prize-difference";
 import { isPlayerActionType, PLAYER_ACTION_LABELS } from "./player-actions";
 import { pointsForFinish, type AllocationInput, type PointsRules, type PointsSystemInput } from "./points";
 import {
   amountDueCents,
   computePrizePool,
-  hasPaid,
+  isAccepted,
+  unfilledPlacesCents,
   type EntryInput,
+  type FreeEntriesBreakdown,
   type NetSource,
   type PrizePoolBreakdown,
   type PrizePoolInput,
@@ -39,10 +40,11 @@ import { bySignUp, fieldEntries } from "./waiting-list";
 export const FINALIZE_SNAPSHOT_VERSION = 1 as const;
 
 /**
- * Where a difference between the prizes as set and the money available for prizes went (round 5,
- * item 16), as finalize paid it; `carryTarget` names where carried money went ("Winter League").
+ * The difference between the prizes as set and the money available for prizes, as finalize paid it:
+ * the leftover the club kept as its fee, or what it added. A snapshot frozen before round 7 may also
+ * say it went to the places or was carried over (LegacyDifference).
  */
-export type SnapshotDifference = PrizeDifference & { carryTarget?: string };
+export type SnapshotDifference = PrizeDifference & LegacyDifference;
 
 /**
  * The season-points rules a finalize scored with, frozen with the payouts: a later correction
@@ -76,10 +78,12 @@ export interface PrizePoolSnapshot {
     impliedRakeCents: Cents;
     /** `places`: only for a custom structure with fixed places (round 5); basisPoints are then each place's share of this pool. */
     structure: { requested: string; used: PayoutStructureKey; basisPoints: number[]; places?: PayoutPlace[]; error?: string };
-    /** Only when the prizes as set were not exactly the money available (round 5): where the difference went. */
+    /** Only when the prizes as set were not exactly the money available (round 5): the leftover kept or the amount added. */
     difference?: SnapshotDifference;
     /** Only when money carried over from earlier tournaments was in the pool (round 5). */
     carriedIn?: CarriedIn[];
+    /** Only when any player had a free entry (round 7): how many, and what the club paid in for them. */
+    freeEntries?: FreeEntriesBreakdown;
   };
   /** The points rules scored with (absent from snapshots written before they were frozen). */
   points?: SnapshotPointsRules;
@@ -151,13 +155,25 @@ export interface FinalizePlanInput {
   pendingRequests?: readonly PendingRequestInput[];
   /** What the players still in agreed to share instead of their places' payouts (checked with dealProblems). */
   deal?: DealInput;
-  /** Where money carried over goes, as named (carryTargetName of the tournament's season); default "the next tournament". */
-  carryTarget?: string;
   /**
-   * Leave the players in the field whose payment is not confirmed out of the results (round 6): not
-   * ranked, paid or scored, like the waiting list. Without it, a plan with any is refused (UNPAID_PLAYERS).
+   * Leave the players in the field not accepted (neither paid nor given a free entry) out of the results
+   * (round 6): not ranked, paid or scored, like the waiting list. Without it, a plan with any is refused
+   * (UNPAID_PLAYERS).
    */
   excludeUnpaid?: boolean;
+  /**
+   * Money this tournament carried over before round 7 that another tournament's pool now holds, and that
+   * tournament's name: it stays there, so a correction keeps it out of what this pool leaves the club
+   * and freezes it as carried over, as it was paid (R7FREV0-CARRY-01). Absent when none is held.
+   */
+  carriedOver?: CarriedOver | null;
+}
+
+/** Money carried over before round 7 that another tournament's pool holds (FinalizePlanInput.carriedOver). */
+export interface CarriedOver {
+  cents: Cents;
+  /** The tournament whose pool holds it. */
+  target: string;
 }
 
 /** One registration as finalize writes it. */
@@ -238,10 +254,10 @@ export function buildFinalizePlan(input: FinalizePlanInput): FinalizePlan {
   const field = fieldEntries(input.registrations, tournament.maxPlayers);
   const nameOf = (playerId: string) => input.playerNames.get(playerId) ?? UNKNOWN_PLAYER;
   const unpaid = unpaidPlayers(tournament, field, nameOf);
-  // Who is ranked: the field, or with excludeUnpaid only its paid players.
-  const registrations = input.excludeUnpaid ? field.filter(hasPaid) : field;
-  // Paid players only, as today's rule has it, even when correcting a tournament completed before it.
-  const prizePool = computePrizePool(tournament, field.filter(hasPaid));
+  // Who is ranked: the field, or with excludeUnpaid only its accepted players.
+  const registrations = input.excludeUnpaid ? field.filter(isAccepted) : field;
+  // Accepted players only, as today's rule has it, even when correcting a tournament completed before it.
+  const prizePool = withCarriedOver(computePrizePool(tournament, field.filter(isAccepted)), input.carriedOver);
   const warnings = planWarnings(input, registrations, unpaid, prizePool);
   const activePlayers = suggestedActivePlayers(registrations, input.finishOrder, nameOf);
   const pendingRequestIds = (input.pendingRequests ?? []).map((request) => request.id).sort();
@@ -301,7 +317,7 @@ export function buildFinalizePlan(input: FinalizePlanInput): FinalizePlan {
     warnings.push(dealWarning(deal));
   }
 
-  const { structure, difference, carriedIn } = prizePool;
+  const { structure, difference, carriedIn, freeEntries } = prizePool;
   const snapshot: PrizePoolSnapshot = {
     v: FINALIZE_SNAPSHOT_VERSION,
     algorithm: PAYOUT_ALGORITHM,
@@ -323,8 +339,9 @@ export function buildFinalizePlan(input: FinalizePlanInput): FinalizePlan {
         ...(structure.places ? { places: structure.places.map((place) => ({ ...place })) } : {}),
         ...(structure.error ? { error: structure.error } : {}),
       },
-      ...(difference.cents !== 0 ? { difference: snapshotDifference(difference, input.carryTarget) } : {}),
+      ...(difference.cents !== 0 || (difference.carriedOverCents ?? 0) > 0 ? { difference: { ...difference } } : {}),
       ...(carriedIn.length > 0 ? { carriedIn: carriedIn.map((entry) => ({ ...entry })) } : {}),
+      ...(freeEntries.entries > 0 ? { freeEntries: { ...freeEntries } } : {}),
     },
     points,
     ...(deal ? { deal } : {}),
@@ -349,20 +366,31 @@ export function buildFinalizePlan(input: FinalizePlanInput): FinalizePlan {
   return { ok: true, prizePool, activePlayers, warnings: snapshot.warnings, rows, snapshot, pendingRequestIds, dealable, unpaid, clearedRegistrationIds };
 }
 
-/** The field's players whose payment is not confirmed, in sign-up order, with what each owes. */
+/**
+ * The pool less money carried over before round 7 that another pool holds: what the prizes leave of the
+ * rest is the club's (or what they need beyond it the club adds), and the carried money is frozen as
+ * carried over to that tournament, so no cent is counted in two pools.
+ */
+function withCarriedOver(pool: PrizePoolBreakdown, carriedOver: CarriedOver | null | undefined): PrizePoolBreakdown {
+  if (!carriedOver || carriedOver.cents <= 0) return pool;
+  const difference = settleDifference(pool.net, pool.netAfterAp - carriedOver.cents);
+  return {
+    ...pool,
+    difference: { ...difference, carriedOverCents: carriedOver.cents, carryTarget: carriedOver.target },
+    impliedRake: pool.impliedRake - carriedOver.cents,
+  };
+}
+
+/** The field's players not accepted yet (neither paid nor given a free entry), in sign-up order, with what each owes. */
 function unpaidPlayers(
   tournament: FinalizeTournamentInput,
   field: readonly FinalizeRegistrationInput[],
   nameOf: (playerId: string) => string,
 ): UnpaidPlayer[] {
   return field
-    .filter((r) => !hasPaid(r))
+    .filter((r) => !isAccepted(r))
     .sort(bySignUp)
     .map((r) => ({ registrationId: r.id, playerId: r.playerId, playerName: nameOf(r.playerId), amountDueCents: amountDueCents(tournament, r) }));
-}
-
-function snapshotDifference(difference: PrizeDifference, carryTarget: string | undefined): SnapshotDifference {
-  return { ...difference, ...(difference.carriedOverCents > 0 ? { carryTarget: carryTarget ?? carryTargetName(null) } : {}) };
 }
 
 function withAmount(row: FinalizeRow, amountCents: Cents): FinalizeRow {
@@ -402,23 +430,25 @@ function dealWarning(deal: SnapshotDeal): string {
 
 /**
  * The text the plan hash is taken over: the pool, every row finalize writes, the player requests it
- * would discard, and where a difference from the money available goes (round 5: kept, carried over or
- * added by the club; a plan with none hashes as before). Any change to what would be paid, stored,
- * carried over or thrown away (a request arriving after the preview) changes it, so finalize can
- * refuse a plan that moved since the preview.
+ * would discard, and the difference from the money available (the leftover the club keeps, or what it
+ * adds, and money carried over before round 7 that another pool holds; a plan with none hashes as
+ * before). Any change to what would be paid, stored or thrown away (a request arriving after the
+ * preview, carried money taken out of another pool) changes it, so finalize can refuse a plan that
+ * moved since the preview.
  */
 export function planHashInput(
   netCents: Cents,
   rows: readonly FinalizeRow[],
   pendingRequestIds: readonly string[] = [],
-  difference?: Pick<PrizeDifference, "cents" | "choice" | "keptByClubCents" | "carriedOverCents" | "addedByClubCents"> | null,
+  difference?: (Pick<PrizeDifference, "cents" | "keptByClubCents" | "addedByClubCents"> & Pick<LegacyDifference, "carriedOverCents">) | null,
 ): string {
+  const carriedOver = difference?.carriedOverCents ?? 0;
   return JSON.stringify([
     netCents,
     rows.map((r) => [r.registrationId, r.finalPosition, r.prizeAmount, r.pointsAwarded]),
     [...pendingRequestIds].sort(),
-    ...(difference && difference.cents !== 0
-      ? [[difference.choice, difference.keptByClubCents, difference.carriedOverCents, difference.addedByClubCents]]
+    ...(difference && (difference.cents !== 0 || carriedOver > 0)
+      ? [[difference.keptByClubCents, difference.addedByClubCents, ...(carriedOver > 0 ? [carriedOver] : [])]]
       : []),
   ]);
 }
@@ -478,6 +508,14 @@ function planWarnings(
     if (previousDeal && !input.deal) {
       warnings.push(`It was finalized with a deal (${previousDeal.reason}): without one, the players still in are paid their places' payouts`);
     }
+    const repaid = tournament.prizePoolSnapshot ? repaidPlacesWarning(tournament.prizePoolSnapshot, pool) : null;
+    if (repaid) warnings.push(repaid);
+  }
+  if (input.carriedOver && input.carriedOver.cents > 0) {
+    warnings.push(
+      `${formatMoney(input.carriedOver.cents)} this tournament carried over is in ${input.carriedOver.target}'s prize pool: ` +
+        "it stays there, so it is not part of this prize pool",
+    );
   }
   if (!tournament.prizePoolLocked) warnings.push("The prize pool is not locked");
 
@@ -503,17 +541,23 @@ function planWarnings(
   for (const entry of pool.carriedIn) {
     warnings.push(`${formatMoney(entry.amountCents)} carried over from ${entry.fromName} is in the prize pool`);
   }
-  const difference = differenceSentence(pool.difference, input.carryTarget ?? carryTargetName(null));
-  if (difference) warnings.push(difference.replace(/\.$/, ""));
+  // What the club adds to pay the prizes as set is worth a warning; a leftover is simply its fee, said in the pool's summary.
+  const shortfall = pool.difference.cents < 0 ? differenceSentence(pool.difference, input.rakeLabel) : null;
+  if (shortfall) warnings.push(shortfall.replace(/\.$/, ""));
   if (pool.structure.error) warnings.push(pool.structure.error);
   if (pool.structure.warning) warnings.push(pool.structure.warning);
 
   if (registrations.length > 0 && pool.net <= 0) {
     warnings.push("The prize pool is $0 or less, so nobody is paid");
   }
-  const undistributed = undistributedCents(pool.payouts, registrations.length);
-  if (undistributed > 0) {
-    warnings.push(`Only ${plural(registrations.length, "player")}: ${formatMoney(undistributed)} of the pool is not paid out`);
+  // Places beyond the players are not paid: what they would pay is part of the leftover, the club's fee (round 7).
+  const inPool = pool.counts.registrations;
+  const unfilled = inPool > 0 ? unfilledPlacesCents(pool) : 0;
+  if (unfilled > 0) {
+    warnings.push(
+      `Only ${plural(inPool, "player")} ${inPool === 1 ? "is" : "are"} in the prize pool: places below ${placeName(inPool)} are not paid, ` +
+        `so the ${formatMoney(unfilled)} they would pay goes to ${input.rakeLabel}`,
+    );
   }
 
   const pending = input.pendingRequests ?? [];
@@ -526,6 +570,34 @@ function planWarnings(
     );
   }
   return warnings;
+}
+
+/**
+ * On a correction (R7FREV0-MONEY-02): the places that would now be paid differently from what was paid,
+ * before any deal, with their old and new amounts. A tournament paid by an earlier payout rule (v2 gave
+ * 1st the dollars and cents the rounding left, and a leftover could go to the places) is paid again by
+ * today's, which records a different prize for a place than was handed out; the TD is told before
+ * correcting a finishing order changes the money too. Null when every place pays as it did.
+ */
+function repaidPlacesWarning(snapshot: PrizePoolSnapshot, pool: PrizePoolBreakdown): string | null {
+  const before = new Map(snapshot.paid.map((place) => [place.position, place.amountCents]));
+  // A deal paid its players instead of their places: what the places paid is what each was to get.
+  for (const player of snapshot.deal?.players ?? []) before.set(player.position, player.plannedCents);
+  const now = new Map(pool.payouts.map((place) => [place.position, place.amountCents]));
+  const positions = Array.from(new Set(Array.from(before.keys()).concat(Array.from(now.keys())))).sort((a, b) => a - b);
+  const changed = positions.filter((position) => (before.get(position) ?? 0) !== (now.get(position) ?? 0));
+  if (changed.length === 0) return null;
+  const listed = changed
+    .slice(0, 3)
+    .map((position) => `${placeName(position)} ${formatMoney(before.get(position) ?? 0)} → ${formatMoney(now.get(position) ?? 0)}`);
+  const more = changed.length > 3 ? ` and ${changed.length - 3} more` : "";
+  const total = (amounts: Map<number, Cents>) => Array.from(amounts.values()).reduce((sum, amount) => sum + amount, 0);
+  const totals = total(now) === total(before) ? "" : `: ${formatMoney(total(now))} in all, not ${formatMoney(total(before))}`;
+  const rule =
+    snapshot.algorithm !== PAYOUT_ALGORITHM
+      ? "It was paid by an earlier payout rule, and correcting pays the places by today's"
+      : "Correcting changes what the places pay";
+  return `${rule} (${listed.join(", ")}${more})${totals}`;
 }
 
 function suggestedActivePlayers(

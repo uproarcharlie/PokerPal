@@ -6,7 +6,6 @@ import { tableLayout, PLAN, type FeltOutline } from "@shared/domain/table-layout
 import { usePublicSeating } from "@/features/seating/hooks";
 import { formatMoney, ordinal, seatLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { unpaidNote } from "./display-money";
 import { px, textEm } from "./screen-plan";
 import type { StageSize } from "./use-screen";
 
@@ -278,8 +277,6 @@ export function payoutsLayout(places: readonly string[], width: number, height: 
 
 interface PayoutsOverlayProps {
   money: LiveDisplayDto["money"];
-  /** Everyone playing, paid or not (the Players tile): what the note says of the places not paid yet. */
-  entrants: number;
   /** The clock's display settings: why no places may be listed. */
   settings: PayoutSettings;
   strip: ReactNode;
@@ -288,10 +285,9 @@ interface PayoutsOverlayProps {
 }
 
 /** Every paid place, sized to fit the one screen, or why none are listed. */
-export function PayoutsOverlay({ money, entrants, settings, strip, size, padding }: PayoutsOverlayProps) {
-  const unpaid = unpaidNote(money, entrants);
+export function PayoutsOverlay({ money, settings, strip, size, padding }: PayoutsOverlayProps) {
   const payouts = money.payouts ?? [];
-  const area = { width: size.width, height: size.height * (1 - OVERLAY_HEAD) * (unpaid || money.estimated ? 0.82 : 1) };
+  const area = { width: size.width, height: size.height * (1 - OVERLAY_HEAD) * (money.estimated ? 0.82 : 1) };
   const layout = payoutsLayout(payouts.map((payout) => `${ordinal(payout.position)}  ${formatMoney(payout.amountCents)}`), area.width, area.height);
   return (
     <Overlay title="Payouts" strip={strip} size={size} padding={padding}>
@@ -310,11 +306,6 @@ export function PayoutsOverlay({ money, entrants, settings, strip, size, padding
             {noPayoutsNote(money, settings)}
           </p>
         )}
-        {unpaid && payouts.length > 0 ? (
-          <p className="text-center text-muted-foreground" style={overlayNote(size)}>
-            {unpaid}
-          </p>
-        ) : null}
         {money.estimated && money.payouts ? (
           <p className="text-center text-muted-foreground" style={overlayNote(size)}>
             Estimated: the pool can still change

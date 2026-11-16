@@ -57,6 +57,8 @@ export const ERROR_CODES = [
   "PLAYER_NOT_FOUND",
   "ALREADY_REGISTERED",
   "TOURNAMENT_FULL", // 409, accepting a player (payment confirmed, or a waiting-list entry's first re-buy, add-on, knockout or bust) once Max players are in the field (round 5, item 15); sign-ups themselves join the waiting list
+  "FREE_ENTRY", // 409, changing the payment of an entry with a free entry through PUT /api/registrations/:id (round 7, item 6): take the free entry back, or mark it paid, instead
+  "NOT_FREE_ENTRY", // 409, taking back or marking paid a free entry on an entry that has none (round 7, item 6)
   "HIGH_HAND_NOT_AVAILABLE",
   "PRIZE_POOL_LOCKED",
   "MAX_REBUYS_REACHED",

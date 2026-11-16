@@ -1,7 +1,8 @@
 import { useWatch, type Control } from "react-hook-form";
-import { FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { toCents } from "@shared/domain/money";
 import { PAYOUT_STRUCTURE_KEYS, PAYOUT_STRUCTURE_LABELS, type PayoutStructureKey } from "@shared/domain/payouts";
 import type { RecordedEntries, TournamentFormValues } from "../../tournament-form";
 import { AmountInput } from "@/components/shared/amount-input";
@@ -25,6 +26,11 @@ function keptOnBecause(count: number, one: string, many: string): string | undef
   return `${plural(count, one, many)} ${count === 1 ? "is" : "are"} recorded, so ${many} stay on. To stop taking more, lock the prize pool.`;
 }
 
+const AMOUNT = /^\s*\d+(\.\d*)?\s*$/;
+
+/** A buy-in typed as $0 (round 7, item 8): the whole game is free, and its pool is what the club puts up. */
+const isFreeBuyIn = (text: string) => AMOUNT.test(text) && toCents(text) === 0;
+
 /**
  * What a seat costs: the buy-in, and re-buys and add-ons when the tournament sells them, each with its
  * AP and its limit per player, and, when it sells both, whether a player may take only one kind.
@@ -44,6 +50,11 @@ export function BuyInSection({ control, rakeLabel, recorded }: MoneySectionProps
             <FormControl>
               <AmountInput unit="$" placeholder="100" {...field} data-testid="buyin-amount" />
             </FormControl>
+            {isFreeBuyIn(field.value) ? (
+              <FormDescription data-testid="free-tournament-hint">
+                Free tournament — set the prize pool the club puts up (Prize Pool → Edit on the tournament&apos;s page).
+              </FormDescription>
+            ) : null}
             <FormMessage />
           </FormItem>
         )}

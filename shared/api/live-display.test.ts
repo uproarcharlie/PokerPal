@@ -29,14 +29,15 @@ describe("toPublicPrizes", () => {
   it("pays the paid players' pool, and counts nothing for an entry with no payment status (a public registration)", () => {
     const prizes = toPublicPrizes(tournament(), [entry("r1"), entry("r2"), entry("r3"), entry("r4", { paymentConfirmed: false }), { id: "r5", buyIns: 1 }]);
 
+    // $285 available, each place rounded down to whole dollars (round 7): the headline is what they pay, $284, and the $1 left is the club's.
     expect(prizes).toEqual({
       tournamentId: "t1",
       locked: true,
       estimated: false,
       source: "live",
-      poolCents: 28_500,
+      poolCents: 28_400,
       payouts: [
-        { position: 1, amountCents: 14_300 },
+        { position: 1, amountCents: 14_200 },
         { position: 2, amountCents: 8_500 },
         { position: 3, amountCents: 5_700 },
       ],
@@ -48,14 +49,53 @@ describe("toPublicPrizes", () => {
     expect(toPublicPrizes(tournament(), [{ id: "r1", buyIns: 1 }]).poolCents).toBe(0);
   });
 
+  it("counts what the club pays in for a free entry, in full and with no AP, and nothing of one it does not, naming neither (round 7)", () => {
+    // 2 paid: $200 less $10 AP; the funded free entry adds its $100: $290, paid out as $145 + $87 + $58. The other adds nothing.
+    const prizes = toPublicPrizes(tournament(), [
+      entry("r1"),
+      entry("r2"),
+      entry("r3", { freeEntry: true, freeEntryFunded: true }),
+      entry("r4", { freeEntry: true }),
+    ]);
+
+    expect(prizes).toMatchObject({
+      poolCents: 29_000,
+      payouts: [
+        { position: 1, amountCents: 14_500 },
+        { position: 2, amountCents: 8_700 },
+        { position: 3, amountCents: 5_800 },
+      ],
+      undistributedCents: 0,
+    });
+    expect(findTakingsKeys(prizes)).toEqual([]);
+    expect(JSON.stringify(prizes)).not.toMatch(/free|funded/i);
+  });
+
   it("names the money carried in by where it came from only, and the high-hand pot of the paid entries", () => {
     const prizes = toPublicPrizes(
       tournament({ carriedIn: [{ carryOverId: "co1", fromTournamentId: "t0", fromName: "Week 3", amountCents: 10_000 }], enableHighHand: true, highHandAmount: "10.00" }),
       [entry("r1", { enteringHighHands: true }), entry("r2", { enteringHighHands: true }), entry("r3", { paymentConfirmed: false, enteringHighHands: true })],
     );
 
-    expect(prizes).toMatchObject({ poolCents: 29_000, carriedIn: [{ fromName: "Week 3", amountCents: 10_000 }], highHandPotCents: 2_000 });
+    // $290 for prizes, but only 2 paid players: 1st $145 and 2nd $87 are the pool; what 3rd would pay is the club's.
+    expect(prizes).toMatchObject({ poolCents: 23_200, carriedIn: [{ fromName: "Week 3", amountCents: 10_000 }], highHandPotCents: 2_000 });
     expect(findTakingsKeys(prizes)).toEqual([]);
+  });
+
+  it("headlines what the places with a paid player pay, and never what the places with none would (R7FREV0-MONEY-01)", () => {
+    // $190 for prizes on Standard: $95/$57/$38, but with 2 paid players only $95 + $57 is paid.
+    const prizes = toPublicPrizes(tournament(), [entry("r1"), entry("r2"), entry("r3", { paymentConfirmed: false })]);
+
+    expect(prizes).toMatchObject({
+      poolCents: 15_200,
+      payouts: [
+        { position: 1, amountCents: 9_500 },
+        { position: 2, amountCents: 5_700 },
+      ],
+      undistributedCents: 0,
+    });
+    expect(prizes.poolCents).toBe(prizes.payouts.reduce((sum, payout) => sum + payout.amountCents, 0));
+    expect(JSON.stringify(prizes)).not.toContain("3800");
   });
 
   it("shows what finalize paid, carried in and dealt once completed, and nothing once cancelled", () => {

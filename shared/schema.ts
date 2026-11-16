@@ -212,6 +212,14 @@ export const tournamentRegistrations = pgTable("tournament_registrations", {
   highHandAmount: decimal("high_hand_amount", { precision: 10, scale: 2 }),
   // Earned the early-bird bonus stack (tournament_clocks.early_bird_stack): chips only, never money (migrations/0007).
   earlyBird: boolean("early_bird").notNull().default(false),
+  // Round 7 (migrations/0015): a free entry, accepted like a paid one (paymentConfirmed true) whose
+  // buy-ins nobody paid; the pool counts them only when the club funds them (shared/domain/prize-pool).
+  freeEntry: boolean("free_entry").notNull().default(false),
+  freeEntryFunded: boolean("free_entry_funded").notNull().default(false),
+  freeEntryReason: text("free_entry_reason"), // season_prize | promo | staff | other (shared/api/registrations)
+  freeEntryNote: text("free_entry_note"),
+  freeEntryBy: varchar("free_entry_by"), // users.id, audit text (no FK), never sent to a client
+  freeEntryAt: timestamp("free_entry_at", { withTimezone: true, mode: "date" }),
 }, (table) => ({
   tournamentIdx: index("idx_tournament_registrations_tournament_id").on(table.tournamentId),
   playerIdx: index("idx_tournament_registrations_player_id").on(table.playerId),

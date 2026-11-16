@@ -14,7 +14,6 @@ import { DEFAULT_DISPLAY_SETTINGS } from "@shared/api/clock";
 import { findForbiddenKeys, findTakingsKeys } from "@shared/api/public";
 import { structureHash } from "@shared/domain/clock";
 import { FINALIZE_SNAPSHOT_VERSION, type PrizePoolSnapshot } from "@shared/domain/finalize";
-import { PAYOUT_ALGORITHM } from "@shared/domain/payouts";
 import { tournamentClocks, tournamentRegistrations, tournamentTables, type Tournament } from "@shared/schema";
 import { createApp } from "../../server/app";
 import { loadEnv } from "../../server/config/env";
@@ -245,12 +244,14 @@ describe("GET /api/public/tournaments/:id/display", () => {
       expect((await owner.agent.patch(`/api/registrations/${unpaid.id}/confirm-payment`)).status).toBe(200);
 
       const after = (await displayOf(tournament)).body;
-      expect(after.money).toMatchObject({ netCents: 31_500 });
+      // $350 less $35 AP is $315, paid out as $157 + $94 + $63 (round 7: the $1 left is the club's, never shown).
+      expect(after.money).toMatchObject({ netCents: 31_400 });
       expect(after.stats).toMatchObject({ entrants: 8, buyIns: 8, totalChips: 80_000 });
     });
 
     it("never tells the room what the club takes, keeps, adds or carries over, whoever looks (round 6)", async () => {
-      // 8 × $50 = $400 taken in, $40 AP: a pool guaranteed at $1,000 (the club adds $640), and one fixed at $300 ($60 kept, or carried over).
+      // 8 × $50 = $400 taken in, $40 AP: a pool guaranteed at $1,000 (the club adds $640), and one fixed at $300 (the $60 left is the
+      // club's fee, though a TD chose before round 7 to carry it over).
       const guaranteed = await world({ tournament: { ...pool, manualPrizePool: "1000.00", prizePoolLocked: true }, entries: entries(8), clock: { displaySettings: { showPrizePool: "always" } } });
       const kept = await world({ tournament: { ...pool, manualPrizePool: "300.00", prizePoolLocked: true }, entries: entries(8) });
       const carried = await world({ tournament: { ...pool, manualPrizePool: "300.00", prizeDifference: "carry", prizePoolLocked: true }, entries: entries(8) });
@@ -269,11 +270,11 @@ describe("GET /api/public/tournaments/:id/display", () => {
     it("says what was carried into the pool from an earlier game, live and as finalize froze it, and nothing of what the club kept", async () => {
       const carriedIn = [{ carryOverId: "co1", fromTournamentId: null, fromName: "Week 3", amountCents: 20_000 }];
       const live = await world({ tournament: { ...pool, prizePoolLocked: true, carriedIn }, entries: entries(8) });
-      // $400 in, $40 AP, $200 carried in: $560 available; 1st was paid $250 and the club carried $310 over to the season.
+      // A snapshot frozen before round 7: $400 in, $40 AP, $200 carried in: $560 available; 1st was paid $250 and the club carried $310 over to the season.
       const difference = { choice: "carry" as const, availableCents: 56_000, setCents: 25_000, cents: 31_000, keptByClubCents: 0, addedToPrizesCents: 0, carriedOverCents: 31_000, addedByClubCents: 0, carryTarget: "Winter League" };
       const snapshot: PrizePoolSnapshot = {
         v: FINALIZE_SNAPSHOT_VERSION,
-        algorithm: PAYOUT_ALGORITHM,
+        algorithm: "v2-floor-remainder-first",
         finalizedAt: new Date(T0).toISOString(),
         entrants: 8,
         finishOrderSource: "explicit",

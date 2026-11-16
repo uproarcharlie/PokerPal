@@ -1,8 +1,8 @@
 import { AlertTriangle } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { formatMoney, ordinal } from "@/lib/format";
-import { undistributedNote, type PoolPlayers, type TournamentMoney } from "@/lib/prize-pool";
-import { carryTargetName, differenceSentence } from "@shared/domain/prize-difference";
+import { unfilledPlacesNote, type PoolPlayers, type TournamentMoney } from "@/lib/prize-pool";
+import { differenceSentence } from "@shared/domain/prize-difference";
 
 /** How many places the preview names before "+N more". */
 const PLACES_SHOWN = 4;
@@ -20,8 +20,6 @@ interface PoolPreviewProps {
   locked: boolean;
   /** What to say while `after` is null. */
   waiting?: string;
-  /** Where money carried over goes (PrizePoolDto.carryTarget). */
-  carryTarget?: string;
 }
 
 /**
@@ -36,17 +34,17 @@ function noPlacesText(after: TournamentMoney, players: PoolPlayers): string {
 }
 
 /**
- * What a change would pay before it is saved: the pool, the AP taken, where any difference between the
- * prizes as set (a pool fixed by hand, fixed prizes) and the money available goes, in one sentence
- * (round 5, item 16), and the places, as finalize will pay them (shared/domain). The pool sentence is
- * announced as it changes. A locked pool warns that its published payouts change only when the change
- * moves the pool.
+ * What a change would pay before it is saved: the pool, the AP taken, the difference between the prizes
+ * as set (a pool fixed by hand, the rounding of each place) and the money available in one sentence
+ * ("Leftover $50 → AP: …", or what the club adds), and the places, as finalize will pay them
+ * (shared/domain), with what places no player is in yet would pay (the club's). Staff-only. The pool sentence is announced as it changes. A locked pool warns that
+ * its published payouts change only when the change moves the pool.
  */
-export function PoolPreview({ after, before, label, players, locked, waiting = "Enter an amount to see the prize pool.", carryTarget }: PoolPreviewProps) {
+export function PoolPreview({ after, before, label, players, locked, waiting = "Enter an amount to see the prize pool." }: PoolPreviewProps) {
   const places = after?.display.rows ?? [];
-  const undistributed = after ? undistributedNote(after.display, players, "staff") : null;
+  const unfilled = after ? unfilledPlacesNote(after.breakdown, players, label) : null;
   const changed = after !== null && after.breakdown.net !== before.breakdown.net;
-  const difference = after ? differenceSentence(after.breakdown.difference, carryTarget ?? carryTargetName(null)) : null;
+  const difference = after ? differenceSentence(after.breakdown.difference, label) : null;
   return (
     <section aria-label="What will be paid" className="space-y-2 rounded-lg border border-border bg-muted/30 p-3 text-sm" data-testid="pool-preview">
       <p aria-live="polite" className="font-medium text-foreground" data-testid="preview-pool">
@@ -79,7 +77,11 @@ export function PoolPreview({ after, before, label, players, locked, waiting = "
               {noPlacesText(after, players)}
             </p>
           )}
-          {undistributed ? <p className="text-muted-foreground">{undistributed}</p> : null}
+          {unfilled ? (
+            <p className="text-muted-foreground" data-testid="preview-unfilled">
+              {unfilled}
+            </p>
+          ) : null}
         </>
       ) : null}
       {locked && changed ? (

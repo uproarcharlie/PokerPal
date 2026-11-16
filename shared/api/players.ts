@@ -11,7 +11,7 @@ import { z } from "zod";
 import type { Player } from "../schema";
 import { idSchema, playerImageUrlSchema, requiredText, type Json } from "./common";
 import { phoneSchema } from "./auth";
-import type { PublicPlayer } from "./public";
+import { PLAYER_NAME_MAX, type PublicPlayer, type PublicPlayerSearchQuery } from "./public";
 
 /**
  * The comparable form of a phone number: digits only, keeping a leading "+" (so "021 123-4567" and
@@ -30,6 +30,20 @@ export function normaliseName(name: string): string {
   return name.trim().replace(/\s+/g, " ").toLocaleLowerCase("en");
 }
 
+/** The most players with one name the "That's me" lookup lists (the search's own most). */
+const SAME_NAME_LIMIT = 25;
+
+/**
+ * What to ask the club-scoped name search (GET /api/public/tournaments/:id/players) for every player
+ * called `name`, as normaliseName compares names: who a new sign-up is offered as "That's me" before a
+ * new player is made (round 7, item 9). An exact search, so a returning player is found however many
+ * other names contain theirs (R7FREV1-01). Null for a name with nothing in it.
+ */
+export function sameNameSearch(name: string): PublicPlayerSearchQuery | null {
+  const q = name.trim().replace(/\s+/g, " ").slice(0, PLAYER_NAME_MAX).trim();
+  return q ? { q, match: "exact", limit: SAME_NAME_LIMIT } : null;
+}
+
 const optionalEmail = z
   .preprocess(
     (value) => (typeof value === "string" && value.trim() === "" ? null : value),
@@ -38,19 +52,23 @@ const optionalEmail = z
   .optional();
 
 /**
- * POST /api/players. Public (the QR register page) with the public-write limit, and used by staff.
- * Anonymous callers must give a phone number (400 VALIDATION otherwise).
+ * POST /api/players. Public (the QR register page) with the public-write limit, and used by staff (the
+ * desk's Register player sheet). Only the name is required: a mobile number is optional for everyone
+ * (round 7, item 9). Without one nobody is matched and a new player is made, so the QR page and the
+ * desk first offer the players the club-scoped name search finds with the same name (sameNameSearch:
+ * "That's me"), who are signed up as themselves instead.
  *
  * Who is adding the player, which becomes a new player's home club (P2REV0-SEC-03): `clubId`, a club
  * the signed-in caller runs (403 otherwise, 404 when there is no such club), or `tournamentId`, the
  * tournament whose QR page this is (404 when there is none, 409 TOURNAMENT_CLOSED once it is completed
  * or cancelled). With neither, a new player has no home club until their first registration.
  *
- * Duplicate phone (normalisePhone): if the stored player's name matches (normaliseName), that player
- * is returned with 200 and `existing: true`, so a visitor from another club can register without
- * learning anything they did not type; of several such legacy duplicates, the one with the history
- * (P2REV3-PROD-01). Otherwise 409 PHONE_TAKEN, naming nobody unless the caller may manage that player
- * (an admin, or staff of their home club), who gets `details: { player: PublicPlayer }`.
+ * A duplicate phone, when one is given (normalisePhone): if the stored player's name matches
+ * (normaliseName), that player is returned with 200 and `existing: true`, so a visitor from another
+ * club can register without learning anything they did not type; of several such legacy duplicates,
+ * the one with the history (P2REV3-PROD-01). Otherwise 409 PHONE_TAKEN, naming nobody unless the
+ * caller may manage that player (an admin, or staff of their home club), who gets
+ * `details: { player: PublicPlayer }`.
  *
  * Round 5: `imageUrl` may be an uploaded photo or a built-in avatar (playerImageUrlSchema). A sign-up
  * from a tournament's QR page (`tournamentId`, not staff) whose club requires a photo
@@ -62,7 +80,7 @@ const optionalEmail = z
  * without a picture vouched for at no club or another one, R5REV-SEC-01).
  */
 export const createPlayerSchema = z.object({
-  name: requiredText(100),
+  name: requiredText(PLAYER_NAME_MAX),
   phone: phoneSchema,
   email: optionalEmail,
   imageUrl: playerImageUrlSchema,
@@ -74,7 +92,7 @@ export type CreatePlayerInput = z.infer<typeof createPlayerSchema>;
 /** PUT /api/players/:id (staff). Absent keeps; null or blank clears (a removed photo really is removed: img-04). */
 export const updatePlayerSchema = z
   .object({
-    name: requiredText(100).optional(),
+    name: requiredText(PLAYER_NAME_MAX).optional(),
     phone: phoneSchema,
     email: optionalEmail,
     imageUrl: playerImageUrlSchema,

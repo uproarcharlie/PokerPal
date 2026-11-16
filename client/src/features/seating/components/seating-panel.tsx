@@ -33,6 +33,7 @@ import { TableCard, type TableAction } from "./table-card";
 import { TableList } from "./table-list";
 import { TableSettingsDialog } from "./table-settings-dialog";
 import { UnseatedList } from "./unseated-list";
+import { freeEntriesById } from "@/features/tournaments/components/free-entry/free-entry-badge";
 
 interface SeatingPanelProps {
   tournament: TournamentDetailDto;
@@ -113,6 +114,8 @@ function SeatingDesk({ tournament, seating, registrations }: SeatingDeskProps) {
   const settingsTable = dialog?.kind === "settings" ? (active.find((table) => table.id === dialog.tableId) ?? null) : null;
   const eliminating = eliminatingId === null ? null : (registrations.find((registration) => registration.id === eliminatingId) ?? null);
   const freshSeats = freshSeatsByTable(arrivals);
+  // Who came in free (round 7): the club's staff are sent it with the registrations, and only they see this panel's marks.
+  const freeEntries = freeEntriesById(registrations);
   const advisedSeating = seating.advisor.advice.some((advice) => advice.kind === "seat_waiting" || advice.kind === "open_table");
 
   /**
@@ -177,7 +180,15 @@ function SeatingDesk({ tournament, seating, registrations }: SeatingDeskProps) {
   // Above the tables while they are in play: on a phone, below two or three drawings it sat 1,000 px down,
   // out of sight of the seats a waiting player is picked up for (R5REV-HOST-10).
   const waitingList = (
-    <UnseatedList unseated={seating.unseated} selectedId={selected?.registrationId ?? null} readOnly={readOnly || active.length === 0} busy={busy} onSelect={selectWaiting} onSeat={seatOne} />
+    <UnseatedList
+      unseated={seating.unseated}
+      freeEntries={freeEntries}
+      selectedId={selected?.registrationId ?? null}
+      readOnly={readOnly || active.length === 0}
+      busy={busy}
+      onSelect={selectWaiting}
+      onSeat={seatOne}
+    />
   );
 
   return (
@@ -262,6 +273,7 @@ function SeatingDesk({ tournament, seating, registrations }: SeatingDeskProps) {
                 selected={selected?.seat ? { tableId: selected.seat.tableId, seatNumber: selected.seat.seatNumber } : null}
                 moverName={selected?.name ?? null}
                 freshSeats={freshSeats}
+                freeEntries={freeEntries}
                 readOnly={readOnly}
                 busy={busy}
                 actionsOf={tableActions}
@@ -277,6 +289,7 @@ function SeatingDesk({ tournament, seating, registrations }: SeatingDeskProps) {
                     selectedSeat={selected?.seat?.tableId === table.id ? selected.seat.seatNumber : null}
                     moverName={selected?.name ?? null}
                     freshSeats={freshSeats.get(table.id)}
+                    freeEntries={freeEntries}
                     readOnly={readOnly}
                     busy={busy}
                     actions={tableActions(table)}

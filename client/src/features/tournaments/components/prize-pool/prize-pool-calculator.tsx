@@ -2,7 +2,7 @@ import { formatAmount, formatMoney, type Cents } from "@/lib/format";
 import { EmptyState } from "@/components/shared/query-state";
 import { Calculator } from "lucide-react";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
-import { carryTargetName, differenceLines } from "@shared/domain/prize-difference";
+import { differenceLines } from "@shared/domain/prize-difference";
 import { DEFAULT_RAKE_LABEL, type PayoutDisplay, type PrizePoolBreakdown, type PrizePoolInput } from "@shared/domain/prize-pool";
 import { describeApRates, rateText } from "@shared/domain/rake-rates";
 import { HighHandAwards, PaidPool } from "./paid-pool";
@@ -22,17 +22,24 @@ interface PrizePoolCalculatorProps {
   rakeLabel?: string;
   /** The high-hand prizes already awarded, in cents: what the next winner gets is worked out from them. */
   highHandAwardsCents?: readonly Cents[];
-  /** Where money carried over goes (PrizePoolDto.carryTarget); default "the next tournament". */
-  carryTarget?: string;
 }
 
 const amount = (value: PrizePoolInput["buyInAmount"]) => formatAmount(value, { forceCents: true });
 
+/** Under the free entries (round 7): their buy-ins bring nothing, unless the club pays them in (its own line below the AP). */
+function freeEntriesNote(entries: number, funded: number): string {
+  if (funded === 0) return "No buy-in paid: they add nothing to the pool";
+  if (funded === entries) return "The club pays their buy-ins into the pool";
+  return `The club pays ${funded} of their buy-ins into the pool`;
+}
+
 /**
- * The prize pool worked out line by line, the lines always adding up to the net pool. While the
- * tournament runs it is the live calculation; once it is completed it shows what finalize froze
- * (D20), or for a tournament finalized before snapshots the stored prizes, with the recalculation
- * clearly marked as one; a cancelled one pays nothing.
+ * The prize pool worked out line by line, the lines always adding up to the net pool: the paid buy-ins,
+ * re-buys and add-ons, the free entries (round 7: nothing, unless the club pays their buy-ins in), the
+ * AP, and what came in or went beside them (differenceLines: the leftover to the club's fee). While the
+ * tournament runs it is the live calculation; once it is completed it shows what finalize froze (D20),
+ * or for a tournament finalized before snapshots the stored prizes, with the recalculation clearly
+ * marked as one; a cancelled one pays nothing. The club's staff only.
  */
 export function PrizePoolCalculator({
   tournament,
@@ -40,7 +47,6 @@ export function PrizePoolCalculator({
   display,
   rakeLabel = DEFAULT_RAKE_LABEL,
   highHandAwardsCents = [],
-  carryTarget = carryTargetName(null),
 }: PrizePoolCalculatorProps) {
   const snapshot = display.source === "snapshot" ? tournament.prizePoolSnapshot : null;
   if (snapshot) return <PaidPool pool={snapshot.pool} display={display} rakeLabel={rakeLabel} deal={snapshot.deal} />;
@@ -59,7 +65,8 @@ export function PrizePoolCalculator({
   const rates = describeApRates(tournament);
   const rakeDescription = rake.override !== null ? " (manual total)" : rates ? ` (${rates})` : "";
   const highHandRakeShown = (tournament.highHandRakeType === "percentage" || tournament.highHandRakeType === "fixed") && highHand.rake > 0;
-  const lines = differenceLines(breakdown, carryTarget);
+  const lines = differenceLines(breakdown, rakeLabel);
+  const paidBuyIns = counts.buyIns - counts.freeBuyIns;
 
   return (
     <PoolCard
@@ -76,7 +83,15 @@ export function PrizePoolCalculator({
       {gross.total > 0 || breakdown.manualPrizePool !== null || breakdown.net > 0 ? (
         <>
           <div className="space-y-1">
-            <PoolLine label={`Buy-ins (${counts.buyIns} × ${amount(tournament.buyInAmount)})`} value={formatMoney(gross.buyIn)} testId="buyins-total" />
+            <PoolLine label={`Buy-ins (${paidBuyIns} × ${amount(tournament.buyInAmount)})`} value={formatMoney(gross.buyIn)} testId="buyins-total" />
+            {counts.freeEntries > 0 ? (
+              <PoolLine
+                label={`Free entries (${counts.freeEntries})`}
+                note={freeEntriesNote(counts.freeEntries, counts.fundedFreeEntries)}
+                value={formatMoney(0)}
+                testId="free-entries"
+              />
+            ) : null}
             {offersRebuys(tournament) && counts.rebuys > 0 ? (
               <PoolLine label={`Re-buys (${counts.rebuys} × ${amount(tournament.rebuyAmount)})`} value={formatMoney(gross.rebuy)} testId="rebuys-total" />
             ) : null}

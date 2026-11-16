@@ -210,6 +210,10 @@ for (const [device, use] of [
       }
       await expect(page.getByRole("dialog")).toBeVisible();
       await expectAccessible(page, "tournament admin, Register Player dialog");
+      // A new player added at the desk, name and (optional) mobile (round 7, item 9).
+      await page.getByRole("dialog").getByTestId("add-new-player").click();
+      await expect(page.getByTestId("new-player-name")).toBeVisible();
+      await expectAccessible(page, "tournament admin, Register Player dialog, adding a new player");
 
       // End Tournament: the finishing order and the payout plan it previews (MA-REV-07); on a phone, in the More tab.
       await page.goto(device === "phone" ? `/admin/tournaments/${demo.live.id}?tab=more` : `/admin/tournaments/${demo.live.id}`);

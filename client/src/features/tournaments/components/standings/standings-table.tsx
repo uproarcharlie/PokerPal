@@ -28,6 +28,7 @@ import { PlaceBadge, StandingStatus } from "@/components/shared/podium";
 import { lineupOf } from "@/features/public-tournament/waiting-list";
 import { acceptRefusal } from "@shared/domain/waiting-list";
 import { WaitingListCard } from "./waiting-list-card";
+import { FreeEntryBadge, freeEntryOf } from "../free-entry/free-entry-badge";
 
 interface StandingsTableProps {
   tournamentId: string;
@@ -45,11 +46,16 @@ function PlayerCell({ registration }: { registration: PublicRegistration }) {
   const name = playerName(registration);
   const rebuys = registration.rebuys ?? 0;
   const addons = registration.addons ?? 0;
+  // Only the club's staff are sent who came in free (round 7): nobody else sees a mark.
+  const free = freeEntryOf(registration);
   return (
     <div className="flex items-center gap-3 text-left">
       <PlayerAvatar name={name} imageUrl={registration.player?.imageUrl} size="md" />
       <div className="min-w-0">
-        <p className={cn("break-words font-medium", registration.isEliminated ? "text-muted-foreground line-through" : "text-foreground")}>{name}</p>
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className={cn("break-words font-medium", registration.isEliminated ? "text-muted-foreground line-through" : "text-foreground")}>{name}</span>
+          {free ? <FreeEntryBadge entry={free} /> : null}
+        </p>
         <p className="text-xs font-normal text-muted-foreground">
           Buy-in: {registration.buyIns ?? 0}
           {rebuys > 0 ? ` + ${plural(rebuys, "Re-buy")}` : ""}

@@ -99,7 +99,7 @@ describe("Dashboard", () => {
     const rows = within(table).getAllByRole("row").slice(1);
     expect(rows.map((row) => within(row).getAllByRole("cell")[0].textContent)).toEqual([
       "Friday FreezeoutSeason: Summer 2026",
-      "Late ShowSeason: No Season",
+      "Late ShowOne-off game",
     ]);
     expect(within(rows[0]).getByText("Registration Open")).toBeInTheDocument();
     expect(within(rows[1]).getByText("In Progress")).toBeInTheDocument();

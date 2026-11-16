@@ -97,11 +97,37 @@ describe("GET /api/public/tournaments/:id/players", () => {
     expect((await app.get(search(tonight.id)).query({ q: "bulk", limit: 25 })).body).toHaveLength(12);
   });
 
+  it("finds the players called exactly a name, however many other names contain it, at this club only (match=exact, R7FREV1-01)", async () => {
+    const { club, tonight } = await clubWithHistory();
+    // More than a page of names containing "jo" that sort before "Jo": a search for part of the name never reaches her.
+    for (const name of ["Ben Jones", "Cara Johnson", "Dan Jordan", "Eve Joyce", "Fay Jolly", "Gus Joseph", "Hal Jowett", "Ivy Jobs", "Jack Jo", "Jill Joss", "Joan", "Joe"]) {
+      await createRegistration({ tournamentId: tonight.id, playerId: (await createPlayer({ name })).id });
+    }
+    const jo = await createPlayer({ name: "Jo", phone: "021 555 0111", email: "jo@example.test" });
+    const spaced = await createPlayer({ name: "  Sam   TAYLOR " });
+    for (const player of [jo, spaced]) await createRegistration({ tournamentId: tonight.id, playerId: player.id });
+    const elsewhere = await createTournament({ clubId: (await createClub()).id });
+    await createRegistration({ tournamentId: elsewhere.id, playerId: (await createPlayer({ name: "Jo" })).id });
+    const app = await anon();
+
+    expect(names((await app.get(search(tonight.id)).query({ q: "Jo" })).body)).not.toContain("Jo");
+    const exact = await app.get(search(tonight.id)).query({ q: "jo", match: "exact" });
+    expect(exact.status).toBe(200);
+    expect(exact.body).toEqual([{ id: jo.id, name: "Jo", imageUrl: null }]);
+    expect(findForbiddenKeys(exact.body)).toEqual([]);
+    // Its spacing tidied and its case folded on both sides.
+    expect((await app.get(search(tonight.id)).query({ q: "sam taylor", match: "exact" })).body).toEqual([{ id: spaced.id, name: "  Sam   TAYLOR ", imageUrl: null }]);
+    expect((await app.get(search(tonight.id)).query({ q: "Jo Jo", match: "exact" })).body).toEqual([]);
+    // The club's staff look across every club, as their search does.
+    const owner = await signInClubRole("owner", club.id);
+    expect(names((await owner.agent.get(search(tonight.id)).query({ q: "Jo", match: "exact" })).body)).toEqual(["Jo", "Jo"]);
+  });
+
   it("answers 400 without a search term, or for a limit over 25", async () => {
     const { tonight } = await clubWithHistory();
     const app = await anon();
 
-    for (const query of [{}, { q: "  " }, { q: "x".repeat(61) }, { q: "al", limit: 26 }, { q: "al", limit: 0 }]) {
+    for (const query of [{}, { q: "  " }, { q: "x".repeat(61) }, { q: "x".repeat(101), match: "exact" }, { q: "al", match: "near" }, { q: "al", limit: 26 }, { q: "al", limit: 0 }]) {
       const response = await app.get(search(tonight.id)).query(query);
       expect(response.status).toBe(400);
       expect(response.body.code).toBe("VALIDATION");

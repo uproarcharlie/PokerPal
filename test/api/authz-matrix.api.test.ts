@@ -382,6 +382,11 @@ const ROUTES: Record<string, RouteRow> = {
     cases: single(staffOf(200), async ({ club }) => ({ path: `/api/registrations/${(await registrationIn(club)).id}/confirm-payment` })),
     missing: () => ({ path: `/api/registrations/${UNKNOWN_ID}/confirm-payment` }),
   },
+  "POST /api/registrations/:id/free-entry": {
+    guards: ["club-manager:Registration"],
+    cases: single(staffOf(200), async ({ club }) => ({ path: `/api/registrations/${(await registrationIn(club)).id}/free-entry`, json: { action: "give", reason: "promo" } })),
+    missing: () => ({ path: `/api/registrations/${UNKNOWN_ID}/free-entry`, json: { action: "give", reason: "promo" } }),
+  },
   "GET /api/tournaments/:id/pending-registrations": {
     guards: ["club-manager:Tournament"],
     cases: single(staffOf(200), async ({ club }) => ({ path: `/api/tournaments/${(await registrationIn(club)).tournamentId}/pending-registrations` })),

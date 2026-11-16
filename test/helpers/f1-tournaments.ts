@@ -8,6 +8,7 @@ import type { FinalizePreviewDto, FinalizePreviewInput, FinalizeResultDto, Final
 import { toPublicPrizes } from "@shared/api/live-display";
 import type { PrizePoolDto } from "@shared/api/prize-pool";
 import type { ClubDto, PublicRegistration } from "@shared/api/public";
+import type { FreeEntryStatus } from "@shared/api/registrations";
 import type { TournamentDetailDto, TournamentListItemDto, TournamentStatus } from "@shared/api/tournaments";
 import type { Dealable } from "@shared/domain/deal";
 import { centsToDecimalString } from "@shared/domain/money";
@@ -77,6 +78,14 @@ export function registrationDto(id: string, name: string, buyIns = 1, overrides:
 
 export const { pendingActionDto } = base;
 
+/**
+ * A staff row's free entry (round 7, item 6) as the server always sends it: none, unless `overrides`
+ * give one. Spread it into a ManagedRegistration or a payment-desk row; never into a public one.
+ */
+export function freeEntryStatus(overrides: Partial<FreeEntryStatus> = {}): Required<FreeEntryStatus> {
+  return { freeEntry: false, freeEntryFunded: false, freeEntryReason: null, freeEntryNote: null, ...overrides };
+}
+
 /* ---------- finalize ---------- */
 
 export const HASH_A = "a".repeat(32);
@@ -86,7 +95,10 @@ export const HASH_C = "c".repeat(32);
 const previewTournament = { buyInAmount: "100.00", rakeType: "fixed", rakeAmount: "5.00", payoutStructure: "standard" };
 const previewBreakdown = computePrizePool(previewTournament, [2, 2, 1].map((buyIns) => ({ buyIns, paymentConfirmed: true })));
 
-/** A $475 pool ($25 AP) as the preview reports it. */
+/**
+ * $475 available for prizes ($25 AP) as the preview reports it: paid out as $237 + $142 + $95, so the
+ * prize pool is $474 and the $1 the rounding leaves is the club's (round 7).
+ */
 export const previewPrizePool: PrizePoolDto = {
   tournamentId: "t1",
   status: "in_progress",
@@ -96,7 +108,6 @@ export const previewPrizePool: PrizePoolDto = {
   breakdown: previewBreakdown,
   display: { source: "live", rows: [], totalCents: previewBreakdown.net, undistributedCents: 0 },
   adjustment: null,
-  carryTarget: "the next tournament",
 };
 
 export interface PlanPlayer {
@@ -136,15 +147,17 @@ export function previewOf(overrides: Partial<FinalizePreviewDto>): FinalizePrevi
   };
 }
 
-/** What finalize answers: the $475 pool paid to Alice, Bob and Carl (50/30/20), frozen in its snapshot. */
+/** What finalize answers: the $474 pool paid to Alice, Bob and Carl (50/30/20 of the $475 available), frozen in its snapshot. */
 export function finalizeResultDto(message = "Tournament finalized successfully"): FinalizeResultDto {
   const paid = [alice, bob, carl].map((player, index) => ({
     ...player,
     position: index + 1,
     basisPoints: [5000, 3000, 2000][index],
-    amountCents: [23_800, 14_200, 9_500][index],
+    amountCents: [23_700, 14_200, 9_500][index],
   }));
-  return { success: true, message, snapshot: base.prizePoolSnapshotDto({ paid }) };
+  const { pool } = base.prizePoolSnapshotDto();
+  const difference = { availableCents: 47_500, setCents: 47_400, cents: 100, keptByClubCents: 100, addedByClubCents: 0 };
+  return { success: true, message, snapshot: base.prizePoolSnapshotDto({ pool: { ...pool, netCents: 47_400, impliedRakeCents: 2_600, difference }, paid }) };
 }
 
 /** Answers the preview by the finishing order sent (and the whole body, e.g. a deal), and records each request body. */

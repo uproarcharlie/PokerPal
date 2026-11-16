@@ -307,7 +307,7 @@ test("(b) the desk on a phone: a 3-tap bust with Undo, a re-buy approved, the cl
     await expect(timer()).toHaveText("20:00");
   });
 
-  await test.step("mid-game the TD sets a custom payout: 2nd a fixed $100, the rest a share, the leftover to 1st", async () => {
+  await test.step("mid-game the TD sets a custom payout: 2nd a fixed $100, the rest a share, the leftover to the AP", async () => {
     await page.goto(`/admin/tournaments/${tournament.id}?tab=money`);
     await page.getByTestId("edit-payouts").first().click();
     const editor = page.getByRole("dialog", { name: "Edit payouts" });
@@ -316,19 +316,19 @@ test("(b) the desk on a phone: a 3-tap bust with Undo, a re-buy approved, the cl
     await second.getByRole("button", { name: "Fixed amount" }).click();
     await editor.getByLabel("2nd place", { exact: true }).fill("100");
     await expect(editor.getByTestId("payout-pays-2")).toContainText("$100 (fixed)");
-    // What the places leave over is the club's unless the TD says otherwise (round 5, item 16): here 1st gets it.
-    await expect(editor.getByRole("radio", { name: /^Club keeps it/ })).toBeChecked();
-    await editor.getByRole("radio", { name: /^Add it to 1st/ }).click();
-    await expect(editor.getByTestId("payout-sum")).toContainText("left over goes to 1st");
+    // What the places leave over goes to the club's fee, with no question asked (round 7, item 1).
+    await expect(editor.getByTestId("payout-sum")).toContainText("Leftover $28 → AP");
     await editor.getByRole("button", { name: "Short field" }).click();
     await editor.getByTestId("payout-place-1").evaluate((place) => place.scrollIntoView({ block: "start" }));
     await shot(page, "payout-editor");
     await editor.getByTestId("save-payouts").click();
     await expect(editor).toBeHidden();
 
-    // 8 buy-ins at $50 and a $25 re-buy, no AP: $425. 3rd's 20% is $85, 2nd $100, and 1st the rest, $240.
+    // 8 buy-ins at $50 and a $25 re-buy, no AP: $425. 1st's 50% is $212 (whole dollars), 2nd $100 and 3rd's
+    // 20% $85: $397, and the $28 left over goes to the AP.
     const pool = await get<PrizePoolDto>(page.request, `/api/tournaments/${tournament.id}/prize-pool`);
-    expect(pool.breakdown.payouts.map((payout) => payout.amountCents)).toEqual([24_000, 10_000, 8_500]);
+    expect(pool.breakdown.payouts.map((payout) => payout.amountCents)).toEqual([21_200, 10_000, 8_500]);
+    expect(pool.breakdown.difference.keptByClubCents).toBe(2_800);
     await expect(page.getByTestId("payout-2")).toHaveText("$100");
   });
 
@@ -343,7 +343,8 @@ test("(b) the desk on a phone: a 3-tap bust with Undo, a re-buy approved, the cl
     await dialog.getByTestId("make-deal").click();
     await dialog.getByTestId("even-chop").click();
     await dialog.getByRole("button", { name: "Even chop at 3 handed" }).click();
-    await expect(dialog.getByTestId("deal-total")).toContainText("$425");
+    // A deal shares what the places pay: $397.
+    await expect(dialog.getByTestId("deal-total")).toContainText("$397");
     await expect(dialog.getByTestId("confirm-finalize")).toBeEnabled();
     await shot(page, "chop-dialog");
     await dialog.getByTestId("confirm-finalize").click();
@@ -353,10 +354,10 @@ test("(b) the desk on a phone: a 3-tap bust with Undo, a re-buy approved, the cl
     expect(finished.status).toBe("completed");
     const deal = finished.prizePoolSnapshot?.deal;
     expect(deal?.reason).toBe("Even chop at 3 handed");
-    expect(deal?.players.map((player) => player.amountCents).reduce((sum, cents) => sum + cents, 0)).toBe(42_500);
-    expect(deal?.players.map((player) => player.amountCents)).toEqual([14_300, 14_100, 14_100]);
+    expect(deal?.players.map((player) => player.amountCents).reduce((sum, cents) => sum + cents, 0)).toBe(39_700);
+    expect(deal?.players.map((player) => player.amountCents)).toEqual([13_300, 13_200, 13_200]);
     const prizes = (await registrationsOf(page.request, tournament.id)).filter((entry) => entry.finalPosition !== null && entry.finalPosition <= 3);
-    expect(prizes.map((entry) => Number(entry.prizeAmount)).sort((a, b) => b - a)).toEqual([143, 141, 141]);
+    expect(prizes.map((entry) => Number(entry.prizeAmount)).sort((a, b) => b - a)).toEqual([133, 132, 132]);
   });
 });
 

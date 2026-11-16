@@ -23,7 +23,6 @@ interface Mocks {
   registrations?: PublicRegistration[];
   club?: ReturnType<typeof clubDto>;
   carryOvers?: CarryOversDto;
-  carryTarget?: string;
 }
 
 function mockPanel({
@@ -31,10 +30,9 @@ function mockPanel({
   registrations = players,
   club = clubDto({ rakeLabel: "AP", viewer: MANAGER_VIEW }),
   carryOvers = { available: [], carriedIn: [] },
-  carryTarget = "the next tournament",
 }: Mocks = {}) {
   server.use(
-    http.get("/api/tournaments/t1/prize-pool", () => HttpResponse.json(prizePoolDto(tournament, registrations, { carryTarget }))),
+    http.get("/api/tournaments/t1/prize-pool", () => HttpResponse.json(prizePoolDto(tournament, registrations))),
     http.get("/api/clubs/c1", () => HttpResponse.json(club)),
     http.get("/api/tournaments/t1/registrations", () => HttpResponse.json(registrations)),
     http.get("/api/tournaments/t1/prize-pool/carry-overs", () => HttpResponse.json(carryOvers)),
@@ -124,27 +122,35 @@ describe("ApPanel", () => {
     expect(screen.getByText("The club keeps, in all")).toBeInTheDocument();
   });
 
-  it("says what the club keeps of a prize pool fixed below the money available (round 5, item 16)", async () => {
+  it("adds what a prize pool fixed below the money available leaves to the AP (round 7)", async () => {
     const tournament = apTournament({ manualPrizePool: "1800.00" });
     mockPanel({ tournament });
     renderWithApp(<ApPanel tournament={tournament} />);
 
-    // $1,920 is available: the club keeps the $120 the fixed pool leaves, with its $230 AP.
+    // $1,920 is available: the $120 the fixed pool leaves goes to the club's fee, with its $230 AP.
     expect(await screen.findByTestId("ap-kept-by-club")).toHaveTextContent("+$120");
-    expect(screen.getByText("Kept by the club")).toBeInTheDocument();
+    expect(screen.getByText("Leftover → AP")).toBeInTheDocument();
     expect(screen.getByTestId("ap-take")).toHaveTextContent("$350");
     expect(screen.getByText("The club keeps, in all")).toBeInTheDocument();
+    expect(screen.queryByTestId("ap-carried-over")).not.toBeInTheDocument();
   });
 
-  it("says what is carried over instead, and that it is not the club's (round 5, item 16)", async () => {
-    const tournament = apTournament({ manualPrizePool: "1800.00", prizeDifference: "carry" });
-    mockPanel({ tournament, carryTarget: "Winter League" });
-    renderWithApp(<ApPanel tournament={tournament} />);
+  it("takes no AP from free entries, and counts what the club pays in for them against its take (round 7)", async () => {
+    // Player 1's buy-in is free and the club pays it in; Player 2's is free and brings nothing.
+    const registrations = players.map((player, index) =>
+      index === 0 ? { ...player, freeEntry: true, freeEntryFunded: true } : index === 1 ? { ...player, freeEntry: true } : player,
+    );
+    mockPanel({ registrations });
+    renderWithApp(<ApPanel tournament={apTournament()} />);
 
-    expect(await screen.findByTestId("ap-carried-over")).toHaveTextContent("$120");
-    expect(screen.getByText("Carried over to Winter League")).toBeInTheDocument();
-    expect(screen.getByText("Not the club's: a later tournament can add it to its prize pool")).toBeInTheDocument();
-    expect(screen.getByTestId("ap-take")).toHaveTextContent("$230");
+    // 18 paid buy-ins ($1,800, $180 AP) and the $150 of re-buys and add-ons ($30 AP): $210 AP. The club
+    // pays $100 in for Player 1, so $1,840 is paid out and it keeps $110 in all.
+    expect(await screen.findByTestId("ap-rake-buyins")).toHaveTextContent("$180");
+    expect(screen.getByTestId("ap-calculated")).toHaveTextContent("$210");
+    expect(screen.getByTestId("ap-added-for-free-entries")).toHaveTextContent("−$100");
+    expect(screen.getByText("Added by the club for free entries")).toBeInTheDocument();
+    expect(screen.getByTestId("ap-take")).toHaveTextContent("$110");
+    expect(screen.getByText("The club keeps, in all")).toBeInTheDocument();
   });
 
   it("says what the club adds to prizes set above the money available, and what it puts in all told", async () => {

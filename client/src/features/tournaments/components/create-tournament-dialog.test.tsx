@@ -77,7 +77,9 @@ describe("CreateTournamentDialog", () => {
       rakeAmount: null,
       rebuyAmount: null,
       payoutStructure: "standard",
-      trackPoints: true,
+      // No season chosen: a one-off game, which scores no points (round 7).
+      seasonId: null,
+      trackPoints: false,
       // Read in the club's zone (Pacific/Auckland, NZDT), not the test machine's (P3REV-PARITY-TZ-01).
       startDateTime: "2026-10-24T06:30:00.000Z",
     });
@@ -175,7 +177,7 @@ describe("CreateTournamentDialog", () => {
     await choose(user, screen.getByTestId("season-select"), "Spring");
 
     await choose(user, screen.getByTestId("club-select"), "Second Club");
-    expect(screen.getByTestId("season-select")).toHaveTextContent("Select a season");
+    expect(screen.getByTestId("season-select")).toHaveTextContent("No season (one-off game)");
     await user.click(screen.getByTestId("create-tournament-final"));
 
     await waitFor(() => expect(created).toHaveLength(1));

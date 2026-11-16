@@ -52,8 +52,14 @@ export function TableMenu({ table, actions, busy, onAction }: TableMenuProps) {
 /** An empty seat of `table`, as the panel's seat presses name it. */
 export const emptySeat = (seatNumber: number): TableSeatDto => ({ seatNumber, registrationId: null, player: null, paymentConfirmed: null });
 
-export const planSeats = (table: TableDto): PlanSeat[] =>
-  table.seats.map((seat) => ({ seatNumber: seat.seatNumber, player: seat.player, unpaid: seat.registrationId !== null && seat.paymentConfirmed === false }));
+/** The seats as the plan draws them; `freeEntries` (round 7, staff only) marks a player let in free. */
+export const planSeats = (table: TableDto, freeEntries?: ReadonlyMap<string, unknown>): PlanSeat[] =>
+  table.seats.map((seat) => ({
+    seatNumber: seat.seatNumber,
+    player: seat.player,
+    unpaid: seat.registrationId !== null && seat.paymentConfirmed === false,
+    free: seat.registrationId !== null && (freeEntries?.has(seat.registrationId) ?? false),
+  }));
 
 interface TableCardProps {
   table: TableDto;
@@ -63,6 +69,8 @@ interface TableCardProps {
   moverName: string | null;
   /** Seats players have just sat down in (new arrivals), marked on the plan. */
   freshSeats?: ReadonlySet<number>;
+  /** The players let in free (round 7), by registration id: marked FREE. */
+  freeEntries?: ReadonlyMap<string, unknown>;
   readOnly: boolean;
   busy: boolean;
   /** Which menu actions this table offers now. */
@@ -74,7 +82,7 @@ interface TableCardProps {
 }
 
 /** One table on the TD's plan, in its real shape: its seats to tap, and a menu to change, break or remove it. */
-export function TableCard({ table, selectedSeat, moverName, freshSeats, readOnly, busy, actions, compact = false, onSeatPress, onAction }: TableCardProps) {
+export function TableCard({ table, selectedSeat, moverName, freshSeats, freeEntries, readOnly, busy, actions, compact = false, onSeatPress, onAction }: TableCardProps) {
   const seatsByNumber = new Map(table.seats.map((seat) => [seat.seatNumber, seat]));
   const label = (seat: PlanSeat) => (seat.player === null && moverName !== null ? `${describeSeat(seat)}: move ${moverName} here` : describeSeat(seat));
 
@@ -95,7 +103,7 @@ export function TableCard({ table, selectedSeat, moverName, freshSeats, readOnly
           name={table.displayName}
           seatCount={table.seatCount}
           shape={table.shape}
-          seats={planSeats(table)}
+          seats={planSeats(table, freeEntries)}
           selectedSeat={selectedSeat}
           fresh={freshSeats}
           busy={busy}

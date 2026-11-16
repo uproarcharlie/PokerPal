@@ -143,7 +143,7 @@ describe("Players page: editing a player", () => {
     const sheet = await screen.findByRole("dialog", { name: "Edit Player" });
     expect(within(sheet).getByRole("img", { name: "Upload preview" })).toHaveAttribute("src", PHOTO_A);
     await userEvent.clear(within(sheet).getByLabelText("Email Address"));
-    await userEvent.clear(within(sheet).getByLabelText("Phone Number"));
+    await userEvent.clear(within(sheet).getByLabelText("Mobile (optional)"));
     await userEvent.click(within(sheet).getByRole("button", { name: "Remove" }));
     await userEvent.click(within(sheet).getByRole("button", { name: "Save Changes" }));
 
@@ -228,7 +228,7 @@ describe("Players page: editing a player", () => {
     await userEvent.click(within(sheet).getByRole("button", { name: "Save Changes" }));
 
     expect(await within(sheet).findByText("That phone number is already registered to another player.")).toBeInTheDocument();
-    expect(within(sheet).getByLabelText("Phone Number")).toHaveAttribute("aria-invalid", "true");
+    expect(within(sheet).getByLabelText("Mobile (optional)")).toHaveAttribute("aria-invalid", "true");
   });
 
   it("keeps Save disabled while a new photo uploads, then saves the uploaded one", async () => {

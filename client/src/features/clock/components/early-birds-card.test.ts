@@ -7,6 +7,10 @@ const START = "2026-10-23T07:00:00.000Z";
 const entry = (id: string, paymentConfirmed: boolean | null, registrationTime = "2026-10-23T06:30:00.000Z"): ManagedRegistration => ({
   ...registrationDto(id, id.toUpperCase(), { registrationTime }),
   paymentConfirmed,
+  freeEntry: false,
+  freeEntryFunded: false,
+  freeEntryReason: null,
+  freeEntryNote: null,
 });
 
 describe("earlyRegistrations (R4-CQ-04)", () => {

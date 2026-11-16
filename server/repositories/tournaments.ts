@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
 import { tournamentRegistrations, tournaments, type Tournament } from "@shared/schema";
 import type { Executor } from "../db";
 
@@ -23,6 +23,8 @@ export async function lockTournamentForUpdate(ex: Executor, id: string): Promise
 export interface TournamentListFilter {
   clubId?: string;
   seasonId?: string;
+  /** True: only one-off games (no season, round 7); false: only games in a season. */
+  oneOff?: boolean;
   status?: string;
   /**
    * Only tournaments still to come: scheduled or open for registration, starting no more than
@@ -65,6 +67,7 @@ export async function listTournamentsWithCounts(ex: Executor, filter: Tournament
   const conditions: SQL[] = [];
   if (filter.clubId) conditions.push(eq(tournaments.clubId, filter.clubId));
   if (filter.seasonId) conditions.push(eq(tournaments.seasonId, filter.seasonId));
+  if (filter.oneOff !== undefined) conditions.push(filter.oneOff ? isNull(tournaments.seasonId) : isNotNull(tournaments.seasonId));
   if (filter.status) conditions.push(eq(tournaments.status, filter.status));
   if (filter.upcoming) conditions.push(...upcomingConditions());
   const order = filter.upcoming

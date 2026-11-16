@@ -141,8 +141,9 @@ describe("what the waiting list is left out of", () => {
     const live = (await (await anon()).get(`/api/public/tournaments/${tournament.id}/display`)).body;
 
     expect(pool.breakdown.counts).toMatchObject({ registrations: 2, buyIns: 2 });
-    expect(pool.breakdown.net).toBe(10_000);
-    expect(prizes.poolCents).toBe(10_000);
+    // $100 from the 2 in the field: their places pay $50 + $30 (3rd has nobody, R7FREV0-MONEY-01).
+    expect(pool.breakdown.net).toBe(8_000);
+    expect(prizes.poolCents).toBe(8_000);
     expect(live.stats).toMatchObject({ entrants: 2, remaining: 2 });
   });
 

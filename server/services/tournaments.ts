@@ -109,6 +109,47 @@ export async function getTournamentDetail(req: Request, id: string): Promise<Tou
   return toTournamentDetail(row, await viewerFor(req, row.clubId));
 }
 
+/** The season and points settings: a tournament with no season is a one-off game (round 7). */
+type PointsSettings = Pick<Tournament, "seasonId" | "pointsSystemId" | "trackPoints">;
+type PointsChanges = Partial<Pick<UpdateTournamentInput, keyof PointsSettings>>;
+
+const POINTS_FIELDS = ["seasonId", "pointsSystemId", "trackPoints"] as const satisfies readonly (keyof PointsSettings)[];
+
+/** What a create stores when it says nothing: no season, no points system, the column's trackPoints default. */
+const NO_POINTS: PointsSettings = { seasonId: null, pointsSystemId: null, trackPoints: true };
+
+/** Whether the settings score points at finalize: tracked, with a points system to score with (shared/domain/points). */
+const scoresPoints = (settings: PointsSettings) => settings.trackPoints === true && settings.pointsSystemId !== null;
+
+/**
+ * The season, points system and points switch `changes` leave over `stored` (round 7). Leaving the
+ * season (a one-off game) takes the points system with it, as a points system belongs to one season;
+ * moving to another season keeps it, for assertSeasonAndPoints to refuse. Points are tracked only
+ * with a points system, so trackPoints is stored false without one, and every screen then says "no
+ * points" as finalize scores none.
+ */
+function pointsSettings(stored: PointsSettings, changes: PointsChanges): PointsSettings {
+  const seasonId = changes.seasonId !== undefined ? changes.seasonId : stored.seasonId;
+  const pointsSystemId = changes.pointsSystemId !== undefined ? changes.pointsSystemId : seasonId === null ? null : stored.pointsSystemId;
+  const trackPoints = (changes.trackPoints ?? stored.trackPoints === true) && pointsSystemId !== null;
+  return { seasonId, pointsSystemId, trackPoints };
+}
+
+/**
+ * The points fields `changes` sends that would change what a closed tournament scored with: its
+ * season, its points system, or whether it scores at all (trackPoints without a points system is
+ * the same as no points, so resending either way is no change).
+ */
+function changedPointsFields(stored: PointsSettings, changes: PointsChanges): (keyof PointsSettings)[] {
+  const next = pointsSettings(stored, changes);
+  const changed: Record<keyof PointsSettings, boolean> = {
+    seasonId: next.seasonId !== stored.seasonId,
+    pointsSystemId: next.pointsSystemId !== stored.pointsSystemId,
+    trackPoints: scoresPoints(next) !== scoresPoints(stored),
+  };
+  return POINTS_FIELDS.filter((key) => changes[key] !== undefined && changed[key]);
+}
+
 /** seasonId must be one of the club's seasons, and pointsSystemId one of that season's systems. */
 async function assertSeasonAndPoints(
   ex: Executor,
@@ -150,8 +191,9 @@ export async function createTournament(env: AppEnv, req: Request, input: CreateT
   const { rates, others } = splitRates(input);
   const merged = mergedRatesOrThrow(NO_RATES, rates);
   assertRatesWithinPrices({ ...input, ...merged });
+  const points = pointsSettings(NO_POINTS, input);
   const row = await db.transaction(async (tx) => {
-    await assertSeasonAndPoints(tx, input.clubId, input.seasonId, input.pointsSystemId);
+    await assertSeasonAndPoints(tx, input.clubId, points.seasonId, points.pointsSystemId);
     await assertSeatingSettings(tx, input.clubId, input);
     await tournamentsRepo.lockClubTournamentCreates(tx, input.clubId);
     if ((await tournamentsRepo.countUpcomingTournaments(tx, input.clubId)) >= MAX_UPCOMING_TOURNAMENTS_PER_CLUB) {
@@ -160,7 +202,7 @@ export async function createTournament(env: AppEnv, req: Request, input: CreateT
         `A club can have at most ${MAX_UPCOMING_TOURNAMENTS_PER_CLUB} upcoming tournaments: finish, cancel or delete some first`,
       );
     }
-    return tournamentsRepo.createTournament(tx, { ...others, ...merged, rakeType: merged.rakeType ?? "none" });
+    return tournamentsRepo.createTournament(tx, { ...others, ...points, ...merged, rakeType: merged.rakeType ?? "none" });
   });
   return toTournamentDetail(row, await viewerFor(req, row.clubId));
 }
@@ -178,7 +220,11 @@ function assertStatusChange(from: string, to: TournamentStatus): void {
   if (problem) throw badRequest(problem, "INVALID_STATUS_TRANSITION");
 }
 
-/** The settings the prize pool and the season points are worked out from: frozen once the tournament is completed or cancelled. */
+/**
+ * The settings the prize pool is worked out from: frozen once the tournament is completed or
+ * cancelled. So are the season and points settings (POINTS_FIELDS, changedPointsFields): season
+ * points are worked out at finalize too, and a correction must score with what was used (P2REV1-01).
+ */
 const POOL_FIELDS = [
   "buyInAmount",
   "rebuyAmount",
@@ -198,9 +244,6 @@ const POOL_FIELDS = [
   "highHandPayouts",
   "manualPrizePool",
   "prizePoolLocked",
-  // Season points are worked out at finalize too, and a correction must score with what was used (P2REV1-01).
-  "trackPoints",
-  "pointsSystemId",
 ] as const satisfies readonly (keyof UpdateTournamentInput & keyof Tournament)[];
 
 const DECIMAL = /^\d+(\.\d+)?$/;
@@ -305,13 +348,14 @@ function assertRepricingConfirmed(changes: readonly Repricing[], confirmed: bool
 
 /**
  * PUT /api/tournaments/:id. clubId may be resent but never changed; seasonId and pointsSystemId must
- * stay within the club; the status follows `assertStatusChange`; the pool settings are frozen once
- * the tournament is completed or cancelled. Locking the pool stamps prizePoolLockedAt; a manual
- * prize pool goes through the adjustment service and AP rates through the rates service, exactly as
- * their own endpoints do; a price with entries recorded at it is never removed (repricedEntries) and
- * changes only with `repriceEntries`, asked last (assertRepricingConfirmed); new entry prices may not
- * leave a manual AP total above the gross. A new image must be one we stored. Status changes and
- * locks are logged as before.
+ * stay within the club, and leaving the season (a one-off game) takes the points system with it
+ * (pointsSettings); the status follows `assertStatusChange`; the pool, season and points settings
+ * are frozen once the tournament is completed or cancelled. Locking the pool stamps
+ * prizePoolLockedAt; a manual prize pool goes through the adjustment service and AP rates through
+ * the rates service, exactly as their own endpoints do; a price with entries recorded at it is never
+ * removed (repricedEntries) and changes only with `repriceEntries`, asked last
+ * (assertRepricingConfirmed); new entry prices may not leave a manual AP total above the gross. A
+ * new image must be one we stored. Status changes and locks are logged as before.
  */
 export async function updateTournament(env: AppEnv, req: Request, id: string, input: UpdateTournamentInput): Promise<TournamentDetail> {
   let previousImageUrl: string | null = null;
@@ -326,20 +370,22 @@ export async function updateTournament(env: AppEnv, req: Request, id: string, in
       throw badRequest("A tournament cannot move to another club", "CANNOT_MOVE");
     }
     if (status !== undefined) assertStatusChange(current.status, status);
-    if (isClosed(current)) {
-      const fields = POOL_FIELDS.filter((key) => input[key] !== undefined && !sameValue(input[key], current[key]));
+    const closed = isClosed(current);
+    if (closed) {
+      const fields = [
+        ...POOL_FIELDS.filter((key) => input[key] !== undefined && !sameValue(input[key], current[key])),
+        ...changedPointsFields(current, config),
+      ];
       if (fields.length > 0) {
-        throw conflict("TOURNAMENT_CLOSED", closedMessage(current, "its prize pool and points settings"), { fields });
+        throw conflict("TOURNAMENT_CLOSED", closedMessage(current, "its prize pool, season and points settings"), { fields });
       }
     }
     assertOwnedImage(env, input.imageUrl, current.imageUrl, INVALID_MESSAGE);
-    if (config.seasonId !== undefined || config.pointsSystemId !== undefined) {
-      await assertSeasonAndPoints(
-        tx,
-        current.clubId,
-        config.seasonId !== undefined ? config.seasonId : current.seasonId,
-        config.pointsSystemId !== undefined ? config.pointsSystemId : current.pointsSystemId,
-      );
+    const pointsSent = POINTS_FIELDS.some((key) => config[key] !== undefined);
+    // A closed tournament keeps what it scored with: what was resent was the same (changedPointsFields).
+    const points = pointsSent && !closed ? pointsSettings(current, config) : null;
+    if (points && (config.seasonId !== undefined || config.pointsSystemId !== undefined)) {
+      await assertSeasonAndPoints(tx, current.clubId, points.seasonId, points.pointsSystemId);
     }
 
     if (config.openTableAt !== undefined || config.seatsPerTable !== undefined) {
@@ -352,8 +398,10 @@ export async function updateTournament(env: AppEnv, req: Request, id: string, in
 
     const locking = prizePoolLocked === true && !current.prizePoolLocked;
     const unlocking = prizePoolLocked === false && current.prizePoolLocked === true;
+    const { seasonId: _season, pointsSystemId: _points, trackPoints: _track, ...details } = config;
     const changes: tournamentsRepo.TournamentColumns = {
-      ...config,
+      ...details,
+      ...points,
       ...(status !== undefined ? { status } : {}),
       ...(prizePoolLocked !== undefined ? { prizePoolLocked } : {}),
       ...(locking ? { prizePoolLockedAt: new Date() } : unlocking ? { prizePoolLockedAt: null } : {}),

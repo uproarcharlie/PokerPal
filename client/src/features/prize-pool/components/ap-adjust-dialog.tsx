@@ -20,11 +20,9 @@ import { prizePoolAdjustmentSchema, type ApUpdateResponse, type PrizePoolAdjustm
 import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { centsToDecimalString, toCents, type Cents } from "@shared/domain/money";
-import { carryTargetName, differenceNote, readPrizeDifference, type PrizeDifferenceChoice } from "@shared/domain/prize-difference";
-import { usePrizePool } from "../hooks";
+import { differenceNote } from "@shared/domain/prize-difference";
 import { halfCents, previewAdjustment, roundDownCents, stepCents, typedCents, type AdjustmentMode } from "../preview";
 import { useAdjustPrizePool } from "../staff-hooks";
-import { DifferenceChoice } from "./difference-choice";
 import { PoolPreview } from "./pool-preview";
 
 /** Why the TD changed it: one tap each, or typed. Shown in the activity feed to the club's staff only (round 6). */
@@ -35,8 +33,6 @@ const FIVE_DOLLARS: Cents = 500;
 interface AdjustValues {
   mode: AdjustmentMode;
   amount: string;
-  /** Where a fixed pool's difference from the money available goes (sent with a fixed pool only). */
-  prizeDifference: PrizeDifferenceChoice;
   reason: string;
 }
 
@@ -62,11 +58,11 @@ function savedTitle(label: string, input: PrizePoolAdjustmentInput, { prizePool 
   return `${label} back to the calculated ${formatMoney(prizePool.breakdown.rake.calculated)}`;
 }
 
-/** The toast's line under the title: where a fixed pool's difference goes, and the reason. */
+/** The toast's line under the title: a fixed pool's leftover ("Leftover $50 → AP") or what the club adds, and the reason. */
 function savedDescription(input: PrizePoolAdjustmentInput, { prizePool }: ApUpdateResponse): string | undefined {
-  const note = input.mode === "manual_pool" ? differenceNote(prizePool.breakdown.difference, prizePool.carryTarget) : null;
+  const note = input.mode === "manual_pool" ? differenceNote(prizePool.breakdown.difference, prizePool.rakeLabel) : null;
   const reason = input.reason ? `Reason: ${input.reason}` : null;
-  return [note ? `${note[0].toUpperCase()}${note.slice(1)}.` : null, reason].filter(Boolean).join(" ") || undefined;
+  return [note ? `${note}.` : null, reason].filter(Boolean).join(" ") || undefined;
 }
 
 interface ApAdjustDialogProps {
@@ -80,10 +76,10 @@ interface ApAdjustDialogProps {
 }
 
 /**
- * The manual AP total for a low turnout (or a promo, or a correction), or a fixed prize pool, with
- * where its difference from the money available goes (round 5, item 16), or back to what the rates
- * give, with the pool and places it would pay worked out as the TD types (D12-D16). Full screen on a
- * phone, its Save and Cancel kept in view.
+ * The manual AP total for a low turnout (or a promo, or a correction), or a fixed prize pool (what it
+ * leaves of the money available goes to the club's fee, round 7), or back to what the rates give, with
+ * the pool and places it would pay worked out as the TD types (D12-D16). Full screen on a phone, its
+ * Save and Cancel kept in view.
  */
 export function ApAdjustDialog({ open, onOpenChange, tournament, label, startMode }: ApAdjustDialogProps) {
   return (
@@ -115,7 +111,6 @@ function AdjustForm({ tournament, registrations, label, startMode, onClose }: Ad
   const { toast } = useToast();
   const ids = useId();
   const adjust = useAdjustPrizePool(tournament.id);
-  const carryTarget = usePrizePool(tournament.id).data?.carryTarget ?? carryTargetName(null);
   const before = tournamentMoney(tournament, registrations);
   const { breakdown } = before;
   const schema = adjustmentFormSchema(label, breakdown.gross.total);
@@ -124,13 +119,12 @@ function AdjustForm({ tournament, registrations, label, startMode, onClose }: Ad
     defaultValues: {
       mode: startMode ?? breakdown.netSource,
       amount: startAmount(startMode ?? breakdown.netSource, before),
-      prizeDifference: readPrizeDifference(tournament.prizeDifference),
       reason: "",
     },
   });
-  const [mode, amount, prizeDifference, reason] = useWatch({ control: form.control, name: ["mode", "amount", "prizeDifference", "reason"] });
+  const [mode, amount, reason] = useWatch({ control: form.control, name: ["mode", "amount", "reason"] });
   const typed = typedCents(amount);
-  const after = previewAdjustment(tournament, registrations, mode, mode === "calculated" ? null : typed, prizeDifference);
+  const after = previewAdjustment(tournament, registrations, mode, mode === "calculated" ? null : typed);
 
   const setAmount = (cents: Cents) => form.setValue("amount", centsToDecimalString(cents), { shouldValidate: form.formState.isSubmitted });
   const chooseMode = (next: AdjustmentMode) => {
@@ -157,9 +151,6 @@ function AdjustForm({ tournament, registrations, label, startMode, onClose }: Ad
   });
 
   const rootError = form.formState.errors.root?.message;
-  const difference = mode === "manual_pool" && after ? after.breakdown.difference : null;
-  // What the places pay as set, before the leftover is added anywhere: "Add it to 1st" says what 1st would then pay.
-  const asSet = difference ? previewAdjustment(tournament, registrations, mode, typed, "club") : null;
   return (
     <Form {...form}>
       <form onSubmit={submit} noValidate className="flex min-h-0 flex-1 flex-col">
@@ -228,17 +219,6 @@ function AdjustForm({ tournament, registrations, label, startMode, onClose }: Ad
             />
           ) : null}
 
-          {difference ? (
-            <DifferenceChoice
-              difference={difference}
-              value={prizeDifference}
-              onChange={(choice) => form.setValue("prizeDifference", choice, { shouldDirty: true })}
-              carryTarget={carryTarget}
-              firstCents={asSet?.breakdown.payouts[0]?.amountCents}
-              rakeLabel={label}
-            />
-          ) : null}
-
           <FormField
             control={form.control}
             name="reason"
@@ -267,7 +247,6 @@ function AdjustForm({ tournament, registrations, label, startMode, onClose }: Ad
             label={label}
             players={poolPlayersOf(before, tournament, registrations)}
             locked={tournament.prizePoolLocked === true}
-            carryTarget={carryTarget}
           />
         </PhoneSheetBody>
         <PhoneSheetFooter>

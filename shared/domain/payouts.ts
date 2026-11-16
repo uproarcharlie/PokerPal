@@ -2,17 +2,26 @@
  * Payout structures and how a prize pool is split between places. PURE: no runtime imports outside
  * shared/domain.
  *
- * Shares are integer basis points (10000 = 100%). `allocatePayouts` is the v2 split that finalize, the
- * preview and every screen use from Phase 2 onwards. A custom structure may also set each place as a
- * percentage of the pool or a fixed amount (round 5, the payout editor): `placeAmounts` gives what
- * each such place pays as set (shares floored to whole dollars); where any difference from the money
- * available goes is ./prize-difference's (round 5, item 16).
+ * Shares are integer basis points (10000 = 100%). `allocatePayouts` is the split that finalize, the
+ * preview and every screen use: each place's share of the pool rounded down to whole dollars. A custom
+ * structure may also set each place as a percentage of the pool or a fixed amount (round 5, the payout
+ * editor): `placeAmounts` gives what each such place pays (shares rounded down the same way). Whatever
+ * the places leave of the money available, the rounding included, goes to the club's fee
+ * (./prize-difference, round 7).
  */
 import { formatMoney, type Cents } from "./money";
-import { DEFAULT_PRIZE_DIFFERENCE, settleDifference, type PrizeDifference, type PrizeDifferenceChoice } from "./prize-difference";
+import { settleDifference, type PrizeDifference } from "./prize-difference";
 
-export const PAYOUT_ALGORITHM = "v2-floor-remainder-first" as const;
-export type PayoutAlgorithm = typeof PAYOUT_ALGORITHM;
+/**
+ * The payout rule finalize pays by, recorded in every snapshot. v3 (round 7): each share rounded down
+ * to whole dollars, the remainder to the club's fee.
+ */
+export const PAYOUT_ALGORITHM = "v3-floor-remainder-fee" as const;
+/**
+ * Every rule a snapshot may have been paid by. v2 (Phase 2 to round 6) gave the dollars and cents the
+ * rounding left to 1st.
+ */
+export type PayoutAlgorithm = typeof PAYOUT_ALGORITHM | "v2-floor-remainder-first";
 
 export type StandardPayoutKey = "standard" | "top3" | "top5" | "top8" | "top9";
 export type PayoutStructureKey = StandardPayoutKey | "custom";
@@ -68,8 +77,7 @@ function isStandardKey(key: string | null | undefined): key is StandardPayoutKey
 /**
  * One paid place of a custom structure: a share of the pool (basis points) or a fixed amount. A place
  * set as a percentage is paid that share of the whole pool rounded down to whole dollars; a fixed
- * place is paid its amount; where whatever is left over goes is the tournament's choice
- * (./prize-difference).
+ * place is paid its amount; whatever is left over goes to the club's fee (./prize-difference).
  */
 export type PayoutPlace = { kind: "percent"; basisPoints: number } | { kind: "amount"; amountCents: Cents };
 
@@ -170,7 +178,7 @@ function storedPlace(value: unknown): PayoutPlace | null {
  *   before round 5, and still what an all-percentage structure adding up to 100% is stored as): each
  *   above 0 with at most 2 decimal places, none more than the one above it, adding up to exactly 100;
  * - the per-place form, `{"v":2,"places":[{"percent":50},{"amountCents":30000},...]}`, checked by
- *   `payoutPlacesProblems` (the percentages may add up to less than 100%: the rest goes to 1st).
+ *   `payoutPlacesProblems` (the percentages may add up to less than 100%: the rest goes to the club's fee).
  */
 export function parseCustomPayouts(raw: string | null | undefined): CustomPayoutsResult {
   if (raw === null || raw === undefined || raw.trim() === "") {
@@ -247,7 +255,7 @@ export interface ResolvedPayoutStructure {
   error?: string;
   /**
    * Set when `places` mix percentages and fixed amounts so that, from this pool, a place pays more
-   * than the one above it ("From the $1,000 prize pool 2nd pays $600, more than 1st ($400)"). They are
+   * than the one above it ("At this prize pool 2nd pays $600, more than 1st ($300)"). They are
    * paid as set; the payout editor and finalize say so first.
    */
   warning?: string;
@@ -281,17 +289,19 @@ export function resolvePayoutStructure(
 }
 
 /**
- * The places that, paid `amounts` from `poolCents`, pay more than the place above them. Within each
- * kind payoutPlacesProblems keeps the order whatever the pool; a percentage beside a fixed amount can
- * swap it (30% and $600 from $1,000 pay 1st $300 and 2nd $600), so it is checked against the real pool.
+ * The places that, paid `amounts`, pay more than the place above them. Within each kind
+ * payoutPlacesProblems keeps the order whatever the pool; a percentage beside a fixed amount can swap
+ * it (30% and $600 from $1,000 pay 1st $300 and 2nd $600), so it is checked against what is paid. The
+ * message names no pool: the one the shares are taken from and the prize pool shown (what the places
+ * pay, round 7) differ, and the editor, the Money tab and finalize must say the same.
  */
-export function outOfOrderPlaces(poolCents: Cents, amounts: readonly Cents[]): PayoutPlaceProblem[] {
+export function outOfOrderPlaces(amounts: readonly Cents[]): PayoutPlaceProblem[] {
   const problems: PayoutPlaceProblem[] = [];
   for (let i = 1; i < amounts.length; i++) {
     if (amounts[i] <= amounts[i - 1]) continue;
     problems.push({
       place: i + 1,
-      message: `From the ${formatMoney(poolCents)} prize pool ${placeName(i + 1)} pays ${formatMoney(amounts[i])}, more than ${placeName(i)} (${formatMoney(amounts[i - 1])})`,
+      message: `At this prize pool ${placeName(i + 1)} pays ${formatMoney(amounts[i])}, more than ${placeName(i)} (${formatMoney(amounts[i - 1])})`,
     });
   }
   return problems;
@@ -320,9 +330,9 @@ export interface Payout {
 }
 
 /**
- * The v2 split: each place gets its share of the pool rounded down to whole dollars, and the dollars
- * and cents left over go to 1st, so the places add up to the pool exactly and never overpay. A pool of
- * zero or less pays nothing.
+ * The v3 split (round 7): each place gets its share of the pool rounded down to whole dollars, so the
+ * places never overpay. The dollars and cents the rounding leaves are paid to no place: they go to the
+ * club's fee (./prize-difference). A pool of zero or less pays nothing.
  *
  * Throws a RangeError if the pool is not a whole number of cents, or the shares are not positive whole
  * basis points that never increase and add up to 10000.
@@ -333,23 +343,19 @@ export function allocatePayouts(poolCents: Cents, basisPoints: readonly number[]
     throw new RangeError(`Cannot split a pool of ${poolCents} cents exactly`);
   }
   if (poolCents <= 0) return [];
-  // pool * bp / 10000 is the share in cents; dividing by a further 100 floors it to whole dollars.
-  const amounts = basisPoints.map((bp) => Math.floor((poolCents * bp) / (FULL_POOL_BP * 100)) * 100);
-  amounts[0] += poolCents - amounts.reduce((sum, amount) => sum + amount, 0);
   return basisPoints.map((bp, i) => ({
     position: i + 1,
     basisPoints: bp,
     percentage: bp / 100,
-    amountCents: amounts[i],
+    amountCents: percentOfPool(poolCents, bp),
   }));
 }
 
 /**
- * What each place of a custom structure pays as set from a pool: a percentage place its share of the
- * whole pool rounded down to whole dollars (nothing from a pool of zero or less), a fixed place its
- * amount. Nothing is added to 1st here: where whatever is left over goes is the tournament's choice
- * (./prize-difference). Throws a RangeError for places payoutPlacesProblems refuses, or a pool that is
- * not a safe whole number of cents.
+ * What each place of a custom structure pays from a pool: a percentage place its share of the whole
+ * pool rounded down to whole dollars (nothing from a pool of zero or less), a fixed place its amount.
+ * Whatever is left over goes to the club's fee (./prize-difference). Throws a RangeError for places
+ * payoutPlacesProblems refuses, or a pool that is not a safe whole number of cents.
  */
 export function placeAmounts(poolCents: Cents, places: readonly PayoutPlace[]): Cents[] {
   if (payoutPlacesProblems(places).length > 0) throw new RangeError("Invalid payout places");
@@ -359,9 +365,34 @@ export function placeAmounts(poolCents: Cents, places: readonly PayoutPlace[]): 
   return places.map((place) => (place.kind === "amount" ? place.amountCents : percentOfPool(poolCents, place.basisPoints)));
 }
 
-/** A share of the pool rounded down to whole dollars; nothing from a pool of zero or less. */
+/**
+ * A share of the pool rounded down to whole dollars; nothing from a pool of zero or less. pool * bp /
+ * 10000 is the share in cents, and dividing by a further 100 rounds it down to whole dollars.
+ */
 const percentOfPool = (poolCents: Cents, basisPoints: number): Cents =>
   poolCents > 0 ? Math.floor((poolCents * basisPoints) / (FULL_POOL_BP * 100)) * 100 : 0;
+
+/**
+ * A share table's places paid from `poolCents` (allocatePayouts), and what they add up to. A pool of
+ * zero or less pays nothing, and its places "add up to" the pool as it is, so one that came out below
+ * zero stays below zero.
+ */
+export function shareTableAmounts(poolCents: Cents, basisPoints: readonly number[]): { amounts: Cents[]; setCents: Cents } {
+  if (poolCents <= 0) return { amounts: basisPoints.map(() => 0), setCents: poolCents };
+  const amounts = allocatePayouts(poolCents, basisPoints).map((payout) => payout.amountCents);
+  return { amounts, setCents: amounts.reduce((sum, amount) => sum + amount, 0) };
+}
+
+/**
+ * The prizes as a structure sets them from `poolCents`: a share table's places (shareTableAmounts), or
+ * custom places' own amounts (placeAmounts), and what they add up to. The one rule computePrizePool,
+ * finalize and the payout editor's previews pay by.
+ */
+export function prizesAsSet(poolCents: Cents, structure: Pick<ResolvedPayoutStructure, "basisPoints" | "places">): { amounts: Cents[]; setCents: Cents } {
+  if (!structure.places) return shareTableAmounts(poolCents, structure.basisPoints);
+  const amounts = placeAmounts(poolCents, structure.places);
+  return { amounts, setCents: amounts.reduce((sum, amount) => sum + amount, 0) };
+}
 
 /* ---------- the payout editor (round 5, item 1) ---------- */
 
@@ -391,7 +422,7 @@ export function placesFromShares(basisPoints: readonly number[]): PayoutPlace[] 
 /**
  * "Add a place": one more place below the last, of the same kind, at half of it rounded down to a whole
  * percent or whole dollars (at least 1% or $1). The other places are left alone: the editor's sum line
- * shows what the new one takes from 1st. No change at PAYOUT_PLACE_LIMITS.maxPlaces.
+ * shows what is left over or short once it is added. No change at PAYOUT_PLACE_LIMITS.maxPlaces.
  */
 export function addPayoutPlace(places: readonly PayoutPlace[]): PayoutPlace[] {
   if (places.length >= MAX_CUSTOM_PLACES) return [...places];
@@ -431,22 +462,20 @@ export function changePlaceKind(places: readonly PayoutPlace[], index: number, k
 export interface PayoutPlacesPreviewRow {
   position: number;
   place: PayoutPlace;
-  /** What the place pays (with its part of any difference added to the prizes); null while the structure has a problem. */
+  /** What the place pays; null while the structure has a problem. */
   amountCents: Cents | null;
-  /** What the place pays as set, before any difference is added; null while the structure has a problem. */
-  setCents: Cents | null;
 }
 
 /** The payout editor's live view of `places` against the current pool and the money available. */
 export interface PayoutPlacesPreview {
   rows: PayoutPlacesPreviewRow[];
-  /** Every place's own amount as set (shares rounded down), before any difference is added. */
+  /** Every place's own amount (shares rounded down; a place not typed yet counts nothing). */
   placedCents: Cents;
-  /** How much of the money available the places leave over; 0 when they pay it all or more. */
+  /** How much of the money available the places leave over (the club's: ./prize-difference); 0 when they pay it all or more. */
   leftoverCents: Cents;
   /** How much more than the money available the places pay (the club adds it); 0 when they fit. */
   overCents: Cents;
-  /** Where the difference goes, worked out as finalize would; null while there are problems. */
+  /** The difference from the money available, worked out as finalize would; null while there are problems. */
   difference: PrizeDifference | null;
   /** payoutPlacesProblems. */
   problems: PayoutPlaceProblem[];
@@ -458,55 +487,53 @@ export interface PayoutPlacesPreview {
 }
 
 export interface PreviewMoney {
-  /** The money available for prizes (gross less the AP, plus anything carried in); default: the pool. */
+  /** The money available for prizes (gross less the AP, plus what the club pays in and anything carried in); default: the pool. */
   availableCents?: Cents;
-  /** Where any difference goes; default: the club keeps it. */
-  choice?: PrizeDifferenceChoice;
 }
 
+const availableOf = (pool: Cents, money: PreviewMoney): Cents =>
+  money.availableCents !== undefined && Number.isSafeInteger(money.availableCents) ? money.availableCents : pool;
+
 /**
- * The editor's sum check: what each place pays as set from `poolCents` (the pool its percentages are
- * of), how far that is from the money available, and where the difference goes. Works on a structure
- * with problems too (each still-valid place's own amount is counted), so the editor can show the sum
- * while the TD types.
+ * The editor's sum check: what each place pays from `poolCents` (the pool its percentages are of), and
+ * how far that is from the money available. Works on a structure with problems too (each still-valid
+ * place's own amount is counted), so the editor can show the sum while the TD types. Percentages adding
+ * up to 100% are paid as the share table they are stored as (prizesAsSet), as finalize pays them.
  */
 export function previewPayoutPlaces(poolCents: Cents, places: readonly PayoutPlace[], money: PreviewMoney = {}): PayoutPlacesPreview {
   const problems = payoutPlacesProblems(places);
-  const ready = problems.length === 0;
-  const pool = Number.isSafeInteger(poolCents) ? Math.max(poolCents, 0) : 0;
-  const available = money.availableCents !== undefined && Number.isSafeInteger(money.availableCents) ? money.availableCents : pool;
-  // Percentages adding up to 100% are stored and paid as a share table: the rounding goes to 1st, nothing is left over.
+  const ready = problems.length === 0 && Number.isSafeInteger(poolCents);
+  const pool = Number.isSafeInteger(poolCents) ? poolCents : 0;
+  const available = availableOf(Math.max(pool, 0), money);
   const shares = ready ? sharesOf(places) : null;
-  const own =
-    shares && pool > 0
-      ? allocatePayouts(pool, shares).map((payout) => payout.amountCents)
-      : places.map((place) => {
-          if (place.kind === "percent") return Number.isSafeInteger(place.basisPoints) && place.basisPoints > 0 ? percentOfPool(pool, place.basisPoints) : 0;
-          return Number.isSafeInteger(place.amountCents) && place.amountCents > 0 ? place.amountCents : 0;
-        });
+  const own = ready
+    ? prizesAsSet(pool, shares ? { basisPoints: shares } : { basisPoints: [], places }).amounts
+    : places.map((place) => {
+        if (place.kind === "percent") return Number.isSafeInteger(place.basisPoints) && place.basisPoints > 0 ? percentOfPool(pool, place.basisPoints) : 0;
+        return Number.isSafeInteger(place.amountCents) && place.amountCents > 0 ? place.amountCents : 0;
+      });
   const placedCents = own.reduce((sum, amount) => sum + amount, 0);
-  const settled = ready ? settleDifference(own, placedCents, available, money.choice ?? DEFAULT_PRIZE_DIFFERENCE) : null;
   return {
-    rows: places.map((place, i) => ({ position: i + 1, place, amountCents: settled ? settled.amounts[i] : null, setCents: settled ? own[i] : null })),
+    rows: places.map((place, i) => ({ position: i + 1, place, amountCents: ready ? own[i] : null })),
     placedCents,
     leftoverCents: Math.max(0, available - placedCents),
     overCents: Math.max(0, placedCents - available),
-    difference: settled?.difference ?? null,
+    difference: ready ? settleDifference(placedCents, available) : null,
     problems,
-    warnings: settled && pool > 0 ? outOfOrderPlaces(pool, settled.amounts) : [],
+    warnings: ready && pool > 0 ? outOfOrderPlaces(own) : [],
   };
 }
 
 /**
  * The editor's view of a share table (a standard structure, or a classic custom list) from `poolCents`
- * (a manual pool, or what is available): each place's v2 share, settled against the money available as
- * finalize settles it (computePrizePool). Nothing is paid from a pool of zero or less.
+ * (a manual pool, or what is available): each place's share rounded down to whole dollars, and the
+ * difference from the money available, as computePrizePool works them out. Nothing is paid from a pool
+ * of zero or less.
  */
 export function previewShares(poolCents: Cents, basisPoints: readonly number[], money: PreviewMoney = {}): { amounts: Cents[]; difference: PrizeDifference } {
   const pool = Number.isSafeInteger(poolCents) ? poolCents : 0;
-  const asSet = pool > 0 ? allocatePayouts(pool, basisPoints).map((payout) => payout.amountCents) : basisPoints.map(() => 0);
-  const available = money.availableCents !== undefined && Number.isSafeInteger(money.availableCents) ? money.availableCents : pool;
-  return settleDifference(asSet, pool, available, money.choice ?? DEFAULT_PRIZE_DIFFERENCE);
+  const { amounts, setCents } = shareTableAmounts(pool, basisPoints);
+  return { amounts, difference: settleDifference(setCents, availableOf(pool, money)) };
 }
 
 function assertShares(basisPoints: readonly number[]): void {
@@ -521,12 +548,4 @@ function assertShares(basisPoints: readonly number[]): void {
   if (total !== FULL_POOL_BP) {
     throw new RangeError(`Payout shares add up to ${total} bp, not ${FULL_POOL_BP}`);
   }
-}
-
-/**
- * What no one is paid when fewer players entered than there are paid places. Finalize only pays
- * positions up to the number of entrants, as it always has.
- */
-export function undistributedCents(payouts: readonly Payout[], entrants: number): Cents {
-  return payouts.filter((p) => p.position > entrants).reduce((sum, p) => sum + p.amountCents, 0);
 }

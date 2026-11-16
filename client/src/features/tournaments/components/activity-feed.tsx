@@ -18,6 +18,7 @@ import {
   Shuffle,
   Swords,
   Table2,
+  Ticket,
   Timer,
   Trophy,
   Undo2,
@@ -100,10 +101,28 @@ const EVENT_STYLES: Readonly<Record<ActivityEventType, EventStyle>> = {
 /** Rows written before Phase 2 may hold an event type the app no longer writes. */
 const OTHER_EVENT: EventStyle = { Icon: Activity, tone: "muted", label: "Event" };
 
+/**
+ * A free entry given, changed, taken back or marked paid (round 7): the server writes it as the
+ * staff-only payment entry it stands in for, with `eventData.freeEntry` naming the change.
+ */
+const FREE_ENTRY_EVENT: EventStyle = { Icon: Ticket, tone: "primary", label: "Free Entry" };
+
 const KNOWN_EVENT_TYPES: ReadonlySet<string> = new Set(ACTIVITY_EVENT_TYPES);
 
-function eventStyle(eventType: string): EventStyle {
-  return KNOWN_EVENT_TYPES.has(eventType) ? EVENT_STYLES[eventType as ActivityEventType] : OTHER_EVENT;
+/** Whether a payment entry is about a free entry (its eventData names the change). */
+function isFreeEntryEvent(eventData: string | null | undefined): boolean {
+  if (!eventData) return false;
+  try {
+    const data: unknown = JSON.parse(eventData);
+    return typeof data === "object" && data !== null && "freeEntry" in data;
+  } catch {
+    return false;
+  }
+}
+
+function eventStyle(entry: Pick<ActivityDto, "eventType" | "eventData">): EventStyle {
+  if (entry.eventType === "payment_confirmed" && isFreeEntryEvent(entry.eventData)) return FREE_ENTRY_EVENT;
+  return KNOWN_EVENT_TYPES.has(entry.eventType) ? EVENT_STYLES[entry.eventType as ActivityEventType] : OTHER_EVENT;
 }
 
 function FeedCard({ description, children }: { description?: string; children: ReactNode }) {
@@ -224,7 +243,7 @@ function ActivityList({ entries }: { entries: readonly ActivityDto[] }) {
  * draws one row, not the whole feed (P3REV-PERF-ACTIVITY-FULL-LIST-POLL).
  */
 const ActivityRow = memo(function ActivityRow({ entry }: { entry: ActivityDto }) {
-  const { Icon, tone, label } = eventStyle(entry.eventType);
+  const { Icon, tone, label } = eventStyle(entry);
   return (
     <li className="flex items-start gap-3 border-b border-border pb-4 last:border-0 last:pb-0" data-testid="activity-entry">
       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted">

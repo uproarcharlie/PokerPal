@@ -8,7 +8,7 @@ import { queryOptions } from "@tanstack/react-query";
 import type { CreatePendingActionInput, PendingActionDto } from "@shared/api/pending-actions";
 import type { CreatePlayerInput, CreatePlayerResponse } from "@shared/api/players";
 import type { PublicPrizesDto } from "@shared/api/live-display";
-import type { PublicPlayer } from "@shared/api/public";
+import type { PublicPlayer, PublicPlayerSearchQuery } from "@shared/api/public";
 import type { PublicRegistrationInput, RegistrationCreatedDto } from "@shared/api/registrations";
 import { apiGet, apiSend, segment, withQuery } from "@/lib/api/http";
 import { qk } from "@/lib/api/query-keys";
@@ -20,6 +20,12 @@ export const publicTournamentQueries = {
       queryKey: qk.tournaments.playerSearch(tournamentId, q),
       queryFn: ({ signal }) =>
         apiGet<PublicPlayer[]>(withQuery(`/api/public/tournaments/${segment(tournamentId)}/players`, { q }), { signal }),
+    }),
+  /** The players at the tournament's club (everyone, for its staff) called exactly the name searched (sameNameSearch). */
+  sameNamePlayers: (tournamentId: string, search: PublicPlayerSearchQuery) =>
+    queryOptions({
+      queryKey: qk.tournaments.sameNamePlayers(tournamentId, search.q),
+      queryFn: ({ signal }) => apiGet<PublicPlayer[]>(withQuery(`/api/public/tournaments/${segment(tournamentId)}/players`, search), { signal }),
     }),
   /**
    * The prize pool, the places and the money carried in, worked out by the server (round 6: the public

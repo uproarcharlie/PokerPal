@@ -19,9 +19,12 @@ import { mockSeating, recordWrite, seatingDto, seatingMutation, seatMove, seatRe
 import { SEATING_BADGE_REFRESH_MS } from "@/features/seating/staff-hooks";
 import TournamentDetailsPage from "./tournament-details";
 
+/** A normal entry, as the club's staff get it: no free entry (round 7). */
+const NOT_FREE = { freeEntry: false, freeEntryFunded: false, freeEntryReason: null, freeEntryNote: null } as const;
+
 /** All paid, as the club's staff get them: only paid players are in the pool (round 6). */
 const field: ManagedRegistration[] = [registrationDto("r1", "Ann", 2), registrationDto("r2", "Bob", 2), registrationDto("r3", "Cat", 1)].map(
-  (registration) => ({ ...registration, paymentConfirmed: true }),
+  (registration) => ({ ...registration, ...NOT_FREE, paymentConfirmed: true }),
 );
 
 /** The table advisor's "balance them" for these moves (SeatingDto.advisor, round 5). */
@@ -412,7 +415,7 @@ describe("TournamentDetailsPage: the waiting list on a laptop (round 5, item 15)
   /** A field of three, full (Cat has not paid yet), and Dee behind it. */
   const signUps: ManagedRegistration[] = [
     ...field.map((registration) => ({ ...registration, waitingListPosition: null, paymentConfirmed: registration.id !== "r3" })),
-    { ...registrationDto("r4", "Dee", 1, { waitingListPosition: 1 }), paymentConfirmed: false },
+    { ...registrationDto("r4", "Dee", 1, { waitingListPosition: 1 }), ...NOT_FREE, paymentConfirmed: false },
   ];
 
   it("counts the field against Max players, the waiting list apart, and leaves its players out of the pool, the standings and the eliminator list", async () => {
@@ -421,8 +424,9 @@ describe("TournamentDetailsPage: the waiting list on a laptop (round 5, item 15)
 
     expect(await screen.findByTestId("players-count")).toHaveTextContent("3/3");
     expect(screen.getByTestId("waiting-list-count")).toHaveTextContent("+1 on the waiting list");
-    // Ann's and Bob's four paid buy-ins at $100 less $5 AP each: neither Cat's (not paid yet) nor Dee's is in it (poolEntries).
-    expect(screen.getByTestId("prize-pool")).toHaveTextContent("$380");
+    // Ann's and Bob's four paid buy-ins at $100 less $5 AP each, $380, paid to their 2 places as $190 + $114: neither Cat's
+    // (not paid yet) nor Dee's is in it (poolEntries), and 3rd has nobody yet (R7FREV0-MONEY-01).
+    expect(screen.getByTestId("prize-pool")).toHaveTextContent("$304");
     expect(screen.getByTestId("paid-players-note")).toHaveTextContent("Prize pool from 2 paid players · 1 not paid yet (not in the pool)");
 
     await user.click(screen.getByRole("tab", { name: "Standings" }));
@@ -502,14 +506,16 @@ describe("TournamentDetailsPage: the server's answer shows at once (P3REV-PERF-S
 });
 
 describe("TournamentDetailsPage: the pool", () => {
-  it("names the season money left over is carried over to, as the server does (round 5, item 16)", async () => {
-    // $500 in, $25 AP: $475 available; the prizes are fixed at $400 and the $75 left is carried over.
-    const carried = { manualPrizePool: "400.00", prizeDifference: "carry" } satisfies Partial<TournamentDetailDto>;
-    mockDesk(carried);
-    server.use(http.get("/api/tournaments/t1/prize-pool", () => HttpResponse.json(prizePoolDto(tournamentDto(carried), field, { carryTarget: "Winter League" }))));
+  it("puts what a fixed pool leaves over into the club's fee, under its name for it (round 7)", async () => {
+    // $500 in, $25 AP: $475 available; the prizes are fixed at $400 and the $75 left goes to the club's fee.
+    const fixed = { manualPrizePool: "400.00" } satisfies Partial<TournamentDetailDto>;
+    mockDesk(fixed);
+    server.use(http.get("/api/tournaments/t1/prize-pool", () => HttpResponse.json(prizePoolDto(tournamentDto(fixed), field))));
     renderDesk();
 
-    await waitFor(() => expect(screen.getByTestId("difference-carried-over")).toHaveTextContent("Carried over to Winter League−$75"));
+    // The club has no name of its own for its fee, so it is "Rake".
+    await waitFor(() => expect(screen.getByTestId("difference-kept-by-club")).toHaveTextContent("Leftover → Rake−$75"));
+    expect(screen.queryByTestId("difference-carried-over")).not.toBeInTheDocument();
   });
 
   it("sets the prize pool by hand, and back to the calculated pool when cleared", async () => {

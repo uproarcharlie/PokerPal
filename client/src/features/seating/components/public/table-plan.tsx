@@ -11,6 +11,8 @@ export interface PlanSeat {
   player: PublicPlayer | null;
   /** Staff only: the entry has not paid yet (an amber dot). */
   unpaid?: boolean;
+  /** Staff only: the club let the player in free (round 7: a FREE mark). */
+  free?: boolean;
 }
 
 interface TablePlanProps {
@@ -39,7 +41,7 @@ interface TablePlanProps {
 }
 
 export const describeSeat = (seat: PlanSeat): string =>
-  seat.player ? `Seat ${seat.seatNumber}: ${seat.player.name}${seat.unpaid ? ", not paid" : ""}` : `Seat ${seat.seatNumber}, empty`;
+  seat.player ? `Seat ${seat.seatNumber}: ${seat.player.name}${seat.unpaid ? ", not paid" : ""}${seat.free ? ", free entry" : ""}` : `Seat ${seat.seatNumber}, empty`;
 
 /** The felt or its rail, as the layout gives it: an ellipse, or a rounded rectangle. */
 function Outline({ outline, className, strokeWidth }: { outline: FeltOutline; className: string; strokeWidth?: number }) {
@@ -165,6 +167,11 @@ function SeatFace({ seat, interactive, selected, highlighted, fresh }: SeatFaceP
           </span>
         ) : null}
         {seat.unpaid ? <span className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-status-scheduled-foreground ring-2 ring-card" /> : null}
+        {seat.free ? (
+          <span className="absolute -bottom-1 -right-2 rounded-sm bg-status-registration px-0.5 text-[9px] font-bold uppercase leading-3 text-status-registration-foreground ring-1 ring-card">
+            Free
+          </span>
+        ) : null}
       </span>
       {player ? <span className="mt-0.5 h-4 max-w-[3.5rem] truncate rounded bg-card/90 px-1 text-[11px] font-medium leading-4 text-foreground">{seatLabel(player.name)}</span> : <span className="mt-0.5 h-4" />}
     </span>

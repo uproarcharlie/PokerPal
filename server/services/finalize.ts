@@ -2,23 +2,25 @@
  * Finalize v2 (spec D18-D20, §5.5): finishing positions, prizes and season points, written once.
  *
  * The plan is built by shared/domain/finalize, the same code the preview runs, so what the TD
- * previews is what is paid: each place's share floored to whole dollars, the leftover dollars and
- * cents to 1st, from the manual prize pool, else the gross less the manual AP total, else less the AP
- * the rates give. Finalize runs in one transaction that locks the tournament and its registrations,
- * refuses a cancelled or already finalized tournament (a second run needs `force` and the preview's
- * plan hash), and writes the results, the frozen snapshot, the activity entry and the audit row
+ * previews is what is paid: each place's share rounded down to whole dollars (round 7), from the manual
+ * prize pool, else the gross less the manual AP total, else less the AP the rates give. Finalize runs
+ * in one transaction that locks the tournament and its registrations, refuses a cancelled or already
+ * finalized tournament (a second run needs `force` and the preview's plan hash), and writes the results, the frozen snapshot, the activity entry and the audit row
  * together, or none of them. Player requests still waiting are cleared with them (none could be
  * applied to a completed tournament): the preview warns about each one and the plan hash covers them,
  * so nothing is discarded that the TD was not shown. A correction scores season points with the rules
  * the first finalize froze, not the points settings as they are now. A deal (round 5) pays the players
  * still in the amounts they agreed, sharing exactly what their places pay together (409 DEAL_INVALID
  * otherwise); it is frozen in the snapshot, logged publicly with its reason and audited. Finalize pays
- * exactly the prizes set (round 5, item 16): where a difference from the money available went (kept by
- * the club, added to the places, carried over, or added by the club) is frozen in the snapshot, logged
- * publicly and audited, and money carried over is recorded for the next tournament (carry-overs).
- * Only paid players are in the pool (round 6): while anyone in the field has not paid, finalize refuses
- * (409 UNPAID_PLAYERS) until the TD confirms each payment or leaves them out (excludeUnpaid), and a
- * player left out loses any place, prize or points an earlier finalize stored.
+ * exactly the prizes set: what they leave of the money available (the rounding included) is the club's
+ * fee, and what they need beyond it the club adds (round 7). That difference is frozen in the snapshot,
+ * logged to the staff's feed and audited. Nothing is carried over to a later tournament any more; a
+ * correction of a tournament that carried money over before round 7 takes it back to $0 (carry-overs)
+ * while no pool holds it, and once another pool holds it leaves it there and freezes it as carried over
+ * (R7FREV0-CARRY-01), so the correction is never refused for it. Only accepted players (paid, or given a free entry) are in the
+ * pool (round 6): while anyone in the field has not paid, finalize refuses (409 UNPAID_PLAYERS) until
+ * the TD confirms each payment or leaves them out (excludeUnpaid), and a player left out loses any
+ * place, prize or points an earlier finalize stored.
  */
 import { createHash } from "node:crypto";
 import type { Request } from "express";
@@ -32,16 +34,24 @@ import {
   type FinalizeResultDto,
 } from "@shared/api/finalize";
 import { describeDeal, type SnapshotDeal } from "@shared/domain/deal";
-import { buildFinalizePlan, planHashInput, type FinalizePlan, type PendingRequestInput, type SnapshotDifference } from "@shared/domain/finalize";
-import { carryTargetName, differenceSentence } from "@shared/domain/prize-difference";
+import {
+  buildFinalizePlan,
+  planHashInput,
+  type CarriedOver,
+  type FinalizePlan,
+  type PendingRequestInput,
+  type SnapshotDifference,
+} from "@shared/domain/finalize";
+import { formatMoney } from "@shared/domain/money";
+import { differenceSentence } from "@shared/domain/prize-difference";
 import { rakeLabel } from "@shared/domain/prize-pool";
-import type { PointsAllocation, PointsSystem, Tournament } from "@shared/schema";
+import type { PointsAllocation, PointsSystem, PrizeCarryOver, Tournament } from "@shared/schema";
 import { db, type Executor } from "../db";
 import { actingUserId } from "../http/authz";
 import { badRequest, conflict, notFound } from "../http/errors";
 import { insertActivity } from "../repositories/activity";
 import { getClub } from "../repositories/clubs";
-import { carryOverOfSource } from "../repositories/carry-overs";
+import { carryOverOfSource, lockCarryOverOfSource } from "../repositories/carry-overs";
 import { writeFinalResults } from "../repositories/finalize";
 import { deletePendingActionsOfTournament, listPendingActionsWithPlayers } from "../repositories/pending-actions";
 import { playerNames } from "../repositories/players";
@@ -49,21 +59,27 @@ import { pointsRules } from "../repositories/points";
 import { registrationsOf, updateTournamentRegistration } from "../repositories/registrations";
 import { getTournament, lockTournamentForUpdate, setTournamentColumns } from "../repositories/tournaments";
 import { recordAudit } from "./audit";
-import { carryOverChangeProblem, recordCarryOver } from "./carry-overs";
+import { heldCarryOver, withdrawCarryOver } from "./carry-overs";
 import { finishClock } from "./clock";
-import { carryTargetOf, displayWithNames, toPrizePoolDto, type PrizePoolContext } from "./prize-pool";
+import { displayWithNames, toPrizePoolDto, type PrizePoolContext } from "./prize-pool";
 
 interface PlanContext extends PrizePoolContext {
   pointsSystem: PointsSystem | null;
   allocations: PointsAllocation[];
   pendingRequests: PendingRequestInput[];
+  /** What the tournament carried over before round 7 (a correction takes it back while no pool holds it). */
+  carryOver: PrizeCarryOver | undefined;
+  /** Of that, the money another tournament's pool holds, which stays there. */
+  carriedOver: CarriedOver | null;
 }
 
 /**
- * Everything the plan reads. With `lock`, the registrations stay locked until the transaction ends
- * (the tournament row is already locked, so no request can be added or confirmed meanwhile).
+ * Everything the plan reads. With `lock`, the registrations and the carry-over row stay locked until
+ * the transaction ends (the tournament row is already locked, so no request can be added or confirmed
+ * meanwhile, and no other pool can take or give back its carried money).
  */
 async function loadPlanContext(ex: Executor, tournament: Tournament, { lock }: { lock: boolean }): Promise<PlanContext> {
+  const carryOver = lock ? await lockCarryOverOfSource(ex, tournament.id) : await carryOverOfSource(ex, tournament.id);
   const registrations = await registrationsOf(ex, tournament.id, { lock });
   const club = await getClub(ex, tournament.clubId);
   const names = await playerNames(ex, registrations.map((r) => r.playerId));
@@ -74,7 +90,7 @@ async function loadPlanContext(ex: Executor, tournament: Tournament, { lock }: {
     playerName: player?.name ?? "Unknown player",
     targetPlayerName: targetPlayer?.name ?? null,
   }));
-  return { tournament, registrations, club, playerNames: names, carryTarget: await carryTargetOf(ex, tournament), ...rules, pendingRequests };
+  return { tournament, registrations, club, playerNames: names, ...rules, pendingRequests, carryOver, carriedOver: await heldCarryOver(ex, carryOver) };
 }
 
 /** What the TD chose in the preview or finalize request: the finishing order, a deal, and whether unpaid players are left out. */
@@ -93,14 +109,14 @@ function makePlan(context: PlanContext, { finishOrder, deal, excludeUnpaid }: Pl
     rakeLabel: rakeLabel(context.club),
     pendingRequests: context.pendingRequests,
     deal: deal ? toDealInput(deal) : undefined,
-    carryTarget: context.carryTarget,
     excludeUnpaid: excludeUnpaid === true,
+    carriedOver: context.carriedOver,
   });
 }
 
 type ReadyPlan = Extract<FinalizePlan, { ok: true }>;
 
-/** sha256 of what the plan would pay, store, carry over and discard, first 32 hex characters. */
+/** sha256 of what the plan would pay, store and discard, first 32 hex characters. */
 export function planHash(plan: ReadyPlan): string {
   const input = planHashInput(plan.prizePool.net, plan.rows, plan.pendingRequestIds, plan.prizePool.difference);
   return createHash("sha256").update(input).digest("hex").slice(0, 32);
@@ -170,17 +186,7 @@ function overwrittenResults({ tournament, registrations }: PlanContext) {
   };
 }
 
-/**
- * `toPreviewDto`'s warnings beyond the plan's: a correction that would change money this tournament
- * carried over that another tournament has already added to its pool (finalize refuses it).
- */
-async function carryOverWarnings(ex: Executor, context: PlanContext, plan: FinalizePlan): Promise<string[]> {
-  if (context.tournament.status !== "completed") return [];
-  const problem = await carryOverChangeProblem(ex, await carryOverOfSource(ex, context.tournament.id), plan.prizePool.difference.carriedOverCents);
-  return problem ? [problem] : [];
-}
-
-function toPreviewDto(context: PlanContext, plan: FinalizePlan, force: boolean, extraWarnings: readonly string[] = []): FinalizePreviewDto {
+function toPreviewDto(context: PlanContext, plan: FinalizePlan, force: boolean): FinalizePreviewDto {
   const code = refusalOf(context.tournament, plan, force);
   return {
     ok: code === undefined,
@@ -194,7 +200,7 @@ function toPreviewDto(context: PlanContext, plan: FinalizePlan, force: boolean, 
     dealable: plan.dealable,
     dealProblems: plan.ok ? [] : (plan.dealProblems ?? []),
     unpaid: plan.unpaid,
-    warnings: [...plan.warnings, ...extraWarnings],
+    warnings: plan.warnings,
     pendingRequests: context.pendingRequests.map((request) => ({ ...request, targetPlayerName: request.targetPlayerName ?? null })),
     previous: previousResults(context),
   };
@@ -206,7 +212,7 @@ export async function previewFinalize(id: string, input: FinalizePreviewInput): 
   if (!tournament) throw notFound("Tournament not found");
   const context = await loadPlanContext(db, tournament, { lock: false });
   const plan = makePlan(context, input, new Date());
-  return toPreviewDto(context, plan, input.force === true, await carryOverWarnings(db, context, plan));
+  return toPreviewDto(context, plan, input.force === true);
 }
 
 const FINALIZED = "Tournament finalized - positions, prizes, and points assigned";
@@ -216,11 +222,14 @@ const REFINALIZED = "Tournament finalized again - positions, prizes, and points 
 const dealDescription = (deal: SnapshotDeal) => `Deal: ${describeDeal(deal)} (${deal.reason})`;
 
 /**
- * The public feed's line for where a difference went: "The prizes add up to $950, $50 less than the
- * $1,000 available for prizes: it is carried over to Winter League".
+ * The staff feed's line for the difference finalize paid: "Leftover $50 → AP: the prizes add up to $950
+ * of the $1,000 available for prizes", and money carried over before round 7 that stays in another
+ * pool ("$80 stays carried over to Week 5").
  */
-const differenceDescription = (difference: SnapshotDifference) =>
-  (differenceSentence(difference, difference.carryTarget ?? carryTargetName(null)) ?? "").replace(/\.$/, "");
+function differenceDescription(difference: SnapshotDifference, label: string): string {
+  const carried = difference.carriedOverCents ? `${formatMoney(difference.carriedOverCents)} stays carried over to ${difference.carryTarget ?? "a later tournament"}` : null;
+  return [differenceSentence(difference, label)?.replace(/\.$/, ""), carried].filter(Boolean).join("; ");
+}
 
 /** POST /api/tournaments/:id/finalize */
 export async function finalizeTournament(req: Request, id: string, input: FinalizeInput): Promise<FinalizeResultDto> {
@@ -254,7 +263,8 @@ export async function finalizeTournament(req: Request, id: string, input: Finali
     }
 
     const { difference } = plan.snapshot.pool;
-    await recordCarryOver(tx, req, tournament, difference);
+    // Nothing is carried over since round 7: a correction takes what this tournament carried over before to $0, unless another pool holds it.
+    await withdrawCarryOver(tx, tournament, context.carryOver);
     await writeFinalResults(tx, plan.rows);
     // A player left out (unpaid, or now on the waiting list) keeps no place, prize or points from an earlier finalize.
     for (const registrationId of plan.clearedRegistrationIds) {
@@ -280,7 +290,7 @@ export async function finalizeTournament(req: Request, id: string, input: Finali
       await insertActivity(tx, {
         tournamentId: id,
         eventType: "prize_pool_adjusted",
-        description: differenceDescription(difference),
+        description: differenceDescription(difference, rakeLabel(context.club)),
         eventData: JSON.stringify({ mode: "finalized", difference }),
       });
     }

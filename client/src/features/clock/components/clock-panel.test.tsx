@@ -464,7 +464,7 @@ describe("ClockPanel controls", () => {
 describe("ClockPanel TV settings", () => {
   it("says the tournament has no season only when the season was chosen and fell back (P4REV4-CQ-08)", () => {
     const tournamentQr = { qr: { target: "tournament" as const, path: "/tournament/t1" } };
-    expect(qrDestination({ ...tournamentQr, season: null }, "season")).toBe("The QR code opens this tournament's live results (it has no season).");
+    expect(qrDestination({ ...tournamentQr, season: null }, "season")).toBe("The QR code opens this tournament's live results (a one-off game, with no season).");
     expect(qrDestination({ ...tournamentQr, season: { id: "s1", name: "Winter 2026" } }, "tournament")).toBe("The QR code opens this tournament's live results.");
     expect(qrDestination({ qr: null, season: null }, "none")).toBe("The TV shows no QR code.");
   });

@@ -8,7 +8,7 @@
 import { z } from "zod";
 import { toCents, type Cents } from "../domain/money";
 import { PAYOUT_PLACE_LIMITS, PAYOUT_STRUCTURE_KEYS, payoutPlacesProblems, type PayoutPlace } from "../domain/payouts";
-import { PRIZE_DIFFERENCE_CHOICES, type CarriedIn } from "../domain/prize-difference";
+import type { CarriedIn } from "../domain/prize-difference";
 import type { PayoutDisplaySource, PrizePoolBreakdown } from "../domain/prize-pool";
 import { RAKE_RATE_KEYS } from "../domain/rake-rates";
 import { idSchema, moneySchema, rakeTypeSchema } from "./common";
@@ -22,29 +22,21 @@ const reasonSchema = z
   .transform((value) => (value ? value : undefined));
 
 /**
- * Where a difference between the prizes as set and the money available for prizes goes (round 5,
- * item 16; tournaments.prize_difference, shared/domain/prize-difference): the club keeps it (the
- * default), it is added to 1st, shared across the paid places, or carried over. Sent with a manual
- * prize pool or custom places; left out, the stored choice stays as it is.
- */
-export const prizeDifferenceSchema = z.enum(PRIZE_DIFFERENCE_CHOICES);
-
-/**
  * PUT /api/tournaments/:id/prize-pool/adjustment
  * - calculated: clear both overrides.
  * - ap_override: a fixed AP total replacing buy-in, re-buy and add-on rake (high-hand rake is
  *   separate). It does not grow with later entries. Over the current gross: 400 AP_EXCEEDS_GROSS
  *   (details: { grossCents }).
- * - manual_pool: a fixed prize pool, which may exceed gross (the club adds the difference), with
- *   where any difference below what is available goes (`prizeDifference`).
+ * - manual_pool: a fixed prize pool, which may exceed gross (the club adds the difference); whatever
+ *   it leaves of what is available goes to the club's fee (round 7: nobody is asked where).
+ * A `prizeDifference` sent by a page loaded before round 7 is ignored (left out of the parsed input).
  */
 export const prizePoolAdjustmentSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("calculated"), reason: reasonSchema }),
   z.object({ mode: z.literal("ap_override"), amount: moneySchema, reason: reasonSchema }),
-  z.object({ mode: z.literal("manual_pool"), amount: moneySchema, prizeDifference: prizeDifferenceSchema.optional(), reason: reasonSchema }),
+  z.object({ mode: z.literal("manual_pool"), amount: moneySchema, reason: reasonSchema }),
 ]);
 export type PrizePoolAdjustmentInput = z.infer<typeof prizePoolAdjustmentSchema>;
-
 
 /**
  * PUT /api/tournaments/:id/prize-pool/rates: change the AP rates after creation. The request is merged
@@ -96,14 +88,14 @@ export function toPayoutPlaces(places: readonly PayoutPlaceInput[]): PayoutPlace
  * at `places[i]`). Stored in tournaments.custom_payouts by serializeCustomPayouts (the classic array
  * when every place is a percentage adding up to 100%). A standard structure leaves the stored custom
  * places as they are, so going back to Custom brings them back.
- * The places are paid as set (round 5, item 16): when they add up to less than the money available,
- * `prizeDifference` says where the rest goes (left out: the stored choice, else the club keeps it);
- * when they add up to more, the club adds the difference ("Added by the club"). Allowed while the pool
- * is locked (the published payouts change: the editor says so), until the tournament is completed or
- * cancelled (409 TOURNAMENT_CLOSED). A change (of the structure, the places or the choice) is logged to
- * the activity feed ("payouts_changed", staff-only since round 6, with the reason and where the difference goes) and
- * audited ("tournament.payouts"); sending what is stored changes and logs nothing. Answers
- * ApUpdateResponse.
+ * The places are paid as set: when they add up to less than the money available, the rest goes to the
+ * club's fee ("Leftover $50 → AP", round 7); when they add up to more, the club adds the difference
+ * ("Added by the club"). A `prizeDifference` sent by a page loaded before round 7 is ignored. Allowed
+ * while the pool is locked (the published payouts change: the editor says so), until the tournament is
+ * completed or cancelled (409 TOURNAMENT_CLOSED). A change of the structure or the places is logged to
+ * the activity feed ("payouts_changed", staff-only since round 6, with the reason and the leftover or
+ * what the club adds) and audited ("tournament.payouts"); sending what is stored changes and logs
+ * nothing. Answers ApUpdateResponse.
  */
 const payoutPlacesSchema = z.array(payoutPlaceSchema).min(1, "Pay at least one place").max(PAYOUT_PLACE_LIMITS.maxPlaces);
 
@@ -111,7 +103,6 @@ export const payoutsUpdateSchema = z
   .object({
     payoutStructure: z.enum(PAYOUT_STRUCTURE_KEYS),
     places: payoutPlacesSchema.optional(),
-    prizeDifference: prizeDifferenceSchema.optional(),
     reason: reasonSchema,
   })
   .superRefine((input, ctx) => {
@@ -143,9 +134,10 @@ export interface PayoutDisplayRowDto {
  * ("snapshot"), or, if finalized before snapshots existed, from the stored prizes ("stored"), or says
  * that no prize was recorded when its results were entered by hand ("unrecorded", no rows); a
  * cancelled one pays nothing ("cancelled", no rows); any other tournament shows what finalize would
- * pay now ("live"): the v2 payouts of the current pool, for as many places as there are entrants.
- * `undistributedCents` is the part of the pool nobody is paid (places beyond the entrants, D28),
- * which every payout card warns about.
+ * pay now ("live"): the payouts of the current pool, for as many places as there are entrants (what
+ * the places beyond them would pay is the club's: round 7). `undistributedCents` is what a snapshot
+ * frozen before round 7 left unpaid of its pool (places beyond the entrants, D28), which its payout
+ * card says; 0 otherwise.
  */
 export interface PayoutDisplayDto {
   source: PayoutDisplaySource;
@@ -158,9 +150,10 @@ export interface PayoutDisplayDto {
  * GET /api/tournaments/:id/prize-pool (the club's staff, round 6: it carries the AP and what the club
  * keeps; the public page reads GET /api/public/tournaments/:id/prizes), and part of every money response. Computed on the
  * server by shared/domain/prize-pool; a client that computes locally must use the same functions.
- * `breakdown` is always the live calculation; `display` is what to show as the payouts. Only paid
+ * `breakdown` is always the live calculation; `display` is what to show as the payouts. Only accepted
  * players' entries are in either (round 6, poolEntries: `breakdown.counts.registrations` is how many
- * paid), except for a tournament completed before snapshots, shown as it was paid.
+ * paid or were given a free entry, round 7), except for a tournament completed before snapshots, shown
+ * as it was paid.
  */
 export interface PrizePoolDto {
   tournamentId: string;
@@ -174,17 +167,12 @@ export interface PrizePoolDto {
   display: PayoutDisplayDto;
   /** The last manual adjustment, if any (its reason is the staff's, like the activity entry). */
   adjustment: { reason: string | null; adjustedAt: string } | null;
-  /**
-   * Where money carried over from this tournament goes, as the screens name it (carryTargetName): its
-   * season ("Winter League"), else "the next tournament" (round 5, item 16).
-   */
-  carryTarget: string;
 }
 
 /**
  * Money another tournament of the club carried over (round 5, item 16; a prize_carry_overs row) that
  * this tournament may add to its pool: from a completed tournament of the same season, or of the
- * club when it had no season.
+ * club when it had no season. Nothing new is carried over since round 7; what was is still offered.
  */
 export interface CarryOverDto {
   id: string;

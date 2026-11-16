@@ -170,7 +170,10 @@ describe("POST /api/tournaments", () => {
       rakeAmount: "0.00",
       rebuyRakeType: "none",
       payoutStructure: "standard",
-      trackPoints: true,
+      // No season: a one-off game, which has no points system and so scores no points (round 7).
+      seasonId: null,
+      pointsSystemId: null,
+      trackPoints: false,
       prizePoolLocked: false,
       maxPlayers: 40,
     });
@@ -931,8 +934,8 @@ describe("PUT /api/tournaments/:id", () => {
     });
     expect(response.body).toMatchObject({ manualPrizePool: "300.00", rakeOverride: null });
     expect(await activityFor(tournament.id)).toEqual([
-      // Nothing came in yet: the club adds the whole pool (round 5, item 16: the difference is always said).
-      { eventType: "prize_pool_adjusted", description: "Prize pool set manually to $300 (calculated $0); $300 added by the club", playerId: null },
+      // Nobody is in the pool yet, so no place is paid and the club adds nothing yet (R7FREV0-MONEY-01).
+      { eventType: "prize_pool_adjusted", description: "Prize pool set manually to $300 (calculated $0)", playerId: null },
     ]);
     expect(await auditFor(tournament.id)).toMatchObject([{ action: "prize_pool.adjust", actorUserId: staff.manager.user.id }]);
   });

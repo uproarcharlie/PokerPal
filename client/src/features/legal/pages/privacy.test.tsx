@@ -16,7 +16,7 @@ describe("Privacy (CC-06)", () => {
     for (const section of ["What we collect", "Why we collect it", "Who can see it", "Where it is kept, and for how long", "Your rights"]) {
       expect(screen.getByRole("heading", { level: 2, name: section })).toBeInTheDocument();
     }
-    expect(screen.getByText(/your phone number, so a club can recognise you/)).toBeInTheDocument();
+    expect(screen.getByText(/your phone number, if you give one, so a club can recognise you/)).toBeInTheDocument();
     expect(screen.getByText(/Your phone number is seen only by the staff of the club you first played at/)).toBeInTheDocument();
     expect(screen.getByText(/Under the Privacy Act 2020 you can ask/)).toBeInTheDocument();
     // Round 6: the visit counter the site's security headers now let run.

@@ -71,8 +71,21 @@ const publicPlayer = (player: Player) => ({ id: player.id, name: player.name, im
  * PublicPlayer. Everyone else gets `asPublic` of it, without whether it has paid (P2REV0-SEC-04).
  */
 /** A registration as the API answers it, in the field (round 5: `waitingListPosition` null). */
-const withPlayer = (registration: object, player: Player) => ({ ...(asJson(registration) as object), player: publicPlayer(player), waitingListPosition: null });
-const asPublic = ({ paymentConfirmed: _paid, ...rest }: Record<string, unknown>) => rest;
+const withPlayer = (registration: object, player: Player) => ({ ...staffColumns(registration), player: publicPlayer(player), waitingListPosition: null });
+/** Who gave a free entry, and when, never leave the server (round 7): the audit log has them. */
+const staffColumns = (registration: object) => {
+  const { freeEntryBy: _by, freeEntryAt: _at, ...row } = asJson(registration) as Record<string, unknown>;
+  return row;
+};
+/** Whether it has paid, and whether it came in free (round 7), are staff bookkeeping. */
+const asPublic = ({
+  paymentConfirmed: _paid,
+  freeEntry: _free,
+  freeEntryFunded: _funded,
+  freeEntryReason: _reason,
+  freeEntryNote: _note,
+  ...rest
+}: Record<string, unknown>) => rest;
 
 /** The QR page's sign-up of a player whose details the visitor typed in: it carries their sign-up token, unless `body` sets one. */
 const vouched = (body: Record<string, unknown>) =>
@@ -1063,7 +1076,7 @@ describe("pending and confirmed registrations (the payment desk)", () => {
   /** A row as its home club's staff see it: the player's contact details included (ClubPlayer). */
   const staffRow = (entry: { registration: object; player: Player }) => {
     const { userId: _userId, ...player } = asJson(entry.player) as Record<string, unknown>;
-    return { ...(asJson(entry.registration) as object), player: { ...player, canEdit: true }, waitingListPosition: null };
+    return { ...staffColumns(entry.registration), player: { ...player, canEdit: true }, waitingListPosition: null };
   };
 
   it("lists unpaid registrations in sign-up order with amountOwed counting every buy-in, re-buy, add-on and the high hand (money-18)", async () => {

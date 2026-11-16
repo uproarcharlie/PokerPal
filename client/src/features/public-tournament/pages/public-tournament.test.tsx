@@ -25,7 +25,7 @@ const tournament = (overrides: Partial<TournamentDetailDto> = {}) =>
 /** One entry with `buyIns` buy-ins. */
 const registration = (id: string, name: string, buyIns: number, extra: Partial<PublicRegistration> = {}) => registrationDto(id, name, { buyIns, ...extra });
 
-/** Five buy-ins at $100 with $5 AP each: a $475 pool. */
+/** Five buy-ins at $100 with $5 AP each: $475 for prizes, paid out as $474 (round 7: the $1 the rounding leaves is the club's). */
 const registrations = [registration("r1", "Ann", 2), registration("r2", "Bob", 2), registration("r3", "Cat", 1)];
 
 /** The page as a visitor gets it: the tournament without the club's takings, and the prize pool the server works out from them. */
@@ -71,13 +71,13 @@ beforeEach(() => {
 });
 
 describe("PublicTournamentView prize pool", () => {
-  it("shows the v2 payouts finalize will pay once the pool is locked", async () => {
+  it("shows the payouts finalize will pay once the pool is locked, headlined as what they add up to (round 7)", async () => {
     mockPage();
     renderView();
 
-    expect(await screen.findByText("Total prize pool: $475")).toBeInTheDocument();
-    // Floor per place, remainder to 1st: $238 + $142 + $95 = $475 (legacy rounding showed $143 for 2nd).
-    expect(screen.getByText("$238")).toBeInTheDocument();
+    // Each place rounded down to whole dollars: $237 + $142 + $95 = $474. The $1 left of the $475 is the club's, never named here.
+    expect(await screen.findByText("Total prize pool: $474")).toBeInTheDocument();
+    expect(screen.getByText("$237")).toBeInTheDocument();
     expect(screen.getByText("$142")).toBeInTheDocument();
     expect(screen.getByText("$95")).toBeInTheDocument();
   });
@@ -90,25 +90,29 @@ describe("PublicTournamentView prize pool", () => {
     expect(screen.getByText("$300")).toBeInTheDocument();
   });
 
-  it("counts the paid players while some of the field has not paid: their places wait for the payments, not for more players (R6REV0-MONEY-02)", async () => {
+  it("counts the paid players while some of the field has not paid: the pool is what their places pay (R6REV0-MONEY-02)", async () => {
     const field = [registration("r1", "Ann", 1), registration("r2", "Bob", 1), registration("r3", "Cat", 1)];
     mockPage({}, field);
     // Cat has not paid: the server's pool is Ann's and Bob's.
     server.use(http.get("/api/public/tournaments/t1/prizes", () => HttpResponse.json(prizesDto(tournament(), field.slice(0, 2)))));
     renderView();
 
-    expect(await screen.findByTestId("undistributed")).toHaveTextContent("Only 2 paid players: $38 of the pool is not paid out yet.");
+    expect(await screen.findByText("Total prize pool: $152")).toBeInTheDocument();
     expect(screen.queryByText("3rd Place")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("undistributed")).not.toBeInTheDocument();
   });
 
-  it("lists only the places finalize would pay, and says what the rest of the pool waits for (MONEY-REV-01)", async () => {
+  it("lists only the places finalize would pay, headlined as what they pay, and never what the others would (MONEY-REV-01, R7FREV0-MONEY-01)", async () => {
     mockPage({}, [registration("r1", "Ann", 1), registration("r2", "Bob", 1)]);
     renderView();
 
-    expect(await screen.findByTestId("undistributed")).toHaveTextContent("Only 2 players: $38 of the pool is not paid out unless more players enter.");
+    // $190 for prizes on Standard: 1st $95 and 2nd $57 are paid; 3rd's $38 is the club's, never said here.
+    expect(await screen.findByText("Total prize pool: $152")).toBeInTheDocument();
     expect(screen.getByText("$95")).toBeInTheDocument();
     expect(screen.getByText("$57")).toBeInTheDocument();
     expect(screen.queryByText("3rd Place")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("undistributed")).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/\$38|\$190|not paid out/);
   });
 
   it("keeps the amounts hidden until the pool is locked", async () => {
@@ -166,7 +170,7 @@ describe("PublicTournamentView prize pool", () => {
   });
 
   it("never says what the club takes, keeps, adds or carries over, whatever the TD set (round 6)", async () => {
-    // $500 in, $25 AP: $475 available. A $400 pool leaves $75 the club keeps (or carries over); $600 is $125 the club adds.
+    // $500 in, $25 AP: $475 available. A $400 pool leaves $75 the club keeps (whatever a TD chose before round 7); $600 is $125 the club adds.
     server.use(http.get("/api/seasons/s1", () => HttpResponse.json(seasonDto({ id: "s1", name: "Winter League" }))));
     const cases: Array<[Partial<TournamentDetailDto>, string]> = [
       [{ manualPrizePool: "400.00" }, "Total prize pool: $400"],
@@ -189,14 +193,15 @@ describe("PublicTournamentView prize pool", () => {
     mockPage({ carriedIn: [{ carryOverId: "co1", fromTournamentId: "t0", fromName: "Week 3", amountCents: 20_000 }] });
     renderView();
 
-    expect(await screen.findByText("Total prize pool: $675")).toBeInTheDocument();
+    // $475 + $200 carried in, paid out as $337 + $202 + $135.
+    expect(await screen.findByText("Total prize pool: $674")).toBeInTheDocument();
     expect(screen.getByTestId("public-carried-in")).toHaveTextContent("Includes $200 carried over from Week 3");
   });
 
   it("says nothing more than the pool when nothing was carried in, nor before the pool is revealed", async () => {
     mockPage();
     const { unmount } = renderView();
-    expect(await screen.findByText("Total prize pool: $475")).toBeInTheDocument();
+    expect(await screen.findByText("Total prize pool: $474")).toBeInTheDocument();
     expect(screen.queryByTestId("public-carried-in")).not.toBeInTheDocument();
     unmount();
 
@@ -257,7 +262,7 @@ describe("PublicTournamentView stays in step with the TD (MONEY-P2REV-02)", () =
       }),
     );
     renderView();
-    expect(await screen.findByText("Total prize pool: $475")).toBeInTheDocument();
+    expect(await screen.findByText("Total prize pool: $474")).toBeInTheDocument();
 
     manualPrizePool = "300.00";
     await vi.advanceTimersByTimeAsync(LIVE_REFRESH_MS + 100);
@@ -268,7 +273,7 @@ describe("PublicTournamentView stays in step with the TD (MONEY-P2REV-02)", () =
 
   it("shows a payment the TD confirms at the desk in the pool at the next poll: only paid players are in it (round 6)", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    // Ann and Bob have paid ($400 less $20 AP); Cat's buy-in is not in the pool until the TD confirms it.
+    // Ann and Bob have paid ($400 less $20 AP, paid to their 2 places as $190 + $114); Cat's buy-in is not in the pool until the TD confirms it.
     let paid = registrations.slice(0, 2);
     server.use(
       http.get("/api/tournaments/t1", () => HttpResponse.json(visitorView(tournament()))),
@@ -277,12 +282,12 @@ describe("PublicTournamentView stays in step with the TD (MONEY-P2REV-02)", () =
       http.get("/api/public/tournaments/t1/prizes", () => HttpResponse.json(prizesDto(tournament(), paid))),
     );
     renderView();
-    expect(await screen.findByText("Total prize pool: $380")).toBeInTheDocument();
+    expect(await screen.findByText("Total prize pool: $304")).toBeInTheDocument();
 
     paid = registrations;
     await vi.advanceTimersByTimeAsync(LIVE_REFRESH_MS + 100);
 
-    await waitFor(() => expect(screen.getByText("Total prize pool: $475")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Total prize pool: $474")).toBeInTheDocument());
   });
 });
 
@@ -320,6 +325,39 @@ describe("PublicTournamentView points column (MONEY-P2REV-06)", () => {
     expect(screen.getByTestId("points-4")).toHaveTextContent("10 pts");
     expect(screen.getByTestId("points-9")).toHaveTextContent("10 pts");
     expect(screen.getByTestId("points-others")).toHaveTextContent("10 pts");
+  });
+});
+
+describe("PublicTournamentView points for a game with no points system (round 7)", () => {
+  it("shows no Points column, in the prizes or the standings, for a game made before round 7 that says it tracks points with no system", async () => {
+    mockPage({ status: "completed", trackPoints: true, pointsSystemId: null, payoutStructure: "standard" }, [
+      registration("r1", "Ann", 2, { finalPosition: 1, prizeAmount: "237.00", pointsAwarded: 0 }),
+      registration("r2", "Bob", 2, { finalPosition: 2, isEliminated: true, pointsAwarded: 0 }),
+      registration("r3", "Cat", 1, { finalPosition: 3, isEliminated: true, pointsAwarded: 0 }),
+    ]);
+    const user = userEvent.setup();
+    renderView();
+
+    expect(await screen.findByRole("columnheader", { name: "Prize" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Points" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Standings" }));
+    expect(await screen.findByText("Final Results")).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Points" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/\bpts\b/)).not.toBeInTheDocument();
+  });
+
+  it("still shows the points a game scored before its points system was deleted", async () => {
+    mockPage({ status: "completed", trackPoints: true, pointsSystemId: null, payoutStructure: "standard" }, [
+      registration("r1", "Ann", 2, { finalPosition: 1, pointsAwarded: 100 }),
+      registration("r2", "Bob", 2, { finalPosition: 2, isEliminated: true, pointsAwarded: 60 }),
+    ]);
+    const user = userEvent.setup();
+    renderView();
+
+    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+    expect(await screen.findByText("Final Results")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Points" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("standing-player-r1").closest("tr") as HTMLElement).getByText("100")).toBeInTheDocument();
   });
 });
 
@@ -381,7 +419,7 @@ describe("PublicTournamentView for a cancelled tournament (P2REV1-MONEY-04)", ()
 
     expect(await screen.findByTestId("prizes-cancelled")).toHaveTextContent("Cancelled: no prizes are paid");
     expect(screen.queryByText(/Total prize pool/)).not.toBeInTheDocument();
-    expect(screen.queryByText("$285")).not.toBeInTheDocument();
+    expect(screen.queryByText("$237")).not.toBeInTheDocument();
     expect(screen.getAllByText("Cancelled").length).toBeGreaterThan(0);
   });
 });
@@ -581,8 +619,8 @@ describe("PublicTournamentView waiting list (round 5, item 15)", () => {
     expect(await screen.findByTestId("waiting-list-count")).toHaveTextContent("+2 on the waiting list");
     expect(screen.getByText("Players").parentElement).toHaveTextContent(/^Players3\/3\+2 on the waiting list$/);
     expect(screen.getByText("Active").parentElement).toHaveTextContent(/^Active2$/);
-    // The pool is the field's: three $100 buy-ins less $5 AP each, nobody on the list (shared/domain poolEntries).
-    expect(await screen.findByText("Total prize pool: $285")).toBeInTheDocument();
+    // The pool is the field's: three $100 buy-ins less $5 AP each, nobody on the list (shared/domain poolEntries), paid out as $142 + $85 + $57.
+    expect(await screen.findByText("Total prize pool: $284")).toBeInTheDocument();
   });
 
   it("numbers the waiting list under the standings, next in first, and leaves its players out of the standings", async () => {
@@ -881,7 +919,7 @@ describe("PublicTournamentView links to the night's other screens", () => {
     mockPage();
     renderView();
 
-    expect(await screen.findByText("Total prize pool: $475")).toBeInTheDocument();
+    expect(await screen.findByText("Total prize pool: $474")).toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "Tournament screens" })).not.toBeInTheDocument();
   });
 
@@ -903,7 +941,7 @@ describe("PublicTournamentView links to the night's other screens", () => {
       mockPage();
       const asked = mockLiveScreens();
       renderView();
-      expect(await screen.findByText("Total prize pool: $475")).toBeInTheDocument();
+      expect(await screen.findByText("Total prize pool: $474")).toBeInTheDocument();
       await waitFor(() => expect(asked.seating).toBe(1));
 
       mockLiveScreens({ seated: true });

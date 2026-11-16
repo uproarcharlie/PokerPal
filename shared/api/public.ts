@@ -36,6 +36,8 @@ export const FORBIDDEN_PUBLIC_KEYS = [
   "prizePoolAdjustedBy",
   "finalizedBy",
   "byUserId",
+  // Who gave a free entry (round 7): a user id, kept on the server for the audit log.
+  "freeEntryBy",
 ] as const;
 
 /** Paths of every key of `keys` in `value`, at any depth, JSON text inside strings included. */
@@ -144,8 +146,6 @@ export const PUBLIC_TOURNAMENT_FIELDS = [
   "maxPlayers",
   "prizePoolLocked",
   "prizePoolLockedAt",
-  // A prize pool fixed by hand is what the players play for, as the pool shown is.
-  "manualPrizePool",
   "finalizedAt",
   "useClubAddress",
   "address",
@@ -162,11 +162,16 @@ export const PUBLIC_TOURNAMENT_FIELDS = [
 /**
  * What the club takes of a tournament, and how (round 6): its AP rates (buy-in, re-buy, add-on and
  * high hand), a manual AP total, the reason and time the pool was last adjusted, and where a
- * difference between the prizes as set and the money available goes (round 5 item 16). Sent only to
- * someone who runs the club (the server's toPublicTournament), for the AP panel, the payout editor and
- * the tournament form.
+ * difference between the prizes as set and the money available goes (round 5 item 16). Also a prize
+ * pool fixed by hand (R7FREV0-LEAK-01): since round 7 the pool shown is what the places pay, so a manual
+ * pool beside it would tell anyone the leftover the club keeps (the public prize pool,
+ * GET /api/public/tournaments/:id/prizes, says what the players play for). Sent only to someone who runs
+ * the club (the server's toPublicTournament), for the AP panel, the payout editor and the tournament
+ * form. (The public `customPayouts` still shows percentages adding up to less than 100% as set, and so
+ * the share such a structure leaves the club: what each place is paid is public by design.)
  */
 export const TOURNAMENT_TAKINGS_FIELDS = [
+  "manualPrizePool",
   "rakeType",
   "rakeAmount",
   "rebuyRakeType",
@@ -191,10 +196,12 @@ export type PublicTournament = Json<Pick<Tournament, (typeof PUBLIC_TOURNAMENT_F
 /**
  * Keys that tell what the club takes (round 6): the takings columns, and the figures the prize-pool
  * maths, the finalize snapshot, the TV and the activity feed work them into (the AP itself, the gross
- * the pool is taken from, how the pool was set, what was kept, added or carried over, and to where).
- * None may appear in a body sent to someone who does not run the club, nor in any body the TV or the
- * public prize pool is sent, whoever looks: the server's no-takings scan runs `findTakingsKeys` over
- * every public response. The club's name for its take (`rakeLabel`) is not a figure, and stays public.
+ * the pool is taken from, how the pool was set, what was kept, added or carried over, and to where),
+ * and what it pays in for free entries, how many it gave and to whom (round 7: a registration's free
+ * entry, whether the club funds it and why, are the staff's bookkeeping, as its payment is). None may appear in a body sent
+ * to someone who does not run the club, nor in any body the TV or the public prize pool is sent,
+ * whoever looks: the server's no-takings scan runs `findTakingsKeys` over every public response. The
+ * club's name for its take (`rakeLabel`) is not a figure, and stays public.
  */
 export const FORBIDDEN_TAKINGS_KEYS = [
   ...TOURNAMENT_TAKINGS_FIELDS,
@@ -216,6 +223,15 @@ export const FORBIDDEN_TAKINGS_KEYS = [
   "apCents",
   "clubAddedCents",
   "adjustment",
+  "freeEntries",
+  "freeBuyIns",
+  "fundedFreeEntries",
+  "fundedBuyIns",
+  "freeEntry",
+  "freeEntryFunded",
+  "freeEntryReason",
+  "freeEntryNote",
+  "freeEntryAt",
 ] as const;
 
 const TAKINGS: ReadonlySet<string> = new Set(FORBIDDEN_TAKINGS_KEYS);
@@ -297,13 +313,30 @@ export const PUBLIC_ACTIVITY_FIELDS = [
 export type PublicActivity = Json<Pick<ActivityLog, (typeof PUBLIC_ACTIVITY_FIELDS)[number]>>;
 export type ActivityDto = PublicActivity & { player: PublicPlayer | null };
 
+/** The longest name a player may have (POST /api/players, PUT /api/players/:id). */
+export const PLAYER_NAME_MAX = 100;
+
+/** The longest part of a name the "find yourself" search takes. */
+export const NAME_SEARCH_MAX = 60;
+
 /**
  * GET /api/public/tournaments/:id/players?q= : the QR register page's "find yourself" search.
  * Anonymous viewers search the players who have registered for any tournament of that tournament's
  * club; a viewer who can manage the club searches every player (to register a visitor).
+ *
+ * `match`: "contains" (the default) finds names containing `q`, A to Z; "exact" finds the players
+ * called exactly `q` (a whole name, up to PLAYER_NAME_MAX), its spacing tidied and its case folded as
+ * normaliseName compares names (round 7, item 9: "Already played here? That's me", which must find a
+ * returning player however many other names contain theirs: R7FREV1-01).
  */
-export const publicPlayerSearchQuerySchema = z.object({
-  q: z.string().trim().min(1, "Type part of a name").max(60),
-  limit: limitSchema(10, 25),
-});
+export const publicPlayerSearchQuerySchema = z
+  .object({
+    q: z.string().trim().min(1, "Type part of a name").max(PLAYER_NAME_MAX),
+    match: z.enum(["contains", "exact"]).default("contains"),
+    limit: limitSchema(10, 25),
+  })
+  .refine((query) => query.match === "exact" || query.q.length <= NAME_SEARCH_MAX, {
+    path: ["q"],
+    message: `Type at most ${NAME_SEARCH_MAX} characters`,
+  });
 export type PublicPlayerSearchQuery = z.infer<typeof publicPlayerSearchQuerySchema>;

@@ -23,12 +23,29 @@ const FIELD_CODES: Partial<Record<ErrorCode, Path<TournamentFormValues>>> = {
   HIGH_HAND_ENTRIES: "enableHighHand",
 };
 
+/** What the points switch says for a game with no season (round 7). */
+export const ONE_OFF_NO_POINTS = "No points — one-off game";
+
+/**
+ * Why the form's points switch is off whatever it holds, or undefined while it can be used: a one-off
+ * game (no season) has no points system, and points are scored only with one (the server stores
+ * trackPoints false without a points system).
+ */
+export function pointsOffReason({ seasonId, pointsSystemId }: Pick<TournamentFormValues, "seasonId" | "pointsSystemId">): string | undefined {
+  if (!seasonId) return ONE_OFF_NO_POINTS;
+  if (!pointsSystemId) return "Choose a points system to track points";
+  return undefined;
+}
+
 /**
  * The checked settings to send for the form's values (they have passed the resolver), the start read on
- * the club's wall clock (`timeZone`).
+ * the club's wall clock (`timeZone`). A one-off game (no season) sends no points system, and points are
+ * sent on only with a points system (pointsOffReason), as the server stores them.
  */
 export function configFromValues(values: TournamentFormValues, timeZone: string): TournamentConfig {
-  return tournamentConfig(tournamentFormSchema.parse(inClubZone(values, timeZone)));
+  const config = tournamentConfig(tournamentFormSchema.parse(inClubZone(values, timeZone)));
+  const pointsSystemId = config.seasonId ? (config.pointsSystemId ?? null) : null;
+  return { ...config, pointsSystemId, trackPoints: config.trackPoints === true && pointsSystemId !== null };
 }
 
 /**

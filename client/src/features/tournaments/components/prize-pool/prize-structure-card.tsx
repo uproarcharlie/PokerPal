@@ -6,7 +6,7 @@ import { MoneyText } from "@/components/shared/money-text";
 import { ScrollRegion } from "@/components/shared/scroll-region";
 import { PlaceName } from "@/components/shared/podium";
 import { formatMoney, ordinal } from "@/lib/format";
-import { undistributedNote } from "@/lib/prize-pool";
+import { undistributedNote, unfilledPlacesNote } from "@/lib/prize-pool";
 import { cn } from "@/lib/utils";
 import { EditPayoutsButton } from "@/features/prize-pool/components/payout-editor-sheet";
 import { frozenSummary, liveSummary, PoolSummary } from "@/features/prize-pool/components/pool-summary";
@@ -19,29 +19,34 @@ interface PrizeStructureCardProps {
   display: PayoutDisplay;
   /**
    * The players in the field, paid or not. Places beyond the paid players are not paid while the game
-   * runs (round 6), and the places listed are then one per paid player.
+   * runs (round 6): the places listed are then one per paid player, and the staff are told why.
    */
   entrants: number;
   /** The high-hand entry fee, when the tournament has a high hand. */
   highHandAmount: string | null;
   /**
-   * The tournament the payouts are for: its staff get "Edit payouts" while it is open, the card says
-   * where any difference between the prizes and the money available went (round 5, item 16), and once
+   * The tournament the payouts are for: its staff get "Edit payouts" while it is open, the card tells
+   * them what the prizes leave of the money available (the club's fee) or what the club adds, and once
    * it is finalized with a deal the card says so.
    */
   tournament?: TournamentDetailDto;
 }
 
 /**
- * "Prize pool $1,000 · AP $200 · Kept by the club $50": live from the server's pool, or as finalize froze
- * it. The club's staff only (round 6): nobody else is sent the breakdown or the snapshot.
+ * "Prize pool $1,000 · AP $200 · Leftover $3 → AP": live from the server's pool, or as finalize froze it,
+ * and while places have no player in the pool yet, what they would pay (the club's: round 7). The
+ * club's staff only (round 6): nobody else is sent the breakdown or the snapshot.
  */
-function useSummary(display: PayoutDisplay, tournament: TournamentDetailDto | undefined) {
+function useSummary(display: PayoutDisplay, tournament: TournamentDetailDto | undefined, entrants: number) {
   const prizePool = usePrizePool(tournament?.id ?? "", { follow: tournament, enabled: tournament?.viewer.canManage === true });
   const snapshot = display.source === "snapshot" ? tournament?.prizePoolSnapshot : null;
-  if (snapshot) return frozenSummary(snapshot.pool, prizePool.data?.rakeLabel ?? DEFAULT_RAKE_LABEL);
-  if (display.source !== "live" || !prizePool.data) return null;
-  return liveSummary(prizePool.data.breakdown, prizePool.data.rakeLabel, prizePool.data.carryTarget);
+  if (snapshot) return { figures: frozenSummary(snapshot.pool, prizePool.data?.rakeLabel ?? DEFAULT_RAKE_LABEL), unfilled: null };
+  if (display.source !== "live" || !prizePool.data) return { figures: null, unfilled: null };
+  const { breakdown, rakeLabel } = prizePool.data;
+  return {
+    figures: liveSummary(breakdown, rakeLabel),
+    unfilled: unfilledPlacesNote(breakdown, { paid: breakdown.counts.registrations, field: entrants }, rakeLabel),
+  };
 }
 
 function cardDescription(source: PayoutDisplay["source"]): string {
@@ -77,10 +82,10 @@ function ShareNote({ payout, dealt }: { payout: PayoutDisplayRow; dealt: Readonl
 export function PrizeStructureCard({ display, entrants, highHandAmount, tournament }: PrizeStructureCardProps) {
   const rows = display.rows;
   const paidShare = paidPercentage(rows);
-  const undistributed = undistributedNote(display, { paid: display.rows.length, field: entrants }, tournament?.viewer.canManage ? "staff" : "room");
+  const summary = useSummary(display, tournament, entrants);
+  const undistributed = undistributedNote(display) ?? summary.unfilled;
   const deal = display.source === "snapshot" ? tournament?.prizePoolSnapshot?.deal : undefined;
   const dealt = new Set(deal?.players.map((player) => player.registrationId) ?? []);
-  const summary = useSummary(display, tournament);
 
   return (
     <Card>
@@ -91,7 +96,7 @@ export function PrizeStructureCard({ display, entrants, highHandAmount, tourname
             Prize Structure
           </CardTitle>
           <p className="text-sm text-muted-foreground">{cardDescription(display.source)}</p>
-          {summary ? <PoolSummary figures={summary} /> : null}
+          {summary.figures ? <PoolSummary figures={summary.figures} /> : null}
           {deal ? (
             <p className="text-sm text-foreground" data-testid="payout-deal">
               <Badge variant="secondary" className="mr-2">

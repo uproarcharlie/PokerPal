@@ -2,127 +2,40 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
   carriedInCents,
-  carryTargetName,
-  choiceOutcome,
-  DEFAULT_PRIZE_DIFFERENCE,
   differenceLines,
   differenceNote,
   differenceSentence,
-  isPrizeDifferenceChoice,
-  PRIZE_DIFFERENCE_CHOICES,
-  PRIZE_DIFFERENCE_LABELS,
+  FREE_ENTRIES_ADDED_LABEL,
+  leftoverText,
   readCarriedIn,
-  readPrizeDifference,
   settleDifference,
-  shareProRata,
 } from "./prize-difference";
 
-const total = (values: readonly number[]) => values.reduce((sum, value) => sum + value, 0);
-
-describe("the choices", () => {
-  it("offers the four the owner asked for, the club keeping it by default", () => {
-    expect(PRIZE_DIFFERENCE_CHOICES).toEqual(["club", "first", "pro_rata", "carry"]);
-    expect(DEFAULT_PRIZE_DIFFERENCE).toBe("club");
-    expect(Object.values(PRIZE_DIFFERENCE_LABELS)).toEqual(["Club keeps it", "Add it to 1st", "Share it across the paid places", "Carry it over"]);
+describe("settleDifference (round 7: a leftover is the club's fee)", () => {
+  it("adds what the prizes leave of the money available to the club's fee", () => {
+    expect(settleDifference(105_000, 120_000)).toEqual({ availableCents: 120_000, setCents: 105_000, cents: 15_000, keptByClubCents: 15_000, addedByClubCents: 0 });
   });
 
-  it("reads anything that is not a choice as the default", () => {
-    expect(readPrizeDifference("carry")).toBe("carry");
-    for (const stored of [null, undefined, "", "keep", 1, {}]) expect(readPrizeDifference(stored)).toBe("club");
-    expect(isPrizeDifferenceChoice("pro_rata")).toBe(true);
-    expect(isPrizeDifferenceChoice("rest")).toBe(false);
-  });
-});
-
-describe("shareProRata", () => {
-  it("shares in whole dollars by what each place pays, the dollars and cents left to 1st", () => {
-    expect(shareProRata(8_500, [30_000, 18_000, 12_000])).toEqual([4_300, 2_500, 1_700]);
-    expect(shareProRata(10_050, [50_000, 50_000])).toEqual([5_050, 5_000]);
-  });
-
-  it("gives it all to 1st when no place pays anything yet, and nothing to no places", () => {
-    expect(shareProRata(5_000, [0, 0])).toEqual([5_000, 0]);
-    expect(shareProRata(5_000, [])).toEqual([]);
-  });
-
-  it("always shares exactly, never favouring a place beyond its share, even for huge amounts", () => {
-    fc.assert(
-      fc.property(fc.integer({ min: 0, max: 2 ** 50 }), fc.array(fc.integer({ min: 0, max: 100_000_000 }), { minLength: 1, maxLength: 10 }), (cents, amounts) => {
-        const shares = shareProRata(cents, amounts);
-        expect(total(shares)).toBe(cents);
-        const weight = total(amounts);
-        shares.forEach((share, i) => {
-          if (i === 0) return;
-          expect(share % 100).toBe(0);
-          if (weight > 0) expect(BigInt(share) * BigInt(weight)).toBeLessThanOrEqual(BigInt(cents) * BigInt(amounts[i]));
-        });
-      }),
-      { numRuns: 1000 },
-    );
-  });
-});
-
-describe("settleDifference", () => {
-  const set = [60_000, 30_000, 15_000];
-
-  it("keeps the leftover for the club by default", () => {
-    expect(settleDifference(set, 105_000, 120_000, "club")).toEqual({
-      amounts: set,
-      difference: {
-        choice: "club",
-        availableCents: 120_000,
-        setCents: 105_000,
-        cents: 15_000,
-        keptByClubCents: 15_000,
-        addedToPrizesCents: 0,
-        carriedOverCents: 0,
-        addedByClubCents: 0,
-      },
-    });
-  });
-
-  it("adds it to 1st, shares it, or carries it over", () => {
-    expect(settleDifference(set, 105_000, 120_000, "first").amounts).toEqual([75_000, 30_000, 15_000]);
-    expect(settleDifference(set, 105_000, 120_000, "pro_rata").amounts).toEqual([68_700, 34_200, 17_100]);
-    const carried = settleDifference(set, 105_000, 120_000, "carry");
-    expect(carried.amounts).toEqual(set);
-    expect(carried.difference).toMatchObject({ carriedOverCents: 15_000, keptByClubCents: 0, addedToPrizesCents: 0 });
-  });
-
-  it("lets the club keep a leftover there is no place to add to", () => {
-    expect(settleDifference([], 0, 5_000, "first").difference).toMatchObject({ keptByClubCents: 5_000, addedToPrizesCents: 0 });
-  });
-
-  it("has the club add a shortfall, whatever the choice", () => {
-    for (const choice of PRIZE_DIFFERENCE_CHOICES) {
-      const settled = settleDifference(set, 105_000, 90_000, choice);
-      expect(settled.amounts).toEqual(set);
-      expect(settled.difference).toMatchObject({ cents: -15_000, addedByClubCents: 15_000, keptByClubCents: 0, carriedOverCents: 0, addedToPrizesCents: 0 });
-    }
+  it("has the club add a shortfall", () => {
+    expect(settleDifference(105_000, 90_000)).toEqual({ availableCents: 90_000, setCents: 105_000, cents: -15_000, keptByClubCents: 0, addedByClubCents: 15_000 });
   });
 
   it("does nothing when the prizes are exactly what is available", () => {
-    expect(settleDifference(set, 105_000, 105_000, "pro_rata")).toMatchObject({ amounts: set, difference: { cents: 0, addedToPrizesCents: 0 } });
+    expect(settleDifference(105_000, 105_000)).toMatchObject({ cents: 0, keptByClubCents: 0, addedByClubCents: 0 });
   });
 
   it("refuses amounts that are not whole cents", () => {
-    expect(() => settleDifference([0.5], 1, 1, "club")).toThrow(RangeError);
-    expect(() => settleDifference([100], 100, Number.NaN, "club")).toThrow(RangeError);
+    expect(() => settleDifference(0.5, 1)).toThrow(RangeError);
+    expect(() => settleDifference(100, Number.NaN)).toThrow(RangeError);
   });
 
-  it("always accounts for every cent: paid + kept + carried − added by the club = available", () => {
+  it("always accounts for every cent: prizes + kept by the club − added by the club = available", () => {
     fc.assert(
-      fc.property(
-        fc.array(fc.integer({ min: 0, max: 1_000_000 }), { minLength: 1, maxLength: 9 }),
-        fc.integer({ min: -100_000, max: 10_000_000 }),
-        fc.constantFrom(...PRIZE_DIFFERENCE_CHOICES),
-        (amounts, available, choice) => {
-          const setCents = total(amounts);
-          const { amounts: paid, difference } = settleDifference(amounts, setCents, available, choice);
-          expect(total(paid) + difference.keptByClubCents + difference.carriedOverCents - difference.addedByClubCents).toBe(available);
-          paid.forEach((amount, i) => expect(amount).toBeGreaterThanOrEqual(amounts[i]));
-        },
-      ),
+      fc.property(fc.integer({ min: -100_000, max: 100_000_000 }), fc.integer({ min: -100_000, max: 100_000_000 }), (setCents, available) => {
+        const difference = settleDifference(setCents, available);
+        expect(setCents + difference.keptByClubCents - difference.addedByClubCents).toBe(available);
+        expect(Math.min(difference.keptByClubCents, difference.addedByClubCents)).toBe(0);
+      }),
       { numRuns: 1000 },
     );
   });
@@ -149,56 +62,49 @@ describe("carried in", () => {
   });
 });
 
-describe("the words", () => {
+describe("the words (the club's staff only)", () => {
   const figures = { setCents: 95_000, availableCents: 100_000 };
 
-  it("names where carried money goes: the season, or the next tournament", () => {
-    expect(carryTargetName("Winter League")).toBe("Winter League");
-    expect(carryTargetName("  ")).toBe("the next tournament");
-    expect(carryTargetName(null)).toBe("the next tournament");
-  });
-
-  it("says in one sentence where a leftover goes, for each choice", () => {
-    const sentence = (choice: (typeof PRIZE_DIFFERENCE_CHOICES)[number]) => differenceSentence({ ...figures, cents: 5_000, choice }, "Winter League");
-    expect(sentence("club")).toBe("The prizes add up to $950, $50 less than the $1,000 available for prizes: the club keeps it.");
-    expect(sentence("first")).toBe("The prizes add up to $950, $50 less than the $1,000 available for prizes: it goes to 1st.");
-    expect(sentence("pro_rata")).toBe("The prizes add up to $950, $50 less than the $1,000 available for prizes: it is shared across the paid places.");
-    expect(sentence("carry")).toBe("The prizes add up to $950, $50 less than the $1,000 available for prizes: it is carried over to Winter League.");
-    expect(choiceOutcome("carry", "the next tournament")).toBe("it is carried over to the next tournament");
+  it("says a leftover goes to the club's fee, in its name for it", () => {
+    expect(leftoverText(5_000, "AP")).toBe("Leftover $50 → AP");
+    expect(leftoverText(337, "Rake")).toBe("Leftover $3.37 → Rake");
+    expect(differenceSentence({ ...figures, cents: 5_000 }, "AP")).toBe("Leftover $50 → AP: the prizes add up to $950 of the $1,000 available for prizes.");
   });
 
   it("says what the club adds, and nothing when there is no difference", () => {
-    expect(differenceSentence({ setCents: 120_000, availableCents: 100_000, cents: -20_000, choice: "club" }, "x")).toBe(
+    expect(differenceSentence({ setCents: 120_000, availableCents: 100_000, cents: -20_000 }, "AP")).toBe(
       "The prizes add up to $1,200, $200 more than the $1,000 available for prizes: the club adds $200.",
     );
-    expect(differenceSentence({ setCents: 50_000, availableCents: -100, cents: -50_100, choice: "club" }, "x")).toContain("than the $0 available");
-    expect(differenceSentence({ ...figures, cents: 0, choice: "club" }, "x")).toBeNull();
+    expect(differenceSentence({ setCents: 50_000, availableCents: -100, cents: -50_100 }, "AP")).toContain("than the $0 available");
+    expect(differenceSentence({ ...figures, cents: 0 }, "AP")).toBeNull();
   });
 
-  it("words a change for the activity feed", () => {
-    expect(differenceNote({ ...figures, cents: 15_000, choice: "club" }, "Winter League")).toBe("$150 left over: the club keeps it");
-    expect(differenceNote({ ...figures, cents: 15_000, choice: "carry" }, "Winter League")).toBe("$150 left over: it is carried over to Winter League");
-    expect(differenceNote({ ...figures, cents: -20_000, choice: "carry" }, "Winter League")).toBe("$200 added by the club");
-    expect(differenceNote({ ...figures, cents: 0, choice: "club" }, "Winter League")).toBeNull();
+  it("words a change for the activity feed and the toasts", () => {
+    expect(differenceNote({ cents: 15_000 }, "AP")).toBe("Leftover $150 → AP");
+    expect(differenceNote({ cents: -20_000 }, "AP")).toBe("Added by the club: $200");
+    expect(differenceNote({ cents: 0 }, "AP")).toBeNull();
   });
 
-  it("lists the honest breakdown beside the pool: carried in, kept, carried over, added", () => {
+  it("lists the breakdown beside the pool: carried in, added for free entries, the leftover, added by the club", () => {
     const carriedIn = [{ carryOverId: "c1", fromTournamentId: "t0", fromName: "Test Wednesday", amountCents: 2_500 }];
-    const settled = (choice: (typeof PRIZE_DIFFERENCE_CHOICES)[number], available = 120_000) =>
-      settleDifference([60_000, 30_000, 15_000], 105_000, available, choice).difference;
-    expect(differenceLines({ difference: settled("club"), carriedIn }, "Winter League")).toEqual([
-      { kind: "carried_in", label: "Carried over from Test Wednesday", cents: 2_500 },
-      { kind: "kept_by_club", label: "Kept by the club", cents: 15_000 },
+    expect(differenceLines({ difference: settleDifference(105_000, 120_000), carriedIn, freeEntries: { addedCents: 10_000 } }, "AP")).toEqual([
+      { kind: "carried_in", label: "Carried over from Test Wednesday", cents: 2_500, text: "Carried over from Test Wednesday $25" },
+      { kind: "added_for_free_entries", label: FREE_ENTRIES_ADDED_LABEL, cents: 10_000, text: "Added by the club for free entries $100" },
+      { kind: "kept_by_club", label: "Leftover → AP", cents: 15_000, text: "Leftover $150 → AP" },
     ]);
-    expect(differenceLines({ difference: settled("carry") }, "Winter League")).toEqual([
-      { kind: "carried_over", label: "Carried over to Winter League", cents: 15_000 },
+    expect(differenceLines({ difference: settleDifference(105_000, 100_000) }, "AP")).toEqual([
+      { kind: "added_by_club", label: "Added by the club", cents: 5_000, text: "Added by the club $50" },
     ]);
-    expect(differenceLines({ difference: settled("first") }, "x")).toEqual([{ kind: "added_to_prizes", label: "Left over, added to 1st", cents: 15_000 }]);
-    expect(differenceLines({ difference: settled("pro_rata") }, "x")).toEqual([
-      { kind: "added_to_prizes", label: "Left over, shared across the paid places", cents: 15_000 },
+    expect(differenceLines({ difference: settleDifference(105_000, 105_000), carriedIn: null, freeEntries: { addedCents: 0 } }, "AP")).toEqual([]);
+    expect(differenceLines({}, "AP")).toEqual([]);
+  });
+
+  it("still shows a snapshot frozen before round 7 as it was paid: carried over, or added to the places", () => {
+    const frozen = (choice: string, extra: object) => ({ difference: { keptByClubCents: 0, addedByClubCents: 0, choice, ...extra } });
+    expect(differenceLines(frozen("carry", { carriedOverCents: 15_000, carryTarget: "Winter League" }), "AP")).toEqual([
+      { kind: "carried_over", label: "Carried over to Winter League", cents: 15_000, text: "Carried over to Winter League $150" },
     ]);
-    expect(differenceLines({ difference: settled("club", 100_000) }, "x")).toEqual([{ kind: "added_by_club", label: "Added by the club", cents: 5_000 }]);
-    expect(differenceLines({ difference: settled("club", 105_000), carriedIn: null }, "x")).toEqual([]);
-    expect(differenceLines({}, "x")).toEqual([]);
+    expect(differenceLines(frozen("first", { addedToPrizesCents: 15_000 }), "AP").map((line) => line.label)).toEqual(["Left over, added to 1st"]);
+    expect(differenceLines(frozen("pro_rata", { addedToPrizesCents: 15_000 }), "AP").map((line) => line.label)).toEqual(["Left over, shared across the paid places"]);
   });
 });

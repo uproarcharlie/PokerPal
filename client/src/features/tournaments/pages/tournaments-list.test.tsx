@@ -117,6 +117,25 @@ describe("TournamentsListPage", () => {
     expect(await screen.findByTestId("tournament-row-t1")).toBeInTheDocument();
   });
 
+  it("keeps only the one-off games, or only the season games, on the server (round 7)", async () => {
+    const asked = mockList();
+    const user = userEvent.setup();
+    renderList();
+    await screen.findByTestId("tournament-row-t1");
+
+    await user.click(screen.getByTestId("season-filter"));
+    await user.click(await screen.findByRole("option", { name: "One-off games" }));
+    await waitFor(() => expect(asked.at(-1)).toBe("?oneOff=true"));
+    expect(screen.getByTestId("season-filter")).toHaveTextContent("One-off games");
+    await user.click(screen.getByTestId("season-filter"));
+    await user.click(await screen.findByRole("option", { name: "Season games" }));
+    await waitFor(() => expect(asked.at(-1)).toBe("?oneOff=false"));
+
+    await user.click(screen.getByTestId("clear-filters"));
+    expect(screen.getByTestId("season-filter")).toHaveTextContent("All games");
+    expect(screen.queryByTestId("clear-filters")).not.toBeInTheDocument();
+  });
+
   it("invites the first tournament when there are none", async () => {
     mockList(() => HttpResponse.json([]));
     server.use(http.get("/api/seasons", () => HttpResponse.json([])));

@@ -7,6 +7,7 @@ import { routes } from "@/app/routes";
 import { usePageMeta } from "@/app/page-meta";
 import { clubTimeZone } from "@/lib/format";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
+import { rakeLabel } from "@shared/domain/prize-pool";
 import { PaymentDeskCards } from "../components/payment-desk/payment-desk-cards";
 import { TournamentNotFound } from "../components/tournament-not-found";
 import { ClubThemeScope } from "@/features/branding/components/public/club-theme-scope";
@@ -67,7 +68,7 @@ function PaymentDesk({ tournament }: { tournament: TournamentDetailDto }) {
           timeZone={timeZone}
         />
         {/* The same cards (and "Show QR Code") as the TD's phone Money tab: a payment says where the player was seated. */}
-        <PaymentDeskCards tournament={tournament} timeZone={timeZone} />
+        <PaymentDeskCards tournament={tournament} timeZone={timeZone} rakeLabel={rakeLabel(club.data)} />
       </div>
     </>
   );

@@ -26,6 +26,7 @@ import { TournamentStats } from "../components/tournament-stats";
 import { qk } from "@/lib/api/query-keys";
 import { publicTournamentQueries } from "../api";
 import { usePublicPrizes } from "../hooks";
+import { showsPoints } from "../standings";
 import { lineupOf } from "../waiting-list";
 
 const PLAYERS_FAILED = "The players could not be loaded";
@@ -111,7 +112,7 @@ function TournamentView({ tournament, registrationsQuery }: TournamentViewProps)
                             prizes={paid}
                             // Who finished where, of the field: the waiting list does not play (round 5, item 15).
                             registrations={lineupOf(list, tournament.maxPlayers).field}
-                            trackPoints={tournament.trackPoints === true}
+                            trackPoints={showsPoints(tournament, list)}
                             pointsRules={pointsRules}
                             onRetryPoints={() => {
                               if (pointsSystem.isError) void pointsSystem.refetch();

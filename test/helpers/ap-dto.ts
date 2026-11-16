@@ -35,13 +35,17 @@ export function apTournament(overrides: Partial<TournamentDetailDto> = {}): Tour
 }
 
 /**
- * `count` paid players (as the club's staff see them) with one buy-in each; the first `rebuys` re-bought
- * once and the first `addons` took the add-on.
+ * `count` paid players (as the club's staff see them, none with a free entry) with one buy-in each; the
+ * first `rebuys` re-bought once and the first `addons` took the add-on.
  */
 export function entrants(count: number, { rebuys = 0, addons = 0 }: { rebuys?: number; addons?: number } = {}): ManagedRegistration[] {
   return Array.from({ length: count }, (_, index) => ({
     ...registrationDto(`r${index + 1}`, `Player ${index + 1}`, { rebuys: index < rebuys ? 1 : 0, addons: index < addons ? 1 : 0 }),
     paymentConfirmed: true,
+    freeEntry: false,
+    freeEntryFunded: false,
+    freeEntryReason: null,
+    freeEntryNote: null,
   }));
 }
 
@@ -64,7 +68,6 @@ export function prizePoolDto(
     adjustment: tournament.prizePoolAdjustedAt
       ? { reason: tournament.prizePoolAdjustmentReason ?? null, adjustedAt: tournament.prizePoolAdjustedAt }
       : null,
-    carryTarget: "the next tournament",
     ...overrides,
   };
 }

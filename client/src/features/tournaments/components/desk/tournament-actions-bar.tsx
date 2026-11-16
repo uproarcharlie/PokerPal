@@ -12,9 +12,22 @@ import type { WaitingCount } from "./desk-actions";
 
 /**
  * The dialogs and sheets the page opens: the bar's, and on a phone the quick actions' (bust, re-buy,
- * add-on, payments) and the header's request desk.
+ * add-on, payments, free entry) and the header's request desk.
  */
-export type DeskDialog = "register" | "edit" | "delete" | "finalize" | "correct" | "highHand" | "lock" | "bust" | "rebuy" | "addon" | "payments" | "requests";
+export type DeskDialog =
+  | "register"
+  | "edit"
+  | "delete"
+  | "finalize"
+  | "correct"
+  | "highHand"
+  | "lock"
+  | "bust"
+  | "rebuy"
+  | "addon"
+  | "payments"
+  | "freeEntry"
+  | "requests";
 
 interface TournamentActionsBarProps {
   tournament: TournamentDetailDto;

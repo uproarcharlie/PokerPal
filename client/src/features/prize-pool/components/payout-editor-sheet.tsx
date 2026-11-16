@@ -33,7 +33,7 @@ import {
   type PayoutStructureKey,
   type StandardPayoutKey,
 } from "@shared/domain/payouts";
-import { differenceNote, type PrizeDifference } from "@shared/domain/prize-difference";
+import { differenceNote, differenceSentence, type PrizeDifference } from "@shared/domain/prize-difference";
 import { isClosedStatus } from "@shared/domain/tournaments";
 import { usePrizePool } from "../hooks";
 import {
@@ -59,7 +59,6 @@ import {
   type PayoutSumLine,
 } from "../payout-editor";
 import { useChangePayouts } from "../staff-hooks";
-import { AddedByClubNote, DifferenceChoice } from "./difference-choice";
 
 interface PayoutEditorSheetProps {
   open: boolean;
@@ -68,11 +67,11 @@ interface PayoutEditorSheetProps {
 }
 
 /**
- * The payout editor (round 5, items 1 and 16): how the pool is split, changed mid-game too. A standard
+ * The payout editor (round 5, item 1): how the pool is split, changed mid-game too. A standard
  * structure, or custom places each set as a percentage of the pool or a fixed amount (the exact prize
- * for each place), with what each pays now and the live sum check against the money available: where
- * any money left over goes (the TD's choice, the club keeping it by default) or what the club adds when
- * the prizes are more. Full screen on a phone.
+ * for each place), with what each pays now and the live sum check against the money available: what is
+ * left over goes to the club's fee ("Leftover $44 → AP", the rounding included: round 7), and what the
+ * club adds when the prizes are more. Staff-only. Full screen on a phone.
  */
 export function PayoutEditorSheet({ open, onOpenChange, tournament }: PayoutEditorSheetProps) {
   return (
@@ -122,7 +121,7 @@ const isEditorField = (name: string) => /^places\.\d+\.value$/.test(name) || nam
 
 function savedText(input: PayoutsUpdateInput, prizePool: PrizePoolDto): string {
   const structure = input.payoutStructure === "custom" && input.places ? `Custom: ${describePayoutPlaces(toPayoutPlaces(input.places))}` : PAYOUT_STRUCTURE_LABELS[input.payoutStructure];
-  const note = differenceNote(prizePool.breakdown.difference, prizePool.carryTarget);
+  const note = differenceNote(prizePool.breakdown.difference, prizePool.rakeLabel);
   return note ? `${structure}; ${note}` : structure;
 }
 
@@ -141,8 +140,8 @@ function PayoutsForm({ tournament, prizePool, onClose }: PayoutsFormProps) {
   const [pending, setPending] = useState<{ input: PayoutsUpdateInput; check: PayoutsSaveCheck } | null>(null);
   const form = useForm<PayoutEditorValues>({ resolver: formResolver(payoutsFormSchema), defaultValues: startingValues(tournament), mode: "onTouched" });
   const { fields, append, remove, replace } = useFieldArray({ control: form.control, name: "places" });
-  const [structure, rows, prizeDifference, reason] = useWatch({ control: form.control, name: ["payoutStructure", "places", "prizeDifference", "reason"] });
-  const values: PayoutEditorValues = { payoutStructure: structure, places: rows, prizeDifference, reason };
+  const [structure, rows, reason] = useWatch({ control: form.control, name: ["payoutStructure", "places", "reason"] });
+  const values: PayoutEditorValues = { payoutStructure: structure, places: rows, reason };
   // A percentage is of the pool (a manual one, else what is available); the prizes are measured against what is available.
   const money = editorMoney(prizePool.breakdown);
   const pool = money.poolCents;
@@ -200,11 +199,11 @@ function PayoutsForm({ tournament, prizePool, onClose }: PayoutsFormProps) {
     toast({ title: "Payouts saved", description: response.prizePool.breakdown.structure.error ?? savedText(input, response.prizePool) });
     onClose();
   };
-  const settleWith = { availableCents: money.availableCents, choice: prizeDifference };
+  const settleWith = { availableCents: money.availableCents };
   const preview = previewPayoutPlaces(pool, placesOfRows(rows), settleWith);
   const shares = structure === "custom" ? null : previewShares(pool, PAYOUT_STRUCTURES[structure], settleWith);
   const difference: PrizeDifference | null = shares ? shares.difference : preview.difference;
-  const firstAsSet = shares ? shares.amounts[0] : (preview.rows[0]?.setCents ?? undefined);
+  const line = difference ? sumLine(difference, prizePool.rakeLabel) : roughSumLine(preview.placedCents, money.availableCents);
   const submit = form.handleSubmit(async (raw) => {
     const input = payoutsFormSchema.parse(raw);
     const check = payoutsSaveCheck(difference);
@@ -215,7 +214,7 @@ function PayoutsForm({ tournament, prizePool, onClose }: PayoutsFormProps) {
   const rootError = form.formState.errors.root?.message;
   // Worked out from the boxes as they are: a refusal of the places together goes once they add up.
   const wholeError = form.formState.isSubmitted && structure === "custom" ? placesProblem(values) : undefined;
-  const unpaidNote = unpaidPlacesNote(structure === "custom" ? rows.length : PAYOUT_STRUCTURES[structure].length, paidPlayers);
+  const unpaidNote = unpaidPlacesNote(structure === "custom" ? rows.length : PAYOUT_STRUCTURES[structure].length, paidPlayers, prizePool.rakeLabel);
   return (
     <Form {...form}>
       <form onSubmit={submit} noValidate className="flex min-h-0 flex-1 flex-col" data-testid="payout-editor">
@@ -280,7 +279,6 @@ function PayoutsForm({ tournament, prizePool, onClose }: PayoutsFormProps) {
                 rows={rows}
                 fieldIds={fields.map((field) => field.id)}
                 preview={preview}
-                line={difference ? sumLine(difference, prizePool.carryTarget) : roughSumLine(preview.placedCents, money.availableCents)}
                 errors={form.formState.errors}
                 register={form.register}
                 onKind={setKind}
@@ -290,6 +288,7 @@ function PayoutsForm({ tournament, prizePool, onClose }: PayoutsFormProps) {
             ) : (
               <StandardPlaces structure={structure} amounts={shares?.amounts ?? []} poolCents={pool} onCustomise={() => customise(structure)} />
             )}
+            <SumLine line={line} />
             {wholeError ? (
               <p className="text-sm font-medium text-destructive" data-testid="payout-places-error">
                 {wholeError}
@@ -312,19 +311,7 @@ function PayoutsForm({ tournament, prizePool, onClose }: PayoutsFormProps) {
             {unpaidNote ? <p className="text-sm text-muted-foreground">{unpaidNote}</p> : null}
           </section>
 
-          {difference ? (
-            <>
-              <DifferenceChoice
-                difference={difference}
-                value={prizeDifference}
-                onChange={(choice) => form.setValue("prizeDifference", choice, { shouldDirty: true })}
-                carryTarget={prizePool.carryTarget}
-                firstCents={firstAsSet}
-                rakeLabel={prizePool.rakeLabel}
-              />
-              <AddedByClubNote difference={difference} carryTarget={prizePool.carryTarget} />
-            </>
-          ) : null}
+          {difference ? <AddedByClubNote difference={difference} rakeLabel={prizePool.rakeLabel} /> : null}
 
           <FormField
             control={form.control}
@@ -375,7 +362,7 @@ function PayoutsForm({ tournament, prizePool, onClose }: PayoutsFormProps) {
 
 interface StandardPlacesProps {
   structure: StandardPayoutKey;
-  /** What each place pays now (previewShares: the leftover of a manual pool settled as chosen). */
+  /** What each place pays now (previewShares: each share rounded down to whole dollars). */
   amounts: readonly Cents[];
   poolCents: Cents;
   onCustomise: () => void;
@@ -409,8 +396,6 @@ interface CustomPlacesProps {
   /** useFieldArray's key for each row. */
   fieldIds: readonly string[];
   preview: PayoutPlacesPreview;
-  /** The live sum check (sumLine). */
-  line: PayoutSumLine;
   errors: FieldErrors<PayoutEditorValues>;
   register: UseFormRegister<PayoutEditorValues>;
   onKind: (index: number, kind: PayoutPlace["kind"]) => void;
@@ -419,16 +404,15 @@ interface CustomPlacesProps {
   onRemoveButton: (fieldId: string, button: HTMLButtonElement | null) => void;
 }
 
-/** What a custom place pays now: "= $180", "$300 (fixed)", with its part of a leftover added to it ("incl. $44 left over"). */
+/** What a custom place pays now: "= $180", "$300 (fixed)". */
 function paysText(row: PayoutRowValues, index: number, preview: PayoutPlacesPreview): string {
-  const { amountCents: amount = null, setCents = null } = preview.rows[index] ?? {};
+  const amount = preview.rows[index]?.amountCents ?? null;
   if (amount === null) return "";
-  const added = setCents !== null && amount > setCents ? ` (incl. ${formatMoney(amount - setCents)} left over)` : "";
-  return row.kind === "amount" && !added ? `${formatMoney(amount)} (fixed)` : `= ${formatMoney(amount)}${added}`;
+  return row.kind === "amount" ? `${formatMoney(amount)} (fixed)` : `= ${formatMoney(amount)}`;
 }
 
-/** Each custom place: its percentage or amount, how it is set, what it pays, and Remove; then the live sum check. */
-function CustomPlaces({ ids, rows, fieldIds, preview, line, errors, register, onKind, onRemove, onRemoveButton }: CustomPlacesProps) {
+/** Each custom place: its percentage or amount, how it is set, what it pays, and Remove. */
+function CustomPlaces({ ids, rows, fieldIds, preview, errors, register, onKind, onRemove, onRemoveButton }: CustomPlacesProps) {
   return (
     <>
       <ol role="list" className="space-y-3" aria-label="Places paid">
@@ -491,14 +475,33 @@ function CustomPlaces({ ids, rows, fieldIds, preview, line, errors, register, on
           );
         })}
       </ol>
-      <p
-        aria-live="polite"
-        className={cn("rounded-lg border p-3 text-sm font-medium", line.tone === "over" ? "border-amber-500/60 text-foreground" : "border-border text-foreground")}
-        data-testid="payout-sum"
-      >
-        {line.text}
-      </p>
     </>
+  );
+}
+
+/** The live sum check under the places (sumLine): what is left over and goes to the club's fee, what the club adds, or that it adds up. */
+function SumLine({ line }: { line: PayoutSumLine }) {
+  return (
+    <p
+      aria-live="polite"
+      className={cn("rounded-lg border p-3 text-sm font-medium text-foreground", line.tone === "over" ? "border-amber-500/60" : "border-border")}
+      data-testid="payout-sum"
+    >
+      {line.text}
+    </p>
+  );
+}
+
+/** Prizes above the money available: paid as set, the club adding the rest ("Added by the club"). Nothing otherwise. */
+function AddedByClubNote({ difference, rakeLabel }: { difference: PrizeDifference; rakeLabel: string }) {
+  if (difference.cents >= 0) return null;
+  return (
+    <Alert data-testid="added-by-club">
+      <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+      <AlertDescription>
+        <span className="font-semibold">Added by the club: {formatMoney(difference.addedByClubCents)}.</span> {differenceSentence(difference, rakeLabel)}
+      </AlertDescription>
+    </Alert>
   );
 }
 

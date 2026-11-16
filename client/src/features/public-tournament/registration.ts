@@ -1,6 +1,6 @@
 /**
  * The QR sign-up's rules that are not React: the new-player form's schema (POST /api/players's own,
- * with the phone number a visitor must give) and what the player owes at the desk.
+ * the mobile number optional but a number when given) and what the player owes at the desk.
  */
 import { z } from "zod";
 import { createPlayerSchema, normaliseName, normalisePhone, type CreatePlayerInput } from "@shared/api/players";
@@ -9,12 +9,21 @@ import { amountDueCents } from "@shared/domain/prize-pool";
 import { formatMoney } from "@/lib/format";
 import { offersHighHand } from "@shared/domain/player-actions";
 
-/** What the new player types (and the photo they upload); the server refuses a visitor with no phone. */
-export const newPlayerSchema = createPlayerSchema.pick({ name: true, phone: true, imageUrl: true }).superRefine((value, ctx) => {
-  if (!normalisePhone(value.phone)) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["phone"], message: "Phone number is required" });
+/** The mobile number's label wherever a player's details are typed: the QR page, the desk, the player edit. */
+export const MOBILE_LABEL = "Mobile (optional)";
+
+/**
+ * A mobile number is optional (round 7, item 9), but one that is typed must be a number: "n/a" would
+ * be kept as if it were one. Blank is no number.
+ */
+export function checkMobile(value: { phone?: string | null }, ctx: z.RefinementCtx): void {
+  if (value.phone && !normalisePhone(value.phone)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["phone"], message: "Enter a mobile number, or leave it blank" });
   }
-});
+}
+
+/** What the new player types (and the photo they upload): a name, and a mobile number if they like. */
+export const newPlayerSchema = createPlayerSchema.pick({ name: true, phone: true, imageUrl: true }).superRefine(checkMobile);
 
 export interface NewPlayerValues {
   name: string;

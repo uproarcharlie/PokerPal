@@ -68,11 +68,15 @@ export async function listStaffPlayers(scope: ClubScope, query: PlayersQuery) {
  */
 export type PlayerSearchScope = { clubId: string } | "known" | "all";
 
-/** The QR register page's search: names containing `q`, A to Z, as PublicPlayer. */
-export async function searchPlayers(search: { q: string; limit: number; scope: PlayerSearchScope }) {
+/**
+ * The QR register page's search, as PublicPlayer, A to Z: names containing `q`, or for `match: "exact"`
+ * the players called `q` as normaliseName compares names ("That's me": R7FREV1-01).
+ */
+export async function searchPlayers(search: { q: string; match: "contains" | "exact"; limit: number; scope: PlayerSearchScope }) {
   const { scope } = search;
   const clubIds = typeof scope === "string" ? scope : [scope.clubId];
-  const rows = await playersRepo.findPlayers(db, { clubIds, nameContains: search.q, limit: search.limit }, "name");
+  const name = search.match === "exact" ? { nameIs: normaliseName(search.q) } : { nameContains: search.q };
+  const rows = await playersRepo.findPlayers(db, { clubIds, ...name, limit: search.limit }, "name");
   return rows.map(toPublicPlayer);
 }
 
@@ -181,8 +185,10 @@ export interface CreatePlayerContext {
 /**
  * Creates a player, unless their phone number is already stored: then the stored player whose name
  * matches is returned (the best of several: preferredMatch), or the sign-up is refused. Sign-ups with
- * the same number take turns, so two at once cannot both create one. A new player's home club is the
- * club adding them, when there is one.
+ * the same number take turns, so two at once cannot both create one. Without a number (optional:
+ * round 7, item 9) nobody is matched, as two people can share a name: the sign-up screens offer the
+ * players with that name first ("That's me"). A new player's home club is the club adding them, when
+ * there is one.
  */
 export async function createPlayer(env: AppEnv, input: CreatePlayerInput, { clubId }: CreatePlayerContext): Promise<CreatePlayerOutcome> {
   assertOwnedImage(env, input.imageUrl, undefined, INVALID_MESSAGE);

@@ -196,7 +196,7 @@ describe("User management: editing", () => {
     const sheet = await screen.findByRole("dialog", { name: "Edit Player" });
     expect(within(sheet).queryByRole("group", { name: "Player Photo" })).not.toBeInTheDocument();
     await userEvent.type(within(sheet).getByLabelText("Player Name*"), "-Jones");
-    await userEvent.clear(within(sheet).getByLabelText("Phone Number"));
+    await userEvent.clear(within(sheet).getByLabelText("Mobile (optional)"));
     await userEvent.click(within(sheet).getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => expect(body).toEqual({ name: "Aroha Smith-Jones", email: "aroha@example.com", phone: null }));

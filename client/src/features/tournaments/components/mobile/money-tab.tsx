@@ -53,7 +53,7 @@ export function MoneyTab({ tournament, registrations, money, rakeLabel, timeZone
       />
       {canManage ? (
         <section aria-label="Payments" className="space-y-4">
-          <PaymentDeskCards tournament={tournament} timeZone={timeZone} />
+          <PaymentDeskCards tournament={tournament} timeZone={timeZone} rakeLabel={rakeLabel} />
         </section>
       ) : null}
     </div>

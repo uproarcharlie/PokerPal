@@ -1,10 +1,12 @@
 import { Router } from "express";
 import {
   adjustCountsSchema,
+  freeEntryChangeSchema,
   publicRegistrationSchema,
   staffRegistrationSchema,
   updateRegistrationSchema,
   type AdjustCountsInput,
+  type FreeEntryChangeInput,
   type UpdateRegistrationInput,
 } from "@shared/api/registrations";
 import { asyncHandler } from "../http/async-handler";
@@ -12,6 +14,7 @@ import { allowPublic, canManageClub, clubFrom, clubScope, currentUser, requireCl
 import { parseOrThrow, validateBody } from "../http/validate";
 import {
   adjustCounts,
+  changeFreeEntry,
   confirmPayment,
   listPaymentRegistrations,
   listRegistrations,
@@ -27,9 +30,10 @@ const INVALID = { message: "Invalid registration data" };
 
 /**
  * Tournament registrations: the public list and sign-up, and the staff's updates, count changes,
- * removals, payment confirmation and payment-desk lists. Every write but the sign-up needs staff of
- * the tournament's club (SEC-01). The two old PATCH routes are gone (they skipped the lock and the
- * log): PUT /api/registrations/:id and POST /api/registrations/:id/counts replace them.
+ * removals, payment confirmation, free entries (round 7) and payment-desk lists. Every write but the
+ * sign-up needs staff of the tournament's club (SEC-01). The two old PATCH routes are gone (they
+ * skipped the lock and the log): PUT /api/registrations/:id and POST /api/registrations/:id/counts
+ * replace them.
  */
 export function registrationsRoutes({ env, limiters }: RouteDeps): Router {
   const router = Router();
@@ -41,8 +45,9 @@ export function registrationsRoutes({ env, limiters }: RouteDeps): Router {
   /**
    * Public sign-up (QR page) with the narrow body (SEC-06), for the club's own players or the one the
    * caller just typed in (signUpToken); staff of the club may also set the opening counts and payment
-   * and register anyone. Sign-ups past Max players join the waiting list; accepting past it is refused
-   * (round 5, item 15).
+   * and register anyone, with a free entry too (round 7: the public schema has no such field, so a QR
+   * sign-up's is ignored). Sign-ups past Max players join the waiting list; accepting past it is
+   * refused (round 5, item 15).
    */
   router.post(
     "/api/tournaments/:id/registrations",
@@ -53,7 +58,7 @@ export function registrationsRoutes({ env, limiters }: RouteDeps): Router {
       const staff = await canManageClub(req.user, tournament.clubId);
       const input = parseOrThrow(staff ? staffRegistrationSchema : publicRegistrationSchema, req.body ?? {}, INVALID);
       const token = signUpTokenScope(env, input.playerId, input.signUpToken);
-      res.status(201).json(await registerPlayer(tournament.id, input, { staff, vouched: token !== null, vouchedAt: token?.clubId ?? null }));
+      res.status(201).json(await registerPlayer(req, tournament.id, input, { staff, vouched: token !== null, vouchedAt: token?.clubId ?? null }));
     }),
   );
 
@@ -89,6 +94,15 @@ export function registrationsRoutes({ env, limiters }: RouteDeps): Router {
     requireClubManager(clubFrom.registration()),
     asyncHandler(async (req, res) => {
       res.json(await confirmPayment(req.params.id));
+    }),
+  );
+
+  router.post(
+    "/api/registrations/:id/free-entry",
+    requireClubManager(clubFrom.registration()),
+    validateBody(freeEntryChangeSchema, INVALID),
+    asyncHandler<{ id: string }, unknown, FreeEntryChangeInput>(async (req, res) => {
+      res.json(await changeFreeEntry(req, req.params.id, req.body));
     }),
   );
 

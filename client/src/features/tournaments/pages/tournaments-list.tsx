@@ -11,12 +11,12 @@ import { useCreateFromLink } from "@/hooks/use-create-from-link";
 import type { TournamentListItemDto } from "@shared/api/tournaments";
 import { CreateTournamentDialog } from "../components/create-tournament-dialog";
 import { EditTournamentDialog } from "../components/edit-tournament-dialog";
-import { TournamentFilters, type TournamentFilterValues } from "../components/list/tournament-filters";
+import { hasFilters, TournamentFilters, type TournamentFilterValues } from "../components/list/tournament-filters";
 import { TournamentRows } from "../components/list/tournament-rows";
 import { useClubs } from "@/features/clubs/hooks";
 import { useTournaments } from "../hooks";
 
-/** Every tournament the viewer can see, filtered by club and status, with what can be done with each. */
+/** Every tournament the viewer can see, filtered by club, season or one-off games, and status, with what can be done with each. */
 export default function TournamentsListPage() {
   usePageMeta({ title: "Tournaments" });
   const create = useCreateFromLink(routes.tournaments());
@@ -29,7 +29,7 @@ export default function TournamentsListPage() {
   // clubs, so none reads "Unknown Club" at the wrong time while they load, or for good when they fail.
   const clubs = useClubs();
   const clubsById = new Map((clubs.data ?? []).map((club) => [club.id, club]));
-  const filtered = filters.clubId !== undefined || filters.status !== undefined;
+  const filtered = hasFilters(filters);
 
   const createButton = (label: string, testId: string) => <CreateButton label={label} testId={testId} onClick={() => create.setOpen(true)} />;
   const edit = (tournament: TournamentListItemDto, menu: HTMLElement | null) => {

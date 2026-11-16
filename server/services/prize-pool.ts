@@ -4,15 +4,14 @@
  * is what finalize pays. The manual AP total and the manual prize pool are written together by one
  * UPDATE, so at most one is ever set. Both may change while the pool is locked, until the tournament
  * is completed or cancelled. Every change is logged to the activity feed (who did it goes to the
- * audit log only). A manual pool below what is available says where the difference goes
- * (shared/domain/prize-difference: kept by the club unless the TD chose otherwise), and one above it is
- * what the club adds (round 5, item 16).
+ * audit log only). What a manual pool leaves of what is available goes to the club's fee, and what it
+ * needs beyond it the club adds (shared/domain/prize-difference, round 7): the activity line says which.
  */
 import type { Request } from "express";
 import type { AuditData } from "@shared/api/admin";
 import type { PrizePoolAdjustmentInput, PrizePoolDto, RakeRatesInput } from "@shared/api/prize-pool";
 import { formatMoney, isAmountSet, toCents, type MoneyInput } from "@shared/domain/money";
-import { carryTargetName, differenceNote, readPrizeDifference, type PrizeDifferenceChoice } from "@shared/domain/prize-difference";
+import { differenceNote } from "@shared/domain/prize-difference";
 import { computePrizePool, payoutsForDisplay, rakeLabel, type PayoutDisplay } from "@shared/domain/prize-pool";
 import {
   mergeRakeRates,
@@ -33,7 +32,6 @@ import { insertActivity } from "../repositories/activity";
 import { getClub } from "../repositories/clubs";
 import { playerNames } from "../repositories/players";
 import { registrationsOf } from "../repositories/registrations";
-import { getSeason } from "../repositories/seasons";
 import { getTournament, lockTournamentForUpdate, setTournamentColumns } from "../repositories/tournaments";
 import { recordAudit } from "./audit";
 import { assertHighHandAwardsFit, assertOpen, toTournamentDetail, tournamentStatusOf, type TournamentDetail } from "./tournament-views";
@@ -46,14 +44,6 @@ export interface PrizePoolContext {
   club: ClubLabel;
   /** Player names by player id. */
   playerNames: ReadonlyMap<string, string>;
-  /** Where money this tournament carries over goes (carryTargetName of its season); default "the next tournament". */
-  carryTarget?: string;
-}
-
-/** Where money `tournament` carries over goes, as the screens name it: its season, else "the next tournament". */
-export async function carryTargetOf(ex: Executor, tournament: Pick<Tournament, "seasonId">): Promise<string> {
-  const season = tournament.seasonId ? await getSeason(ex, tournament.seasonId) : undefined;
-  return carryTargetName(season?.name);
 }
 
 /** Everything a prize-pool response needs, read with `ex` (pass the transaction that changed it). */
@@ -61,7 +51,7 @@ export async function loadPrizePoolContext(ex: Executor, tournament: Tournament)
   const registrations = await registrationsOf(ex, tournament.id);
   const club = await getClub(ex, tournament.clubId);
   const names = await playerNames(ex, registrations.map((r) => r.playerId));
-  return { tournament, registrations, club, playerNames: names, carryTarget: await carryTargetOf(ex, tournament) };
+  return { tournament, registrations, club, playerNames: names };
 }
 
 /**
@@ -109,7 +99,6 @@ export function toPrizePoolDto(context: PrizePoolContext): PrizePoolDto {
     adjustment: tournament.prizePoolAdjustedAt
       ? { reason: tournament.prizePoolAdjustmentReason ?? null, adjustedAt: tournament.prizePoolAdjustedAt.toISOString() }
       : null,
-    carryTarget: context.carryTarget ?? carryTargetName(null),
   };
 }
 
@@ -142,31 +131,21 @@ export interface AdjustmentRequest {
   registrations: readonly TournamentRegistration[];
   club: ClubLabel;
   adjustment: PrizePoolAdjustmentInput;
-  /** Where money carried over goes (PrizePoolContext.carryTarget), for the activity line. */
-  carryTarget?: string;
-}
-
-/** A choice sent that differs from the one stored (null stored reads as the club keeping it); null when it is the same or none was sent. */
-export function changedPrizeDifference(stored: string | null, sent: PrizeDifferenceChoice | undefined): PrizeDifferenceChoice | null {
-  return sent !== undefined && readPrizeDifference(stored) !== sent ? sent : null;
 }
 
 /**
  * Sets the manual AP total or the manual prize pool (clearing the other), or clears both, inside the
- * caller's transaction, with where a manual pool's difference from what is available goes when one is
- * sent. A request that changes nothing writes nothing. Returns the updated row.
+ * caller's transaction. A request that changes nothing writes nothing. Returns the updated row.
  */
 export async function applyPrizePoolAdjustment(tx: Executor, req: Request, request: AdjustmentRequest): Promise<Tournament> {
   const { tournament, registrations, club, adjustment } = request;
   const manualPrizePool = adjustment.mode === "manual_pool" ? adjustment.amount : null;
   const rakeOverride = adjustment.mode === "ap_override" ? adjustment.amount : null;
-  const prizeDifference = changedPrizeDifference(tournament.prizeDifference, adjustment.mode === "manual_pool" ? adjustment.prizeDifference : undefined);
   const reason = adjustment.reason ?? null;
   // Checked before the closed rule: resending what is stored is not a change, even once it is closed.
   if (
     sameAmount(tournament.manualPrizePool, manualPrizePool) &&
     sameAmount(tournament.rakeOverride, rakeOverride) &&
-    prizeDifference === null &&
     (reason === null || reason === tournament.prizePoolAdjustmentReason)
   ) {
     return tournament;
@@ -180,7 +159,6 @@ export async function applyPrizePoolAdjustment(tx: Executor, req: Request, reque
     (await setTournamentColumns(tx, tournament.id, {
       manualPrizePool,
       rakeOverride,
-      ...(prizeDifference !== null ? { prizeDifference } : {}),
       prizePoolAdjustmentReason: reason,
       prizePoolAdjustedAt: new Date(),
       prizePoolAdjustedBy: actingUserId(req),
@@ -188,7 +166,7 @@ export async function applyPrizePoolAdjustment(tx: Executor, req: Request, reque
   const after = computePrizePool(updated, registrations);
 
   const amountCents = adjustment.mode === "calculated" ? null : toCents(adjustment.amount);
-  const note = adjustment.mode === "manual_pool" ? differenceNote(after.difference, request.carryTarget ?? carryTargetName(null)) : null;
+  const note = adjustment.mode === "manual_pool" ? differenceNote(after.difference, label) : null;
   const description =
     adjustment.mode === "ap_override"
       ? `${label} set manually to ${formatMoney(after.rake.applied)} (the rates give ${formatMoney(after.rake.calculated)})`
@@ -205,7 +183,7 @@ export async function applyPrizePoolAdjustment(tx: Executor, req: Request, reque
       netCents: after.net,
       previousNetCents: before.net,
       reason,
-      ...(adjustment.mode === "manual_pool" ? { prizeDifference: after.difference.choice, difference: after.difference } : {}),
+      ...(adjustment.mode === "manual_pool" ? { difference: after.difference } : {}),
     }),
   });
   const audit: AuditData["prize_pool.adjust"] = {
@@ -219,7 +197,6 @@ export async function applyPrizePoolAdjustment(tx: Executor, req: Request, reque
     },
     netCentsBefore: before.net,
     netCentsAfter: after.net,
-    ...(prizeDifference !== null ? { prizeDifference: { before: tournament.prizeDifference, after: prizeDifference } } : {}),
   };
   await recordAudit(req, { action: "prize_pool.adjust", targetType: "tournament", targetId: tournament.id, data: audit }, tx);
   return updated;

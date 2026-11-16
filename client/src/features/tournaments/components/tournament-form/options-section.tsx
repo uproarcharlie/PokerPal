@@ -10,6 +10,7 @@ import { AmountInput } from "@/components/shared/amount-input";
 import { FormSection } from "./form-section";
 import { RakeFields } from "./rake-fields";
 import { CheckboxField } from "./toggle-fields";
+import { pointsOffReason } from "./use-tournament-form";
 
 interface OptionsSectionProps {
   control: Control<TournamentFormValues>;
@@ -20,9 +21,10 @@ interface OptionsSectionProps {
   highHandEntrants: number;
 }
 
-/** The high-hand side pot, late registration and season points. */
+/** The high-hand side pot, late registration and season points (none for a one-off game, or without a points system). */
 export function OptionsSection({ control, rakeLabel, moneyLocked, highHandEntrants }: OptionsSectionProps) {
   const highHand = useWatch({ control, name: "enableHighHand" });
+  const [seasonId, pointsSystemId] = useWatch({ control, name: ["seasonId", "pointsSystemId"] });
 
   return (
     <FormSection title="Additional Options">
@@ -55,6 +57,7 @@ export function OptionsSection({ control, rakeLabel, moneyLocked, highHandEntran
             label="Track Player Points"
             description="Assign points to players based on their final placement"
             testId="track-points"
+            offBecause={pointsOffReason({ seasonId, pointsSystemId })}
           />
         </fieldset>
       </div>

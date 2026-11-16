@@ -11,6 +11,8 @@ import type { ClubPlayer, CreatePlayerResponse, StaffPlayer } from "@shared/api/
 import type { ActivityDto, PublicPointsAllocation, PublicPointsSystem, PublicRegistration, WaitingListPlace } from "@shared/api/public";
 import type {
   ConfirmedRegistrationDto,
+  FreeEntryChangedDto,
+  FreeEntryStatus,
   ManagedRegistration,
   PaymentConfirmedDto,
   PendingRegistrationDto,
@@ -23,6 +25,7 @@ import type { createAllocation, createPointsSystem, listAllocations } from "./po
 import type { toClubPlayer, toPublicPlayer, toStaffPlayer } from "./players";
 import type {
   adjustCounts,
+  changeFreeEntry,
   confirmPayment,
   listPaymentRegistrations,
   listRegistrations,
@@ -33,6 +36,9 @@ import type {
 /** What a service function's promise resolves to, as JSON. */
 type Out<F extends (...args: never[]) => unknown> = Json<Awaited<ReturnType<F>>>;
 
+/** A staff registration as the server always sends it: with its free entry (round 7; optional in the DTO for older fixtures). */
+type Staff<T> = T & Required<FreeEntryStatus>;
+
 describe("service results serialise to the shared DTOs", () => {
   it("activity", () => {
     expectTypeOf<Out<typeof tournamentActivity>[number]>().toExtend<ActivityDto>();
@@ -42,20 +48,22 @@ describe("service results serialise to the shared DTOs", () => {
   it("registrations", () => {
     expectTypeOf<Out<typeof listRegistrations>[number]>().toExtend<PublicRegistration | ManagedRegistration>();
     expectTypeOf<PublicRegistration>().toExtend<Out<typeof listRegistrations>[number]>();
-    expectTypeOf<ManagedRegistration>().toExtend<Out<typeof listRegistrations>[number]>();
+    expectTypeOf<Staff<ManagedRegistration>>().toExtend<Out<typeof listRegistrations>[number]>();
     expectTypeOf<Out<typeof registerPlayer>>().toExtend<RegistrationCreatedDto>();
     expectTypeOf<PublicRegistration & Pick<RegistrationCreatedDto, "seating">>().toExtend<Out<typeof registerPlayer>>();
     expectTypeOf<Out<typeof confirmPayment>>().toExtend<PaymentConfirmedDto>();
-    expectTypeOf<PaymentConfirmedDto>().toExtend<Out<typeof confirmPayment>>();
+    expectTypeOf<Staff<PaymentConfirmedDto>>().toExtend<Out<typeof confirmPayment>>();
     expectTypeOf<Out<typeof updateRegistration>>().toExtend<ManagedRegistration>();
-    expectTypeOf<ManagedRegistration>().toExtend<Out<typeof updateRegistration>>();
+    expectTypeOf<Staff<ManagedRegistration>>().toExtend<Out<typeof updateRegistration>>();
     expectTypeOf<Out<typeof adjustCounts>>().toExtend<ManagedRegistration>();
-    expectTypeOf<ManagedRegistration>().toExtend<Out<typeof adjustCounts>>();
+    expectTypeOf<Staff<ManagedRegistration>>().toExtend<Out<typeof adjustCounts>>();
+    expectTypeOf<Out<typeof changeFreeEntry>>().toExtend<FreeEntryChangedDto>();
+    expectTypeOf<Staff<FreeEntryChangedDto>>().toExtend<Out<typeof changeFreeEntry>>();
     type PaymentRow = Out<typeof listPaymentRegistrations>[number];
     expectTypeOf<PaymentRow>().toExtend<PendingRegistrationDto | ConfirmedRegistrationDto>();
-    // The payment desk's rows always say their place on the waiting list (optional in the DTO for older fixtures).
-    expectTypeOf<PendingRegistrationDto & Required<WaitingListPlace>>().toExtend<PaymentRow>();
-    expectTypeOf<ConfirmedRegistrationDto & Required<WaitingListPlace>>().toExtend<PaymentRow>();
+    // The payment desk's rows always say their place on the waiting list and their free entry (optional in the DTO for older fixtures).
+    expectTypeOf<Staff<PendingRegistrationDto & Required<WaitingListPlace>>>().toExtend<PaymentRow>();
+    expectTypeOf<Staff<ConfirmedRegistrationDto & Required<WaitingListPlace>>>().toExtend<PaymentRow>();
   });
 
   it("pending actions", () => {
@@ -63,7 +71,9 @@ describe("service results serialise to the shared DTOs", () => {
     expectTypeOf<PendingActionDto>().toExtend<Out<typeof listPendingActions>[number]>();
     expectTypeOf<Out<typeof createPendingAction>>().toExtend<PendingActionDto>();
     expectTypeOf<Out<typeof confirmPendingAction>>().toExtend<ConfirmPendingActionResponse>();
-    expectTypeOf<ConfirmPendingActionResponse>().toExtend<Out<typeof confirmPendingAction>>();
+    expectTypeOf<
+      Omit<ConfirmPendingActionResponse, "registration" | "target"> & { registration: Staff<ManagedRegistration>; target: Staff<ManagedRegistration> | null }
+    >().toExtend<Out<typeof confirmPendingAction>>();
   });
 
   it("points systems and allocations", () => {

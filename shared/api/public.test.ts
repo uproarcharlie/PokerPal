@@ -70,11 +70,25 @@ describe("the club's takings (round 6)", () => {
     }
     expect(FORBIDDEN_TAKINGS_KEYS).toEqual(expect.arrayContaining([...TOURNAMENT_TAKINGS_FIELDS]));
   });
+
+  it("include what the club pays in for free entries, and how many it gave, wherever a pool's figures go (round 7)", () => {
+    const pool = { counts: { freeEntries: 2, freeBuyIns: 2, fundedFreeEntries: 1, fundedBuyIns: 1 }, freeEntries: { entries: 2, funded: 1, addedCents: 10_000 } };
+
+    expect(findTakingsKeys(pool)).toEqual(["counts.freeEntries", "counts.freeBuyIns", "counts.fundedFreeEntries", "counts.fundedBuyIns", "freeEntries"]);
+    expect(findTakingsKeys({ snapshot: JSON.stringify({ pool: { freeEntries: { entries: 1, funded: 0, addedCents: 0 } } }) })).toEqual(["snapshot<json>.pool.freeEntries"]);
+  });
+
+  it("include a registration's free entry, its funding and its reason; who gave it is never sent to anyone (round 7)", () => {
+    const staffRow = { id: "r1", paymentConfirmed: true, freeEntry: true, freeEntryFunded: false, freeEntryReason: "promo", freeEntryNote: "Flyer", freeEntryAt: "2026-11-16T08:00:00Z" };
+
+    expect(findTakingsKeys([staffRow])).toEqual(["[0].freeEntry", "[0].freeEntryFunded", "[0].freeEntryReason", "[0].freeEntryNote", "[0].freeEntryAt"]);
+    expect(findForbiddenKeys({ ...staffRow, freeEntryBy: "u1" })).toEqual(["freeEntryBy"]);
+  });
 });
 
 describe("publicPlayerSearchQuerySchema", () => {
-  it("trims the query and defaults the limit", () => {
-    expect(publicPlayerSearchQuerySchema.parse({ q: "  ali " })).toEqual({ q: "ali", limit: 10 });
+  it("trims the query and defaults the match and the limit", () => {
+    expect(publicPlayerSearchQuerySchema.parse({ q: "  ali " })).toEqual({ q: "ali", match: "contains", limit: 10 });
   });
 
   it("refuses an empty query and a limit over 25", () => {

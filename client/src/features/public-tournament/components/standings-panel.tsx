@@ -5,6 +5,7 @@ import { SeasonLeaderboardCard } from "@/features/seasons/components/season-lead
 import { HighHandWinners } from "./high-hand-winners";
 import { StandingsTable } from "./standings-table";
 import { WaitingListCard } from "./waiting-list-card";
+import { showsPoints } from "../standings";
 import { lineupOf } from "../waiting-list";
 import { offersHighHand } from "@shared/domain/player-actions";
 import { isClosedStatus } from "@shared/domain/tournaments";
@@ -25,7 +26,7 @@ export function StandingsPanel({ tournament, registrations, season }: StandingsP
   const tonight = (
     <div className="space-y-6">
       {offersHighHand(tournament) ? <HighHandWinners registrations={registrations} /> : null}
-      <StandingsTable registrations={field} completed={tournament.status === "completed"} trackPoints={tournament.trackPoints === true} />
+      <StandingsTable registrations={field} completed={tournament.status === "completed"} trackPoints={showsPoints(tournament, registrations)} />
       {isClosedStatus(tournament.status) ? null : <WaitingListCard waiting={waiting} />}
     </div>
   );

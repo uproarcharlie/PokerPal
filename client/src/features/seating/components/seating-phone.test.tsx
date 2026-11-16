@@ -10,8 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SeatingDto } from "@shared/api/seating";
 import { qk } from "@/lib/api/query-keys";
 import { server } from "@test/msw/server";
-import { MANAGER_VIEW, tournamentDto } from "@test/helpers/dto";
-import { screenWidth } from "@test/helpers/f1-tournaments";
+import { MANAGER_VIEW, registrationDto, tournamentDto } from "@test/helpers/dto";
+import { freeEntryStatus, screenWidth } from "@test/helpers/f1-tournaments";
 import { mockSignedIn, renderWithApp } from "@test/helpers/web";
 import { recordWrite, seatingDto, seatingMutation, seatMove, seatRef, type SeatingSpec } from "@test/helpers/seating-dto";
 import { SeatingPanel } from "./seating-panel";
@@ -71,6 +71,28 @@ describe("the Seats tab at 390 px", () => {
     renderWithApp(<SeatingPanel tournament={tournament} registrations={[]} />);
     expect(await screen.findByRole("list", { name: "Table 1 seats" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "List" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("marks the players the club let in free FREE, on the plan, in the list and among those waiting (round 7, item 6)", async () => {
+    current = seatingDto({ ...night, unseated: [{ id: "r3", name: "Cara Lee" }] });
+    // The club's staff are sent who came in free with the registrations: Alice (seated) and Cara (waiting).
+    const registrations = [
+      { ...registrationDto("r1", "Alice Smith"), paymentConfirmed: true, ...freeEntryStatus({ freeEntry: true, freeEntryReason: "season_prize" }) },
+      { ...registrationDto("r2", "Bob Jones"), paymentConfirmed: false, ...freeEntryStatus() },
+      { ...registrationDto("r3", "Cara Lee"), paymentConfirmed: true, ...freeEntryStatus({ freeEntry: true, freeEntryReason: "promo", freeEntryFunded: true }) },
+    ];
+    const user = userEvent.setup();
+    renderWithApp(<SeatingPanel tournament={tournament} registrations={registrations} />);
+
+    const plan = await screen.findByRole("group", { name: "Table 1: 2 of 9 seats taken" });
+    expect(within(plan).getByRole("button", { name: "Seat 1: Alice Smith, free entry" })).toBeInTheDocument();
+    expect(within(plan).getByRole("button", { name: "Seat 2: Bob Jones, not paid" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("unseated-list")).getByTestId("free-entry-badge")).toHaveTextContent("Free entry: Promo · club pays the buy-in");
+
+    await user.click(screen.getByRole("button", { name: "List" }));
+    const seats = within(screen.getByRole("list", { name: "Table 1 seats" })).getAllByRole("listitem");
+    expect(within(seats[0]).getByTestId("free-entry-badge")).toHaveTextContent("Free entry: Season prize");
+    expect(within(seats[1]).queryByTestId("free-entry-badge")).not.toBeInTheDocument();
   });
 
   it("shows who auto-seat sat down since the tab opened, marks their seat, and forgets them when dismissed", async () => {

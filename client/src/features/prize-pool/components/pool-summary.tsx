@@ -2,14 +2,14 @@ import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { PrizePoolSnapshot } from "@shared/domain/finalize";
 import type { Cents } from "@shared/domain/money";
-import { carryTargetName, differenceLines, type DifferenceLine } from "@shared/domain/prize-difference";
+import { differenceLines, settleDifference, type DifferenceLine } from "@shared/domain/prize-difference";
 import type { PrizePoolBreakdown } from "@shared/domain/prize-pool";
 
 /**
- * A pool's honest breakdown in one line (round 5, item 16): "Prize pool $1,000 · AP $200 · Kept by the
- * club $50", "… · Carried over to Winter League $50", "… · Added by the club $100". The same words on
- * every staff screen (the prize structure card, the paid pool, End Tournament). Staff-only (round 6):
- * the AP and what the club keeps are never on a public page or the TV.
+ * A pool's honest breakdown in one line: "Prize pool $1,000 · AP $200 · Leftover $3 → AP", "… · Added by
+ * the club for free entries $100", "… · Added by the club $100". The same words on every staff screen
+ * (the prize structure card, the paid pool, End Tournament). Staff-only (round 6): the AP and what the
+ * club keeps are never on a public page or the TV.
  */
 export interface PoolSummaryFigures {
   netCents: Cents;
@@ -20,13 +20,13 @@ export interface PoolSummaryFigures {
 }
 
 /** A live pool's figures (computePrizePool's breakdown). */
-export function liveSummary(breakdown: Pick<PrizePoolBreakdown, "net" | "rake" | "difference" | "carriedIn">, rakeLabel: string, carryTarget: string): PoolSummaryFigures {
-  return { netCents: breakdown.net, apCents: breakdown.rake.applied, rakeLabel, lines: differenceLines(breakdown, carryTarget) };
+export function liveSummary(breakdown: Pick<PrizePoolBreakdown, "net" | "rake" | "difference" | "carriedIn" | "freeEntries">, rakeLabel: string): PoolSummaryFigures {
+  return { netCents: breakdown.net, apCents: breakdown.rake.applied, rakeLabel, lines: differenceLines(breakdown, rakeLabel) };
 }
 
 type FrozenPool = Pick<
   PrizePoolSnapshot["pool"],
-  "netCents" | "grossCents" | "rakeCalculatedCents" | "rakeOverrideCents" | "netSource" | "difference" | "carriedIn"
+  "netCents" | "grossCents" | "rakeCalculatedCents" | "rakeOverrideCents" | "netSource" | "difference" | "carriedIn" | "freeEntries"
 >;
 
 /**
@@ -35,28 +35,20 @@ type FrozenPool = Pick<
  */
 export function frozenSummary(pool: FrozenPool, rakeLabel: string): PoolSummaryFigures {
   const apCents = pool.rakeOverrideCents ?? pool.rakeCalculatedCents;
-  const carryTarget = pool.difference?.carryTarget ?? carryTargetName(null);
-  let lines = differenceLines(pool, carryTarget);
-  if (!pool.difference && pool.netSource === "manual_pool") {
-    const cents = pool.grossCents - apCents - pool.netCents;
-    if (cents > 0) lines = [...lines, { kind: "kept_by_club", label: "Kept by the club", cents }];
-    if (cents < 0) lines = [...lines, { kind: "added_by_club", label: "Added by the club", cents: -cents }];
-  }
-  return { netCents: pool.netCents, apCents, rakeLabel, lines };
+  const unrecorded = !pool.difference && pool.netSource === "manual_pool";
+  const difference = unrecorded ? settleDifference(pool.netCents, pool.grossCents - apCents) : pool.difference;
+  return { netCents: pool.netCents, apCents, rakeLabel, lines: differenceLines({ ...pool, difference }, rakeLabel) };
 }
 
-/** The parts of the line, in order: the pool, the AP, then each difference line. */
+/** The parts of the line, in order: the pool, the AP, then each difference line ("Leftover $3 → AP"). */
 export function poolSummaryParts({ netCents, apCents, rakeLabel, lines }: PoolSummaryFigures): string[] {
-  return [
-    `Prize pool ${formatMoney(Math.max(0, netCents))}`,
-    ...(apCents > 0 ? [`${rakeLabel} ${formatMoney(apCents)}`] : []),
-    ...lines.map((line) => `${line.label} ${formatMoney(line.cents)}`),
-  ];
+  return [`Prize pool ${formatMoney(Math.max(0, netCents))}`, ...(apCents > 0 ? [`${rakeLabel} ${formatMoney(apCents)}`] : []), ...lines.map((line) => line.text)];
 }
 
 /**
  * The breakdown line, wrapping between its parts on a phone. Shown only when there is more to say than
- * the pool and its AP (something kept, carried or added): the cards beside it already show those.
+ * the pool and its AP (a leftover, money carried in or added by the club): the cards beside it already
+ * show those.
  */
 export function PoolSummary({ figures, className, testId = "pool-summary" }: { figures: PoolSummaryFigures; className?: string; testId?: string }) {
   if (figures.lines.length === 0) return null;

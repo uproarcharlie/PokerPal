@@ -6,6 +6,8 @@ import { cn } from "@/lib/utils";
 import { describeSeat } from "./public/table-plan";
 import { emptySeat, planSeats, TableMenu, type TableAction } from "./table-card";
 import { UnpaidDot } from "./unpaid-dot";
+import { FreeEntryBadge } from "@/features/tournaments/components/free-entry/free-entry-badge";
+import type { FreeEntryStatus } from "@shared/api/registrations";
 
 interface TableListProps {
   /** The tables in play, by number. */
@@ -15,6 +17,8 @@ interface TableListProps {
   moverName: string | null;
   /** Seats new arrivals have just sat down in, by table. */
   freshSeats: ReadonlyMap<string, ReadonlySet<number>>;
+  /** The players let in free (round 7), by registration id: marked FREE. */
+  freeEntries?: ReadonlyMap<string, FreeEntryStatus>;
   readOnly: boolean;
   busy: boolean;
   actionsOf: (table: TableDto) => readonly TableAction[];
@@ -25,9 +29,10 @@ interface TableListProps {
 /**
  * The tables as a list, seat by seat (the Seats tab's "List" view, the plan's accessible twin): each
  * table's seats in order, each a 44 px row with the seat number, the player's photo and name (an amber
- * dot when unpaid); tap a player, then a seat, to move them (another player's seat asks to swap).
+ * dot when unpaid, FREE for a free entry); tap a player, then a seat, to move them (another player's
+ * seat asks to swap).
  */
-export function TableList({ tables, selected, moverName, freshSeats, readOnly, busy, actionsOf, onSeatPress, onAction }: TableListProps) {
+export function TableList({ tables, selected, moverName, freshSeats, freeEntries, readOnly, busy, actionsOf, onSeatPress, onAction }: TableListProps) {
   return (
     <ul role="list" className="space-y-4" data-testid="table-list">
       {tables.map((table) => (
@@ -42,8 +47,10 @@ export function TableList({ tables, selected, moverName, freshSeats, readOnly, b
             </CardHeader>
             <CardContent className="p-1 pt-0">
               <ol role="list" aria-label={`${table.displayName} seats`} className="divide-y divide-border">
-                {planSeats(table).map((seat) => {
+                {planSeats(table, freeEntries).map((seat) => {
                   const pressed = selected?.tableId === table.id && selected.seatNumber === seat.seatNumber;
+                  const registrationId = table.seats.find((candidate) => candidate.seatNumber === seat.seatNumber)?.registrationId;
+                  const free = registrationId ? freeEntries?.get(registrationId) : undefined;
                   const fresh = freshSeats.get(table.id)?.has(seat.seatNumber) ?? false;
                   const label = seat.player === null && moverName !== null ? `${describeSeat(seat)}: move ${moverName} here` : describeSeat(seat);
                   const face = (
@@ -54,6 +61,7 @@ export function TableList({ tables, selected, moverName, freshSeats, readOnly, b
                           <PlayerAvatar name={seat.player.name} imageUrl={seat.player.imageUrl} size="sm" />
                           <span className="min-w-0 flex-1 break-words text-left text-sm font-medium text-foreground">{seat.player.name}</span>
                           {seat.unpaid ? <UnpaidDot /> : null}
+                          {free ? <FreeEntryBadge entry={free} /> : null}
                           {fresh ? <span className="shrink-0 rounded-full bg-status-live px-2 text-xs font-semibold text-status-live-foreground">New</span> : null}
                         </>
                       ) : (

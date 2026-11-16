@@ -58,8 +58,8 @@ describe("PayoutEditorSheet", () => {
     expect(sheet).toHaveClass("w-full");
     expect(await screen.findByRole("radio", { name: /^Standard/ })).toBeChecked();
     expect(screen.getByTestId("payout-pool")).toHaveTextContent("Available for prizes $720");
-    // Standard shares all of it: nothing is left over to ask about.
-    expect(screen.queryByTestId("difference-choice")).not.toBeInTheDocument();
+    // Standard shares all of it in whole dollars: nothing is left over.
+    expect(screen.getByTestId("payout-sum")).toHaveTextContent("Adds up to the $720 available for prizes exactly");
     expect(place(1)).toHaveTextContent("1st 50%$360");
     expect(place(3)).toHaveTextContent("3rd 20%$144");
     expect(save()).toBeDisabled();
@@ -78,7 +78,7 @@ describe("PayoutEditorSheet", () => {
     expect(place(5)).toHaveTextContent("5th 5%$36");
     await user.click(save());
 
-    await waitFor(() => expect(sent).toEqual([{ payoutStructure: "top5", prizeDifference: "club" }]));
+    await waitFor(() => expect(sent).toEqual([{ payoutStructure: "top5" }]));
     expect(await screen.findByText("Payouts saved")).toBeInTheDocument();
     expect(screen.getByText("Top 5 (40/25/20/10/5)")).toBeInTheDocument();
     expect(queryClient.getQueryData(qk.tournaments.prizePool("t1"))).toMatchObject({ breakdown: { structure: { used: "top5" } } });
@@ -104,26 +104,21 @@ describe("PayoutEditorSheet", () => {
     expect(box("2nd place")).toHaveValue("216");
     expect(screen.getByTestId("payout-pays-2")).toHaveTextContent("$216 (fixed)");
 
-    // 3rd down to 10%: $72 is left over, and the editor asks where it goes: the club keeps it unless the TD says otherwise.
+    // 3rd down to 10%: the $72 left over goes to the club's fee (round 7), and nobody is asked where.
     await user.clear(box("3rd place"));
     await user.type(box("3rd place"), "10");
     expect(screen.getByTestId("payout-pays-3")).toHaveTextContent("= $72");
-    expect(screen.getByTestId("payout-sum")).toHaveTextContent("$72 left over is kept by the club");
+    expect(screen.getByTestId("payout-sum")).toHaveTextContent("Leftover $72 → AP");
     expect(screen.getByTestId("payout-pays-1")).toHaveTextContent("= $360");
-    const choice = screen.getByTestId("difference-choice");
-    expect(choice).toHaveTextContent("Where does the $72 left over go?");
-    expect(within(choice).getByRole("radio", { name: /^Club keeps it/ })).toBeChecked();
-    expect(screen.getByTestId("difference-sentence")).toHaveTextContent("The prizes add up to $648, $72 less than the $720 available for prizes: the club keeps it.");
-    await user.click(within(choice).getByRole("radio", { name: /^Add it to 1st/ }));
-    expect(screen.getByTestId("payout-sum")).toHaveTextContent("$72 left over goes to 1st");
-    expect(screen.getByTestId("payout-pays-1")).toHaveTextContent("= $432 (incl. $72 left over)");
+    expect(screen.queryByRole("radio", { name: /Add it to 1st|Carry it over/ })).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId("add-payout-place"));
     expect(box("4th place")).toHaveValue("5");
     expect(screen.getByTestId("payout-pays-4")).toHaveTextContent("= $36");
-    expect(screen.getByTestId("payout-pays-1")).toHaveTextContent("= $396 (incl. $36 left over)");
+    expect(screen.getByTestId("payout-pays-1")).toHaveTextContent("= $360");
+    expect(screen.getByTestId("payout-sum")).toHaveTextContent("Leftover $36 → AP");
     await user.click(within(screen.getByRole("group", { name: "Common reasons" })).getByRole("button", { name: "Short field" }));
-    // Where the leftover goes is on the form already: Save asks nothing more.
+    // A leftover is the club's fee: Save asks nothing more.
     await user.click(save());
 
     await waitFor(() =>
@@ -136,7 +131,6 @@ describe("PayoutEditorSheet", () => {
             { kind: "percent", percent: 10 },
             { kind: "percent", percent: 5 },
           ],
-          prizeDifference: "first",
           reason: "Short field",
         },
       ]),
@@ -145,8 +139,9 @@ describe("PayoutEditorSheet", () => {
     expect(await screen.findByText("Custom: 1st 50%, 2nd $216, 3rd 10%, 4th 5%")).toBeInTheDocument();
   });
 
-  it("starts Custom from the places and the choice stored before", async () => {
-    const stored = apTournament({ payoutStructure: "top3", customPayouts: '{"v":2,"places":[{"amountCents":50000},{"percent":20}]}', prizeDifference: "carry" });
+  it("starts Custom from the places stored before, whatever a leftover was once set to do", async () => {
+    // A choice stored before round 7 ("carry") is no longer read: the leftover is the club's fee.
+    const stored = apTournament({ payoutStructure: "top3", customPayouts: '{"v":2,"places":[{"amountCents":50000},{"percent":20}]}' });
     mockEditor(stored);
     const { user } = renderSheet(stored);
 
@@ -154,8 +149,7 @@ describe("PayoutEditorSheet", () => {
     expect(box("1st place")).toHaveValue("500");
     expect(box("2nd place")).toHaveValue("20");
     expect(screen.getByTestId("payout-pays-1")).toHaveTextContent("$500 (fixed)");
-    expect(screen.getByRole("radio", { name: /^Carry it over/ })).toBeChecked();
-    expect(screen.getByTestId("payout-sum")).toHaveTextContent("$76 left over is carried over to the next tournament");
+    expect(screen.getByTestId("payout-sum")).toHaveTextContent("Leftover $76 → AP");
   });
 
   it("pays prizes above the money available as set, saving them once the TD has read what the club adds", async () => {
@@ -171,7 +165,6 @@ describe("PayoutEditorSheet", () => {
     expect(screen.getByTestId("added-by-club")).toHaveTextContent(
       "Added by the club: $240. The prizes add up to $960, $240 more than the $720 available for prizes: the club adds $240.",
     );
-    expect(screen.queryByTestId("difference-choice")).not.toBeInTheDocument();
     expect(screen.getByTestId("payout-pays-1")).toHaveTextContent("$600 (fixed)");
     await user.click(save());
     const confirm = await screen.findByRole("alertdialog", { name: "The club adds $240" });
@@ -186,7 +179,7 @@ describe("PayoutEditorSheet", () => {
     await waitFor(() => expect(sent).toHaveLength(1));
   });
 
-  it("asks where the money left over goes when the TD types the exact prizes (round 5, item 16)", async () => {
+  it("pays exact prizes as typed, the rest going to the AP with nothing to ask (round 7)", async () => {
     const sent = mockEditor();
     const { user } = renderSheet();
 
@@ -196,38 +189,30 @@ describe("PayoutEditorSheet", () => {
       await user.clear(box(`${["1st", "2nd", "3rd"][n - 1]} place`));
       await user.type(box(`${["1st", "2nd", "3rd"][n - 1]} place`), amount);
     }
-    const choice = screen.getByTestId("difference-choice");
-    expect(within(choice).getAllByRole("radio")).toHaveLength(4);
-    for (const option of within(choice).getAllByRole("radio")) expect(option.closest("label")).toHaveClass("min-h-11");
-    expect(within(choice).getByRole("radio", { name: /^Add it to 1st.*1st pays \$520/ })).toBeInTheDocument();
-    expect(screen.getByTestId("difference-sentence")).toHaveTextContent("The prizes add up to $600, $120 less than the $720 available for prizes: the club keeps it.");
-
-    await user.click(within(choice).getByRole("radio", { name: /^Share it across the paid places/ }));
-    expect(screen.getByTestId("payout-pays-1")).toHaveTextContent("= $480 (incl. $80 left over)");
-    await user.click(within(choice).getByRole("radio", { name: /^Carry it over/ }));
-    expect(screen.getByTestId("difference-sentence")).toHaveTextContent("it is carried over to the next tournament.");
+    expect(screen.getByTestId("payout-sum")).toHaveTextContent("Leftover $120 → AP");
     expect(screen.getByTestId("payout-pays-1")).toHaveTextContent("$400 (fixed)");
+    expect(screen.queryByTestId("added-by-club")).not.toBeInTheDocument();
 
     await user.click(save());
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    expect(sent[0]).toMatchObject({ places: [{ amount: "400.00" }, { amount: "150.00" }, { amount: "50.00" }], prizeDifference: "carry" });
+    expect(sent[0]).toEqual({ payoutStructure: "custom", places: [{ kind: "amount", amount: "400.00" }, { kind: "amount", amount: "150.00" }, { kind: "amount", amount: "50.00" }] });
   });
 
-  it("asks the same for a prize pool set by hand below the money available, on a standard structure", async () => {
+  it("says what a prize pool set by hand below the money available leaves to the AP, on a standard structure", async () => {
     const manual = apTournament({ manualPrizePool: "600.00" });
-    const sent = mockEditor(manual, { prizeDifference: "pro_rata" });
+    const sent = mockEditor(manual, { payoutStructure: "top5" });
     const { user } = renderSheet(manual);
 
     expect(await screen.findByTestId("payout-pool")).toHaveTextContent("Prize pool set at $600 · $720 available");
     expect(place(1)).toHaveTextContent("$300");
-    await user.click(screen.getByRole("radio", { name: /^Share it across the paid places/ }));
-    expect(place(1)).toHaveTextContent("$360");
-    expect(place(3)).toHaveTextContent("$144");
+    expect(screen.getByTestId("payout-sum")).toHaveTextContent("Leftover $120 → AP");
+    await user.click(screen.getByRole("radio", { name: /^Top 5/ }));
+    expect(place(1)).toHaveTextContent("$240");
     await user.click(save());
 
-    await waitFor(() => expect(sent).toEqual([{ payoutStructure: "standard", prizeDifference: "pro_rata" }]));
-    expect(await screen.findByText("Standard (50/30/20); $120 left over: it is shared across the paid places")).toBeInTheDocument();
+    await waitFor(() => expect(sent).toEqual([{ payoutStructure: "top5" }]));
+    expect(await screen.findByText("Top 5 (40/25/20/10/5); Leftover $120 → AP")).toBeInTheDocument();
   });
 
   it("says what is wrong with a place, on that place, before sending", async () => {
@@ -323,7 +308,7 @@ describe("PayoutEditorSheet", () => {
 
     await user.click(screen.getByRole("button", { name: "Remove 2nd place" }));
     expect(screen.queryByRole("button", { name: /Remove/ })).not.toBeInTheDocument();
-    expect(screen.getByTestId("payout-sum")).toHaveTextContent("$360 left over is kept by the club");
+    expect(screen.getByTestId("payout-sum")).toHaveTextContent("Leftover $360 → AP");
   });
 
   it("says when more places are paid than players have paid", async () => {
@@ -331,6 +316,6 @@ describe("PayoutEditorSheet", () => {
     const { user } = renderSheet();
 
     await user.click(await screen.findByRole("radio", { name: /^Top 5/ }));
-    expect(screen.getByText("Only 2 players have paid: places below 2nd are paid only once more players pay.")).toBeInTheDocument();
+    expect(screen.getByText("Only 2 players have paid: places below 2nd are paid only once more players pay. Until then, what they would pay goes to AP.")).toBeInTheDocument();
   });
 });

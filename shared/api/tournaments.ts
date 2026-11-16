@@ -108,9 +108,11 @@ export const MAX_UPCOMING_TOURNAMENTS_PER_CLUB = 100;
 /**
  * POST /api/tournaments. The caller must be able to manage `clubId`; seasonId must be one of that
  * club's seasons (400 SEASON_NOT_IN_CLUB) and pointsSystemId one of that season's systems
- * (400 POINTS_SYSTEM_NOT_IN_SEASON). New tournaments start as a draft ("scheduled") or open
- * ("registration"). The AP rates are merged over "none" and checked by mergeRakeRates
- * (shared/domain/rake-rates), exactly as every later change is: 400 PERCENT_OVER_100, or
+ * (400 POINTS_SYSTEM_NOT_IN_SEASON). With no season the tournament is a one-off game (round 7):
+ * it has no points system and never appears on a leaderboard. Points are tracked only with a points
+ * system: trackPoints (default true) is stored false without one. New tournaments start as a draft
+ * ("scheduled") or open ("registration"). The AP rates are merged over "none" and checked by
+ * mergeRakeRates (shared/domain/rake-rates), exactly as every later change is: 400 PERCENT_OVER_100, or
  * AMOUNT_REQUIRED for a percentage or fixed rate with no amount, or AMOUNT_OVER_PRICE for a fixed rate
  * above the price of its entry (details: { field }); a rate of "none" stores 0.00. Money
  * set by the AP endpoints and finalize is never accepted here. A club has at most
@@ -130,6 +132,11 @@ export type CreateTournamentInput = z.infer<typeof createTournamentSchema>;
 /**
  * PUT /api/tournaments/:id: any subset of the config, plus:
  * - clubId: accepted only when unchanged (400 CANNOT_MOVE); a tournament never changes club.
+ * - seasonId null makes it a one-off game (round 7), taking its points system off with it (a points
+ *   system belongs to one season); as on create, trackPoints is stored false while there is no points
+ *   system. The season and points settings are frozen with the money once the tournament is completed
+ *   or cancelled (409 TOURNAMENT_CLOSED), compared by what they score: trackPoints with no points
+ *   system is the same as no points.
  * - status: not "completed" (that is finalize's job: 400 INVALID_STATUS_TRANSITION). A completed
  *   tournament's status cannot change; a cancelled one may be reopened as scheduled or registration.
  * - prizePoolLocked: true stamps prizePoolLockedAt on the server and logs "prize_pool_locked".
@@ -170,15 +177,19 @@ export const updateTournamentSchema = z
 export type UpdateTournamentInput = z.infer<typeof updateTournamentSchema>;
 
 /**
- * GET /api/tournaments?clubId=&seasonId=&status=&upcoming=true&limit= : every filter given applies;
- * oldest created first. `upcoming` keeps the tournaments not started yet (scheduled or open for
+ * GET /api/tournaments?clubId=&seasonId=&oneOff=&status=&upcoming=true&limit= : every filter given
+ * applies; oldest created first. `oneOff` true keeps the one-off games (no season, round 7), false
+ * the season games. `upcoming` keeps the tournaments not started yet (scheduled or open for
  * registration), soonest start first; `limit` keeps a public page's list short (the home page).
  */
+const booleanQuery = z.enum(["true", "false"]).transform((value) => value === "true");
+
 export const tournamentsQuerySchema = z.object({
   clubId: idSchema.optional(),
   seasonId: idSchema.optional(),
+  oneOff: booleanQuery.optional(),
   status: tournamentStatusSchema.optional(),
-  upcoming: z.enum(["true", "false"]).transform((value) => value === "true").optional(),
+  upcoming: booleanQuery.optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 export type TournamentsQuery = z.infer<typeof tournamentsQuerySchema>;

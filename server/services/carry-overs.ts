@@ -1,17 +1,23 @@
 /**
- * Prize money carried over between tournaments (round 5, item 16). When a TD chooses "Carry it over"
- * for what the prizes leave of the money available, finalize records it here (recordCarryOver, in
- * finalize's transaction): one prize_carry_overs row per tournament, for the next tournament of its
- * season (or of the club, with no season) to add to its pool. A later tournament's staff add it
- * (applyCarryOver) and can take it out again while that tournament is open (removeCarryOver). The
- * tournament's carried_in lists what its pool holds, written in the same transaction as the row's
- * applied_to_tournament_id, so every screen's computePrizePool counts it ("Carried over from …").
- * Both are logged to the staff's feed (round 6: the public never see what is carried); who did it is on the row (applied_by).
+ * Prize money carried over between tournaments (round 5, item 16). From round 5 to round 7 a TD could
+ * choose "Carry it over" for what the prizes left of the money available, and finalize wrote one
+ * prize_carry_overs row per tournament, for the next tournament of its season (or of the club, with no
+ * season) to add to its pool. Since round 7 a leftover is the club's fee and nothing new is carried
+ * over: a correction of such a tournament takes its money back to $0 while no pool holds it
+ * (withdrawCarryOver, in finalize's transaction), and leaves it where it is once another pool holds it
+ * (heldCarryOver: the correction freezes it as carried over, R7FREV0-CARRY-01). What was carried over
+ * before can still be added:
+ * a later tournament's staff add it (applyCarryOver) and can take it out again while that tournament is
+ * open (removeCarryOver). The tournament's carried_in lists what its pool holds, written in the same
+ * transaction as the row's applied_to_tournament_id, so every screen's computePrizePool counts it
+ * ("Carried over from …"). Both are logged to the staff's feed (round 6: the public never see what is
+ * carried); who did it is on the row (applied_by).
  */
 import type { Request } from "express";
 import type { CarryOverDto, CarryOversDto } from "@shared/api/prize-pool";
-import { formatMoney, type Cents } from "@shared/domain/money";
-import { readCarriedIn, type CarriedIn, type PrizeDifference } from "@shared/domain/prize-difference";
+import type { CarriedOver } from "@shared/domain/finalize";
+import { formatMoney } from "@shared/domain/money";
+import { readCarriedIn, type CarriedIn } from "@shared/domain/prize-difference";
 import { computePrizePool } from "@shared/domain/prize-pool";
 import type { PrizeCarryOver, Tournament } from "@shared/schema";
 import { db, type Executor } from "../db";
@@ -20,9 +26,7 @@ import { conflict, notFound } from "../http/errors";
 import { insertActivity } from "../repositories/activity";
 import {
   availableCarryOvers,
-  insertCarryOver,
   lockCarryOver,
-  lockCarryOverOfSource,
   setCarryOverAppliedTo,
   updateCarryOver,
   type CarryOverWithSource,
@@ -143,45 +147,23 @@ export async function removeCarryOver(req: Request, id: string, carryOverId: str
 }
 
 /**
- * Why finalizing with `carriedOverCents` to carry over cannot be written, given what the tournament
- * carried over before (`previous`): that money is already in another tournament's pool, and the
- * amount would change. Null when it can.
+ * The money `carryOver` (what a tournament carried over before round 7) says another tournament's pool
+ * holds, and that tournament's name: a correction of the tournament leaves it there, whether that pool
+ * is still open or already paid, and freezes it as carried over (R7FREV0-CARRY-01). Null when none is
+ * held, so a correction takes it back (withdrawCarryOver).
  */
-export async function carryOverChangeProblem(ex: Executor, previous: PrizeCarryOver | undefined, carriedOverCents: Cents): Promise<string | null> {
-  if (!previous?.appliedToTournamentId || previous.amountCents === carriedOverCents) return null;
-  const taker = await getTournament(ex, previous.appliedToTournamentId);
-  return (
-    `${formatMoney(previous.amountCents)} this tournament carried over is already in ${taker?.name ?? "another tournament"}'s prize pool: ` +
-    "take it out there before changing what is carried over"
-  );
+export async function heldCarryOver(ex: Executor, carryOver: PrizeCarryOver | undefined): Promise<CarriedOver | null> {
+  if (!carryOver?.appliedToTournamentId || carryOver.amountCents <= 0) return null;
+  const holder = await getTournament(ex, carryOver.appliedToTournamentId);
+  return { cents: carryOver.amountCents, target: holder?.name ?? "another tournament" };
 }
 
 /**
- * Inside finalize's transaction (the tournament locked): records what `tournament` carries over, from
- * the plan's difference. A first finalize that carries money over writes the row; a correction updates
- * it while no tournament has taken the money (to $0 when it no longer carries any), and refuses with
- * 409 CONFLICT a change to money already in another pool.
+ * Inside finalize's transaction (the tournament and `carryOver`, its row, locked): nothing is carried
+ * over since round 7, so a correction of a tournament that carried money over before takes that money
+ * back to $0 while no tournament has added it. Money another pool holds stays there (heldCarryOver).
  */
-export async function recordCarryOver(
-  tx: Executor,
-  req: Request,
-  tournament: Pick<Tournament, "id" | "name" | "seasonId">,
-  difference: Pick<PrizeDifference, "carriedOverCents"> | undefined,
-): Promise<void> {
-  const amountCents = difference?.carriedOverCents ?? 0;
-  const existing = await lockCarryOverOfSource(tx, tournament.id);
-  const problem = await carryOverChangeProblem(tx, existing, amountCents);
-  if (problem) throw conflict("CONFLICT", problem);
-  if (existing) {
-    if (existing.appliedToTournamentId) return;
-    await updateCarryOver(tx, existing.id, { amountCents, sourceName: tournament.name, targetSeasonId: tournament.seasonId });
-  } else if (amountCents > 0) {
-    await insertCarryOver(tx, {
-      sourceTournamentId: tournament.id,
-      sourceName: tournament.name,
-      targetSeasonId: tournament.seasonId,
-      amountCents,
-      createdBy: actingUserId(req),
-    });
-  }
+export async function withdrawCarryOver(tx: Executor, tournament: Pick<Tournament, "name" | "seasonId">, carryOver: PrizeCarryOver | undefined): Promise<void> {
+  if (!carryOver || carryOver.amountCents === 0 || carryOver.appliedToTournamentId) return;
+  await updateCarryOver(tx, carryOver.id, { amountCents: 0, sourceName: tournament.name, targetSeasonId: tournament.seasonId });
 }

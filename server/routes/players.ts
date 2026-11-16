@@ -17,7 +17,7 @@ import {
   requirePlayerManager,
   type AuthUser,
 } from "../http/authz";
-import { badRequest, conflict } from "../http/errors";
+import { conflict } from "../http/errors";
 import { parseOrThrow, validateBody } from "../http/validate";
 import { addingClub, createPlayer, listStaffPlayers, toPublicPlayer, toStaffPlayer, updatePlayer } from "../services/players";
 import { issueSignUpToken } from "../services/sign-up-tokens";
@@ -41,9 +41,9 @@ async function phoneTaken(user: AuthUser | undefined, other: Player) {
 }
 
 /**
- * Players: the staff list (no longer public: SEC-09), sign-up from the QR page or the staff's Players
- * page (public, narrow: no userId, SEC-04; the club adding a new player becomes its home club) and
- * edits by an admin or the staff of the player's home club (canManagePlayer).
+ * Players: the staff list (no longer public: SEC-09), sign-up from the QR page or the desk's Register
+ * player sheet (public, narrow: no userId, SEC-04; the club adding a new player becomes its home club;
+ * a phone number optional) and edits by an admin or the staff of the player's home club (canManagePlayer).
  */
 export function playersRoutes({ env, limiters }: RouteDeps): Router {
   const router = Router();
@@ -59,12 +59,7 @@ export function playersRoutes({ env, limiters }: RouteDeps): Router {
     limiters.publicWrite,
     validateBody(createPlayerSchema, INVALID),
     asyncHandler<Record<string, string>, unknown, CreatePlayerInput>(async (req, res) => {
-      // Anonymous sign-ups must give a number: it is how a returning player is recognised.
-      if (!req.user && !/\d/.test(req.body.phone ?? "")) {
-        throw badRequest(INVALID.message, "VALIDATION", [
-          { code: "custom", path: ["phone"], message: "Enter your phone number" },
-        ]);
-      }
+      // A phone number is optional for everyone (round 7, item 9): without one a new player is made.
       const clubId = await addingClub(req.user, req.body);
       const outcome = await createPlayer(env, req.body, { clubId });
       if (outcome.kind === "phone_taken") throw await phoneTaken(req.user, outcome.other);

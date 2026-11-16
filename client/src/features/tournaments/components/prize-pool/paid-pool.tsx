@@ -18,7 +18,8 @@ interface PaidPoolProps {
 
 /**
  * A finalized tournament's pool exactly as finalize froze it, its lines adding up to the net pool (money
- * carried in, kept by the club, carried over or added by the club: round 5, item 16), and any deal it paid.
+ * carried in, added for free entries, the leftover to the club's fee, added by the club, or, before
+ * round 7, carried over), and any deal it paid.
  */
 export function PaidPool({ pool, display, rakeLabel, deal }: PaidPoolProps) {
   const ap = pool.rakeOverrideCents ?? pool.rakeCalculatedCents;
@@ -49,7 +50,7 @@ export function PaidPool({ pool, display, rakeLabel, deal }: PaidPoolProps) {
         {display.undistributedCents > 0 ? (
           <p className="text-right text-xs text-muted-foreground" data-testid="undistributed">
             {/* What finalize paid: nobody is still to pay or enter. */}
-            {undistributedNote(display, { paid: 0, field: 0 })}
+            {undistributedNote(display)}
           </p>
         ) : null}
         {deal ? (

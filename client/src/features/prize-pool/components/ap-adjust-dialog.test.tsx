@@ -20,7 +20,7 @@ function mockRegistrations() {
 /** The prize pool GET answers: the tournament as the last PUT left it. */
 let current = apTournament();
 const mockPrizePool = () =>
-  server.use(http.get("/api/tournaments/t1/prize-pool", () => HttpResponse.json(prizePoolDto(current, players, { carryTarget: "Winter League" }))));
+  server.use(http.get("/api/tournaments/t1/prize-pool", () => HttpResponse.json(prizePoolDto(current, players))));
 
 /** PUT …/adjustment answers the tournament as `changed` makes it (and the pool asked again is that one); the body sent is kept. */
 function mockAdjust(changed: Partial<TournamentDetailDto>) {
@@ -53,6 +53,29 @@ beforeEach(() => {
 });
 
 describe("ApAdjustDialog", () => {
+  it("says in the preview what the places with no player would pay goes to the AP (R7FREV0-MONEY-01)", async () => {
+    // 2 buy-ins of $100 with 10% AP: $180, of which 1st $90 and 2nd $54 are paid; 3rd's $36 is the club's.
+    const two = entrants(2);
+    server.use(
+      http.get("/api/tournaments/t1/registrations", () => HttpResponse.json(two)),
+      http.get("/api/tournaments/t1/prize-pool", () => HttpResponse.json(prizePoolDto(apTournament(), two))),
+    );
+    const { user } = renderDialog();
+
+    expect(await screen.findByRole("radio", { name: "Calculated (AP $20)" })).toBeChecked();
+    expect(screen.getByTestId("preview-pool")).toHaveTextContent("Prize pool $144 (unchanged)");
+    expect(screen.getByTestId("preview-places")).toHaveTextContent("1st $90 · 2nd $54");
+    expect(screen.getByTestId("preview-unfilled")).toHaveTextContent(
+      "Only 2 players: places below 2nd are not paid, so the $36 they would pay goes to AP unless more players enter.",
+    );
+
+    await user.click(screen.getByRole("radio", { name: "Set AP total" }));
+    await user.clear(amountBox());
+    await user.type(amountBox(), "10");
+    expect(screen.getByTestId("preview-pool")).toHaveTextContent("Prize pool $152 (now $144)");
+    expect(screen.getByTestId("preview-unfilled")).toHaveTextContent("so the $38 they would pay goes to AP");
+  });
+
   it("fixes the AP total for a low turnout, showing what it pays first, and shows the answer at once", async () => {
     const sent = mockAdjust({ rakeOverride: "20.00", prizePoolAdjustmentReason: "Low turnout" });
     const { user, queryClient, onOpenChange } = renderDialog();
@@ -173,47 +196,36 @@ describe("ApAdjustDialog", () => {
     expect(screen.getByTestId("preview-difference")).toHaveTextContent(
       "The prizes add up to $1,000, $460 more than the $540 available for prizes: the club adds $460.",
     );
-    // A guarantee leaves nothing over: there is nothing to choose.
-    expect(screen.queryByTestId("difference-choice")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save" }));
 
-    await waitFor(() => expect(sent.body).toEqual({ mode: "manual_pool", amount: "1000.00", prizeDifference: "club" }));
+    await waitFor(() => expect(sent.body).toEqual({ mode: "manual_pool", amount: "1000.00" }));
     expect(await screen.findByText("Prize pool fixed at $1,000")).toBeInTheDocument();
   });
 
-  it("asks where a pool fixed below the money available leaves the rest, the club keeping it by default (round 5, item 16)", async () => {
-    const sent = mockAdjust({ manualPrizePool: "500.00", prizeDifference: "carry" });
+  it("puts what a pool fixed below the money available leaves into the AP, asking nothing (round 7)", async () => {
+    const sent = mockAdjust({ manualPrizePool: "500.00" });
     const { user } = renderDialog();
     await user.click(await screen.findByRole("radio", { name: "Set prize pool" }));
 
     await user.clear(amountBox());
     await user.type(amountBox(), "500");
-    const choice = screen.getByTestId("difference-choice");
-    expect(choice).toHaveTextContent("Where does the $40 left over go?");
-    expect(within(choice).getByRole("radio", { name: /^Club keeps it/ })).toBeChecked();
-    expect(screen.getByTestId("preview-difference")).toHaveTextContent("The prizes add up to $500, $40 less than the $540 available for prizes: the club keeps it.");
-    expect(within(choice).getByRole("radio", { name: /^Add it to 1st.*1st pays \$290/ })).toBeInTheDocument();
-
-    await user.click(within(choice).getByRole("radio", { name: /^Add it to 1st/ }));
-    expect(screen.getByTestId("preview-places")).toHaveTextContent("1st $290 · 2nd $150 · 3rd $100");
-    await user.click(within(choice).getByRole("radio", { name: /^Carry it over/ }));
-    expect(within(choice).getByRole("radio", { name: /^Carry it over.*To Winter League/ })).toBeChecked();
-    expect(screen.getByTestId("preview-difference")).toHaveTextContent("it is carried over to Winter League.");
+    expect(screen.getByTestId("preview-difference")).toHaveTextContent("Leftover $40 → AP: the prizes add up to $500 of the $540 available for prizes.");
     expect(screen.getByTestId("preview-places")).toHaveTextContent("1st $250 · 2nd $150 · 3rd $100");
+    // Nobody is asked where it goes any more.
+    expect(screen.queryByRole("radio", { name: /Carry it over|Add it to 1st/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save" }));
 
-    await waitFor(() => expect(sent.body).toEqual({ mode: "manual_pool", amount: "500.00", prizeDifference: "carry" }));
+    await waitFor(() => expect(sent.body).toEqual({ mode: "manual_pool", amount: "500.00" }));
     expect(await screen.findByText("Prize pool fixed at $500")).toBeInTheDocument();
-    expect(screen.getByText("$40 left over: it is carried over to the next tournament.")).toBeInTheDocument();
+    expect(screen.getByText("Leftover $40 → AP.")).toBeInTheDocument();
   });
 
-  it("leaves nothing to choose for a pool fixed at exactly the money available", async () => {
+  it("says nothing is left over for a pool fixed at exactly the money available", async () => {
     const { user } = renderDialog();
     await user.click(await screen.findByRole("radio", { name: "Set prize pool" }));
     await user.clear(amountBox());
     await user.type(amountBox(), "540");
     expect(screen.queryByTestId("preview-difference")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("difference-choice")).not.toBeInTheDocument();
   });
 
   it("goes back to the calculated AP", async () => {

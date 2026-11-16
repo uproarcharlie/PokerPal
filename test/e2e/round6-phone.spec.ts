@@ -7,8 +7,8 @@
  * (g) The AP is the staff's alone: a manual AP total for a low turnout and "No AP tonight" change the
  *     pool everyone sees, but the public page and the TV never show the AP, its reason or what the club
  *     keeps, on screen or in what they are sent.
- * (h) The payout editor leaves what the places do not pay with the club by default ("Club keeps it"):
- *     the TD is told what the club keeps; the public page and the TV show the places only.
+ * (h) What the places do not pay goes to the club's fee (round 7: there is no choice any more): the
+ *     TD is told "Leftover $20 → AP"; the public page and the TV show the places only.
  * (i) End Tournament with players who have not paid: it says who owes what, one payment is confirmed in
  *     the sheet (its toast covering none of the sheet's rows), the other player is left out (not ranked,
  *     paid or scored), and the night is finalized; Correct Results then starts with her still left out,
@@ -19,51 +19,15 @@
  * With SCREENSHOTS_DIR set (PLANNING/screens-round6 for the round's review), the screens the round's
  * brief names are saved there.
  */
-import type { APIRequestContext, Locator, Page } from "@playwright/test";
-import type { LiveDisplayDto, PublicPrizesDto } from "../../shared/api/live-display";
-import type { PrizePoolDto } from "../../shared/api/prize-pool";
-import { findTakingsKeys } from "../../shared/api/public";
+import type { Locator, Page } from "@playwright/test";
 import type { TournamentDetailDto } from "../../shared/api/tournaments";
-import { createTournament, expectJson, registrationsOf, signUp, uniquePhone, uniqueToken } from "./support/api";
+import { createTournament, registrationsOf, signUp, uniquePhone, uniqueToken } from "./support/api";
 import { expect, test } from "./support/fixtures";
+import { expectNoTakingsOn, expectNoTakingsSent, NEXT_POLL, poolOf, publicPool, publicPrizes, startClock, TV_MONEY } from "./support/money";
 import { centralStars, enter, get, PHONE, put, regulars, screenOf, settled, setUpClock, shot } from "./support/phone";
 import { toast } from "./support/ui";
 
 test.use(PHONE);
-
-/** The TV's money panel, set as the room sees it: the pool always, with the places. */
-const TV_MONEY = { showPrizePool: "always", showPayouts: true };
-
-/** A public page's poll (LIVE_REFRESH_MS) and the TV's, with room to spare. */
-const NEXT_POLL = { timeout: 15_000 };
-
-/**
- * Words for what the club takes, keeps or adds, or carries on to another game: never on a public
- * screen (round 6, the owner's rule). "AP" is matched as the word, in capitals, as the club writes it.
- */
-const AP_WORD = /\bAP\b/;
-const TAKINGS_WORDS = /\brake\b|kept by|keeps it|club keeps|added by the club|carried over to|low turnout|none tonight/i;
-
-/** The page shows nothing of the club's takings, in any text on it (hidden text included). */
-async function expectNoTakingsOn(page: Page): Promise<void> {
-  const text = await page.locator("body").textContent();
-  expect(text, `${page.url()} names the AP`).not.toMatch(AP_WORD);
-  expect(text, `${page.url()} names what the club takes or keeps`).not.toMatch(TAKINGS_WORDS);
-}
-
-/** What the public page and the TV are sent carries none of the club's takings (the server's own scan). */
-async function expectNoTakingsSent(request: APIRequestContext, tournamentId: string): Promise<{ prizes: PublicPrizesDto; display: LiveDisplayDto }> {
-  const prizes = await get<PublicPrizesDto>(request, `/api/public/tournaments/${tournamentId}/prizes`);
-  const display = await get<LiveDisplayDto>(request, `/api/public/tournaments/${tournamentId}/display`);
-  const detail = await get<TournamentDetailDto>(request, `/api/tournaments/${tournamentId}`);
-  for (const body of [prizes, display, detail]) {
-    expect(findTakingsKeys(body)).toEqual([]);
-    expect(JSON.stringify(body)).not.toMatch(/low turnout/i);
-  }
-  return { prizes, display };
-}
-
-const poolOf = async (request: APIRequestContext, tournamentId: string) => (await get<PrizePoolDto>(request, `/api/tournaments/${tournamentId}/prize-pool`)).breakdown;
 
 /**
  * While a toast shows over a phone sheet, none of the sheet's rows is under it (R6REV1-PHONE-03): what
@@ -86,22 +50,6 @@ async function expectSheetClearOfToasts(page: Page, sheet: Locator): Promise<voi
     });
     expect(where, `${await arrow.getAttribute("aria-label")}`).not.toBe("under something");
   }
-}
-
-/** Opens the public tournament page; answers its table of what each place pays. */
-async function publicPrizes(visitor: Page, tournamentId: string) {
-  await visitor.goto(`/tournament/${tournamentId}`);
-  const places = visitor.getByRole("region", { name: "Prize structure" });
-  await expect(places).toBeVisible();
-  return places;
-}
-
-/** The public page's headline pool, once the TD has locked it. */
-const publicPool = (visitor: Page, amount: string) => visitor.getByText(`Total prize pool: ${amount}`, { exact: true });
-
-/** The TV's clock for the tournament, started, so the room's screen is as on the night. */
-async function startClock(request: APIRequestContext, tournamentId: string): Promise<void> {
-  await expectJson(await request.post(`/api/tournaments/${tournamentId}/clock/actions`, { data: { action: "start" } }), 200);
 }
 
 test("(f) the prize pool counts only paid players: the TD's phone, the public page and the TV rise together when a payment is confirmed", async ({ page, openBrowser }) => {
@@ -160,7 +108,7 @@ test("(f) the prize pool counts only paid players: the TD's phone, the public pa
     expect([prizes.poolCents, display.money.netCents]).toEqual([18_000, 18_000]);
   });
 
-  await test.step("the TD takes Ella's payment from the note's Take payments, without leaving the desk: the pool rises to $225 on the phone", async () => {
+  await test.step("the TD takes Ella's payment from the note's Take payments, without leaving the desk: the pool rises to $224 on the phone", async () => {
     await note.getByRole("button", { name: "Take payments" }).click();
     const sheet = page.getByRole("dialog", { name: "Take payment" });
     await sheet.getByRole("button", { name: `Confirm payment for ${names[4]}` }).click();
@@ -172,21 +120,23 @@ test("(f) the prize pool counts only paid players: the TD's phone, the public pa
     await expect(page.getByRole("tab", { name: "Money" })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByTestId("quick-actions")).toBeVisible();
 
-    // Five paid: $250 in, $25 AP.
+    // Five paid: $250 in, $25 AP, $225 for prizes. 50/30/20 in whole dollars pays $112/$67/$45: the
+    // pool everyone is shown is what the places pay, $224, and the $1 left over goes to the AP (round 7).
     await expect(note).toHaveText(/Prize pool from 5 paid players · 1 not paid yet \(not in the pool\)/);
-    await expect(page.getByTestId("net-prize-pool")).toHaveText("$225");
+    await expect(page.getByTestId("net-prize-pool")).toHaveText("$224");
+    await expect(page.getByTestId("pool-summary")).toContainText("Leftover $1 → AP");
   });
 
   await test.step("the public page and the TV follow at their next poll, and all three agree", async () => {
-    await expect(publicPool(visitor, "$225")).toBeVisible(NEXT_POLL);
-    await expect(tvMoney).toContainText("$225", NEXT_POLL);
+    await expect(publicPool(visitor, "$224")).toBeVisible(NEXT_POLL);
+    await expect(tvMoney).toContainText("$224", NEXT_POLL);
     const { prizes, display } = await expectNoTakingsSent(visitor.request, tournament.id);
-    expect([prizes.poolCents, display.money.netCents, (await poolOf(page.request, tournament.id)).net]).toEqual([22_500, 22_500, 22_500]);
+    expect([prizes.poolCents, display.money.netCents, (await poolOf(page.request, tournament.id)).net]).toEqual([22_400, 22_400, 22_400]);
     // The TV still counts every player in the game, paid or not: the chips are on the table.
     expect(display.stats).toMatchObject({ entrants: 6, remaining: 6 });
     await expectNoTakingsOn(visitor);
     await expectNoTakingsOn(tv);
-    await publicPool(visitor, "$225").evaluate((element) => element.scrollIntoView({ block: "center" }));
+    await publicPool(visitor, "$224").evaluate((element) => element.scrollIntoView({ block: "center" }));
     await shot(visitor, "public-tournament-390x844");
     await shot(tv, "tv-1920x1080");
   });
@@ -260,7 +210,7 @@ test("(g) a manual AP and No AP tonight change the pool everyone sees, but only 
   });
 });
 
-test("(h) the payout editor's default leaves what the places do not pay with the club: the TD is told, the room is not", async ({ page, openBrowser }) => {
+test("(h) what the places do not pay goes to the club's fee: the TD is told, the room is not", async ({ page, openBrowser }) => {
   test.slow();
   const token = uniqueToken();
   await signUp(page.request, "Tess Director");
@@ -272,7 +222,7 @@ test("(h) the payout editor's default leaves what the places do not pay with the
   await setUpClock(page.request, tournament.id, TV_MONEY);
   await startClock(page.request, tournament.id);
 
-  await test.step("2nd is set to a fixed $100: what is left over goes to the club unless the TD says otherwise", async () => {
+  await test.step("2nd is set to a fixed $100: what is left over goes to the AP, with no question asked (round 7)", async () => {
     await page.goto(`/admin/tournaments/${tournament.id}?tab=money`);
     await page.getByTestId("edit-payouts").first().click();
     const editor = page.getByRole("dialog", { name: "Edit payouts" });
@@ -280,20 +230,22 @@ test("(h) the payout editor's default leaves what the places do not pay with the
     await editor.getByTestId("payout-place-2").getByRole("button", { name: "Fixed amount" }).click();
     await editor.getByLabel("2nd place", { exact: true }).fill("100");
     await expect(editor.getByTestId("payout-pays-2")).toContainText("$100 (fixed)");
-    // 1st's 50% is $200 and 3rd's 20% $80: $380 of the $400, so $20 is left over.
-    const choice = editor.getByTestId("difference-choice");
-    await expect(choice).toContainText("Where does the $20 left over go?");
-    await expect(choice.getByRole("radio", { name: /^Club keeps it/ })).toBeChecked();
+    // 1st's 50% is $200 and 3rd's 20% $80: $380 of the $400, so $20 is left over, for the club's fee.
+    await expect(editor.getByTestId("payout-sum")).toContainText("Leftover $20 → AP");
+    // The only choice left is the payout structure: nothing asks where the leftover goes.
+    await expect(editor.getByTestId("difference-choice")).toHaveCount(0);
+    await expect(editor.getByRole("radio", { name: /keeps it|Add it to 1st|Share it|Carry it/i })).toHaveCount(0);
     await editor.getByRole("button", { name: "Short field" }).click();
     await editor.getByTestId("save-payouts").click();
     await expect(editor).toBeHidden();
   });
 
-  await test.step("the TD's Money tab says what the club keeps", async () => {
+  await test.step("the TD's Money tab says what goes to the AP", async () => {
     await expect(page.getByTestId("difference-kept-by-club")).toContainText("$20");
+    await expect(page.getByTestId("pool-summary")).toContainText("Leftover $20 → AP");
     const pool = await poolOf(page.request, tournament.id);
     expect(pool.payouts.map((payout) => payout.amountCents)).toEqual([20_000, 10_000, 8_000]);
-    expect(pool.difference).toMatchObject({ choice: "club", keptByClubCents: 2_000 });
+    expect(pool.difference).toMatchObject({ keptByClubCents: 2_000, addedByClubCents: 0 });
   });
 
   await test.step("the public page and the TV show the places as set, and nothing of what the club keeps", async () => {
@@ -449,11 +401,12 @@ test("(j) a second QR sign-up past Max players waits as #2, and the waiting list
     expect(positions.sort()).toEqual([1, 2, null, null]);
   });
 
-  await test.step("the pool is the two accepted players' $80 everywhere; the waiting list is not 'not paid yet'", async () => {
+  await test.step("the pool is what the two accepted players' places pay of their $80, everywhere; the waiting list is not 'not paid yet'", async () => {
+    // $80 on Standard: 1st $40 and 2nd $24 are paid; 3rd has nobody, and its $16 is the club's (R7FREV0-MONEY-01).
     const { prizes, display } = await expectNoTakingsSent(playersPhone.request, tournament.id);
-    expect([prizes.poolCents, display.money.netCents, (await poolOf(page.request, tournament.id)).net]).toEqual([8_000, 8_000, 8_000]);
+    expect([prizes.poolCents, display.money.netCents, (await poolOf(page.request, tournament.id)).net]).toEqual([6_400, 6_400, 6_400]);
     await page.goto(`/admin/tournaments/${tournament.id}?tab=money`);
     await expect(page.getByTestId("paid-players-note")).toHaveText("Prize pool from 2 paid players");
-    await expect(page.getByTestId("net-prize-pool")).toHaveText("$80");
+    await expect(page.getByTestId("net-prize-pool")).toHaveText("$64");
   });
 });

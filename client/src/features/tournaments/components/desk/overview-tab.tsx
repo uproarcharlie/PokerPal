@@ -3,12 +3,12 @@ import type { Cents } from "@shared/domain/money";
 import type { TournamentMoney } from "@/lib/prize-pool";
 import { ApPanel } from "@/features/prize-pool/components/ap-panel";
 import { PaidPlayersNote } from "@/features/prize-pool/components/paid-players-note";
-import { usePrizePool } from "@/features/prize-pool/hooks";
 import { isClosedStatus } from "@shared/domain/tournaments";
 import { PrizePoolCalculator } from "../prize-pool/prize-pool-calculator";
 import { PrizeStructureCard } from "../prize-pool/prize-structure-card";
 import { TournamentInfoCard } from "./tournament-info-card";
 import { offersHighHand } from "@shared/domain/player-actions";
+import { isFreeTournament } from "@shared/domain/prize-pool";
 
 interface OverviewTabProps {
   tournament: TournamentDetailDto;
@@ -31,12 +31,17 @@ interface OverviewTabProps {
  */
 export function OverviewTab({ tournament, money, entrants, rakeLabel, highHandAwardsCents, timeZone, withDetails = true, onTakePayments }: OverviewTabProps) {
   const canManage = tournament.viewer.canManage;
-  // The season money carried over goes to, by name ("Carried over to Winter League"), as the server words it.
-  const carryTarget = usePrizePool(tournament.id, { follow: tournament, enabled: canManage }).data?.carryTarget;
   return (
     <div className="space-y-6">
       {canManage && !isClosedStatus(tournament.status) ? (
-        <PaidPlayersNote tournamentId={tournament.id} paid={money.breakdown.counts.registrations} entrants={entrants} onTakePayments={onTakePayments} />
+        <PaidPlayersNote
+          tournamentId={tournament.id}
+          paid={money.breakdown.counts.registrations}
+          entrants={entrants}
+          freeEntries={money.breakdown.freeEntries.entries}
+          freeTournament={isFreeTournament(tournament)}
+          onTakePayments={onTakePayments}
+        />
       ) : null}
       <PrizeStructureCard
         display={money.display}
@@ -53,7 +58,6 @@ export function OverviewTab({ tournament, money, entrants, rakeLabel, highHandAw
             display={money.display}
             rakeLabel={rakeLabel}
             highHandAwardsCents={highHandAwardsCents}
-            carryTarget={carryTarget}
           />
           <ApPanel tournament={tournament} />
         </div>

@@ -238,7 +238,8 @@ describe("POST /api/pending-actions/:id/confirm", () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
       success: true,
-      registration: { ...(asJson({ ...aliceRegistration, rebuys: 1 }) as object), player: publicPlayer(alice) },
+      // Who gave a free entry, and when, never leave the server (round 7).
+      registration: { ...(asJson({ ...aliceRegistration, rebuys: 1, freeEntryBy: undefined, freeEntryAt: undefined }) as object), player: publicPlayer(alice) },
       reentered: false,
       target: null,
     });

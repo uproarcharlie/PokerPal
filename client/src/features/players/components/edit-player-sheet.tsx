@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { MOBILE_LABEL } from "@/features/public-tournament/registration";
 import { showServerFieldErrors, formResolver } from "@/lib/forms";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/api/http";
@@ -31,7 +32,7 @@ interface EditPlayerSheetProps {
   onClose: () => void;
 }
 
-/** Edit a player's photo (or avatar), name, email and phone in a panel from the side. */
+/** Edit a player's photo (or avatar), name, email and mobile number (optional: round 7, item 9) in a panel from the side. */
 export function EditPlayerSheet({ player, onClose }: EditPlayerSheetProps) {
   return (
     <Sheet open={player !== null} onOpenChange={(open) => (open ? undefined : onClose())}>
@@ -127,7 +128,7 @@ function PlayerForm({ player, onDone }: { player: EditablePlayer; onDone: () => 
             name="phone"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Phone Number</FormLabel>
+                <FormLabel>{MOBILE_LABEL}</FormLabel>
                 <FormControl>
                   <Input {...field} type="tel" placeholder="e.g. 021 123 4567" />
                 </FormControl>

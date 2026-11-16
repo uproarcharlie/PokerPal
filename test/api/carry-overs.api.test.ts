@@ -1,8 +1,10 @@
 /**
- * Prize money carried over between tournaments (round 5, item 16; server/services/carry-overs.ts):
- * finalize records what a tournament's TD chose to carry over, the next tournament of its season (or
- * of the club) adds it to its pool and can take it out again, and a correction may not change money
- * another pool already holds. Everything is logged publicly and what the pools pay adds up to the cent.
+ * Prize money carried over between tournaments (round 5, item 16; server/services/carry-overs.ts). Since
+ * round 7 nothing new is carried over: a leftover is the club's fee, whatever a TD chose before. Money
+ * carried over before then can still be added to the next tournament of its season (or of the club) and
+ * taken out again, and a correction of a tournament that carried money over takes it back to $0 while no
+ * pool holds it, and leaves it in the pool that does (open or paid), frozen as carried over. It is logged
+ * to the staff's feed and what the pools pay adds up to the cent.
  */
 import { eq } from "drizzle-orm";
 import type request from "supertest";
@@ -33,7 +35,7 @@ async function game(staff: ClubStaffAgents, overrides: Partial<NewTournament> = 
   return tournament;
 }
 
-/** Custom places 1st $100, 2nd $50 (of a $200 pool: $50 left over), carried over. */
+/** Custom places 1st $100, 2nd $50 (of a $200 pool: $50 left over), as a page loaded before round 7 asked to carry it over. */
 const carryPlaces = { payoutStructure: "custom", places: [{ kind: "amount", amount: "100" }, { kind: "amount", amount: "50" }], prizeDifference: "carry" };
 
 const base = (id: string) => `/api/tournaments/${id}/prize-pool`;
@@ -45,43 +47,31 @@ const finalize = (agent: request.Agent, id: string, body: object = {}) => agent.
 const descriptions = async (id: string) => (await testDb().select().from(activityLog).where(eq(activityLog.tournamentId, id))).map((entry) => entry.description);
 const row = async (id: string) => (await testDb().select().from(tournaments).where(eq(tournaments.id, id)))[0];
 
-describe("finalize with Carry it over", () => {
-  it("records the money for the season's next tournament, freezes where it went and says so", async () => {
+describe("finalize since round 7", () => {
+  it("carries nothing over: the leftover is the club's fee, whatever was stored before round 7", async () => {
     const staff = await clubWithStaff({ rakeLabel: "AP" });
     const season = await createSeason({ clubId: staff.club.id, name: "Winter League" });
     const source = await game(staff, { name: "Test Wednesday", seasonId: season.id });
     await setPayouts(staff.owner.agent, source.id, carryPlaces);
+    await testDb().update(tournaments).set({ prizeDifference: "carry" }).where(eq(tournaments.id, source.id));
 
     const response = await finalize(staff.owner.agent, source.id);
 
     expect(response.status).toBe(200);
     expect(response.body.snapshot.paid.map((place: { amountCents: number }) => place.amountCents)).toEqual([10_000, 5_000]);
-    expect(response.body.snapshot.pool.difference).toMatchObject({ choice: "carry", carriedOverCents: 5_000, carryTarget: "Winter League" });
-    expect(response.body.snapshot.pool).toMatchObject({ netCents: 15_000, impliedRakeCents: 0 });
-    expect(await carryOversOf(source.id)).toMatchObject([
-      { sourceName: "Test Wednesday", targetSeasonId: season.id, amountCents: 5_000, appliedToTournamentId: null, createdBy: staff.owner.user.id },
-    ]);
-    expect(await descriptions(source.id)).toContain("The prizes add up to $150, $50 less than the $200 available for prizes: it is carried over to Winter League");
-  });
-
-  it("writes no carry-over when the club keeps the leftover", async () => {
-    const staff = await clubWithStaff();
-    const source = await game(staff);
-    await setPayouts(staff.owner.agent, source.id, { ...carryPlaces, prizeDifference: "club" });
-
-    expect((await finalize(staff.owner.agent, source.id)).status).toBe(200);
+    expect(response.body.snapshot.pool.difference).toEqual({ availableCents: 20_000, setCents: 15_000, cents: 5_000, keptByClubCents: 5_000, addedByClubCents: 0 });
+    expect(response.body.snapshot.pool).toMatchObject({ netCents: 15_000, impliedRakeCents: 5_000 });
     expect(await carryOversOf(source.id)).toEqual([]);
+    expect(await descriptions(source.id)).toContain("Leftover $50 → AP: the prizes add up to $150 of the $200 available for prizes");
   });
 });
 
-describe("adding carried-over money to a later pool", () => {
+describe("adding money carried over before round 7 to a later pool", () => {
+  /** What a finalize before round 7 carried over to the Winter League: $50 from Test Wednesday. */
   async function carried() {
     const staff = await clubWithStaff({ rakeLabel: "AP" });
     const season = await createSeason({ clubId: staff.club.id, name: "Winter League" });
-    const source = await game(staff, { name: "Test Wednesday", seasonId: season.id });
-    await setPayouts(staff.owner.agent, source.id, carryPlaces);
-    await finalize(staff.owner.agent, source.id);
-    const [carryOver] = await carryOversOf(source.id);
+    const { source, carryOver } = await createCarryOver({ clubId: staff.club.id, seasonId: season.id, sourceName: "Test Wednesday", amountCents: 5_000 });
     return { staff, season, source, carryOver };
   }
 
@@ -206,36 +196,76 @@ describe("adding carried-over money to a later pool", () => {
   });
 });
 
-describe("correcting the results of a tournament that carried money over", () => {
-  it("updates what it carries over while no pool holds it, and refuses to change money another pool holds", async () => {
-    const staff = await clubWithStaff();
+describe("correcting the results of a tournament that carried money over before round 7", () => {
+  /** Test Wednesday, finalized before round 7 with $50 carried over to the club's next tournament, Friday Night, which has added it. */
+  async function carriedAndAdded() {
+    const staff = await clubWithStaff({ rakeLabel: "AP" });
     const source = await game(staff, { name: "Test Wednesday" });
     await setPayouts(staff.owner.agent, source.id, carryPlaces);
-    await finalize(staff.owner.agent, source.id);
-    const [carryOver] = await carryOversOf(source.id);
-
-    // The TD switches to keeping the leftover and corrects the results: nothing is carried over any more.
-    await testDb().update(tournaments).set({ prizeDifference: "club" }).where(eq(tournaments.id, source.id));
-    const preview = await staff.owner.agent.post(`/api/tournaments/${source.id}/finalize/preview`).send({ force: true });
-    expect((await finalize(staff.owner.agent, source.id, { force: true, expectedPlanHash: preview.body.planHash })).status).toBe(200);
-    expect((await carryOversOf(source.id))[0]).toMatchObject({ id: carryOver.id, amountCents: 0 });
-
-    // Back to carrying it over, then a later tournament takes it.
-    await testDb().update(tournaments).set({ prizeDifference: "carry" }).where(eq(tournaments.id, source.id));
-    const again = await staff.owner.agent.post(`/api/tournaments/${source.id}/finalize/preview`).send({ force: true });
-    expect((await finalize(staff.owner.agent, source.id, { force: true, expectedPlanHash: again.body.planHash })).status).toBe(200);
+    expect((await finalize(staff.owner.agent, source.id)).status).toBe(200);
+    // As a finalize before round 7 left it: $50 carried over to the club's next tournament, and the snapshot saying so.
+    const [carryOver] = await testDb()
+      .insert(prizeCarryOvers)
+      .values({ sourceTournamentId: source.id, sourceName: source.name, targetSeasonId: null, amountCents: 5_000, createdBy: staff.owner.user.id })
+      .returning();
+    const snapshot = (await row(source.id)).prizePoolSnapshot;
+    if (!snapshot) throw new Error("Finalize kept no snapshot");
+    const legacy = { availableCents: 20_000, setCents: 15_000, cents: 5_000, keptByClubCents: 0, addedByClubCents: 0, choice: "carry", carriedOverCents: 5_000, carryTarget: "the next tournament" };
+    await testDb().update(tournaments).set({ prizeDifference: "carry", prizePoolSnapshot: { ...snapshot, pool: { ...snapshot.pool, difference: legacy } } }).where(eq(tournaments.id, source.id));
     const next = await game(staff, { name: "Friday Night" });
     expect((await apply(staff.owner.agent, next.id, carryOver.id)).status).toBe(200);
+    return { staff, source, carryOver, next };
+  }
 
-    // Now a correction that would change it is refused, and the preview says why.
-    await testDb().update(tournaments).set({ prizeDifference: "club" }).where(eq(tournaments.id, source.id));
-    const refusedPreview = await staff.owner.agent.post(`/api/tournaments/${source.id}/finalize/preview`).send({ force: true });
-    const reason = "$50 this tournament carried over is already in Friday Night's prize pool: take it out there before changing what is carried over";
-    expect(refusedPreview.body.warnings).toContain(reason);
-    const refused = await finalize(staff.owner.agent, source.id, { force: true, expectedPlanHash: refusedPreview.body.planHash });
+  const correct = async (agent: request.Agent, id: string) => {
+    const preview = await agent.post(`/api/tournaments/${id}/finalize/preview`).send({ force: true });
+    return { preview, corrected: await finalize(agent, id, { force: true, expectedPlanHash: preview.body.planHash }) };
+  };
+
+  it("leaves money another pool holds there, open or already paid, and freezes it as carried over (R7FREV0-CARRY-01)", async () => {
+    const { staff, source, carryOver, next } = await carriedAndAdded();
+    const held = "$50 this tournament carried over is in Friday Night's prize pool: it stays there, so it is not part of this prize pool";
+    const frozen = { availableCents: 15_000, setCents: 15_000, cents: 0, keptByClubCents: 0, addedByClubCents: 0, carriedOverCents: 5_000, carryTarget: "Friday Night" };
+
+    // While Friday Night is open: the preview can be finalized as it shows, and the correction goes through.
+    const first = await correct(staff.owner.agent, source.id);
+    expect(first.preview.body).toMatchObject({ ok: true, prizePool: { breakdown: { difference: frozen, impliedRake: 0 } } });
+    expect(first.preview.body.warnings).toContain(held);
+    expect(first.corrected.status).toBe(200);
+    expect(first.corrected.body.snapshot.pool).toMatchObject({ netCents: 15_000, impliedRakeCents: 0, difference: frozen });
+    expect((await carryOversOf(source.id))[0]).toMatchObject({ id: carryOver.id, amountCents: 5_000, appliedToTournamentId: next.id });
+    expect(await descriptions(source.id)).toContain("$50 stays carried over to Friday Night");
+
+    // Friday Night paid it out: the money can never be taken out there now, and a correction still goes through.
+    expect((await finalize(staff.owner.agent, next.id)).status).toBe(200);
+    const again = await correct(staff.owner.agent, source.id);
+    expect(again.preview.body.ok).toBe(true);
+    expect(again.corrected.status).toBe(200);
+    expect(again.corrected.body.snapshot.pool.difference).toEqual(frozen);
+    expect((await carryOversOf(source.id))[0]).toMatchObject({ amountCents: 5_000, appliedToTournamentId: next.id });
+    expect((await row(next.id)).prizePoolSnapshot?.pool.carriedIn).toEqual([expect.objectContaining({ carryOverId: carryOver.id, amountCents: 5_000 })]);
+  });
+
+  it("takes it back to $0 once it is taken out of the other pool: the leftover is then the club's", async () => {
+    const { staff, source, carryOver, next } = await carriedAndAdded();
+    expect((await takeOut(staff.owner.agent, next.id, carryOver.id)).status).toBe(200);
+
+    const { preview, corrected } = await correct(staff.owner.agent, source.id);
+    expect(preview.body.warnings.filter((warning: string) => warning.includes("carried over is in"))).toEqual([]);
+    expect(corrected.status).toBe(200);
+    expect(corrected.body.snapshot.pool.difference).toEqual({ availableCents: 20_000, setCents: 15_000, cents: 5_000, keptByClubCents: 5_000, addedByClubCents: 0 });
+    expect((await carryOversOf(source.id))[0]).toMatchObject({ id: carryOver.id, amountCents: 0, appliedToTournamentId: null });
+    expect((await list(staff.owner.agent, next.id)).available).toEqual([]);
+  });
+
+  it("is a changed plan when the money is taken out of the other pool after the preview", async () => {
+    const { staff, source, carryOver, next } = await carriedAndAdded();
+    const preview = await staff.owner.agent.post(`/api/tournaments/${source.id}/finalize/preview`).send({ force: true });
+    expect((await takeOut(staff.owner.agent, next.id, carryOver.id)).status).toBe(200);
+
+    const refused = await finalize(staff.owner.agent, source.id, { force: true, expectedPlanHash: preview.body.planHash });
     expect(refused.status).toBe(409);
-    expect(refused.body).toMatchObject({ code: "CONFLICT", error: reason });
-    expect((await row(source.id)).prizePoolSnapshot?.pool.difference).toMatchObject({ carriedOverCents: 5_000 });
-    expect((await testDb().select().from(prizeCarryOvers).where(eq(prizeCarryOvers.id, carryOver.id)))[0]).toMatchObject({ amountCents: 5_000, appliedToTournamentId: next.id });
+    expect(refused.body.code).toBe("PLAN_CHANGED");
+    expect((await carryOversOf(source.id))[0]).toMatchObject({ amountCents: 5_000, appliedToTournamentId: null });
   });
 });

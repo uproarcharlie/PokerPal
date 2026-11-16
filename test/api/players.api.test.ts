@@ -1,11 +1,13 @@
 /**
  * The player API: the staff list (GET /api/players is no longer public: SEC-09, security-13), sign-up
- * from the QR page (public, narrow DTO, phone de-duplication that never reveals who owns a number:
- * SEC-04, SEC-09, perf-24) and staff edits (SEC-04, img-04, img-24).
+ * from the QR page and the desk (public, narrow DTO, phone de-duplication that never reveals who owns
+ * a number: SEC-04, SEC-09, perf-24; the number optional: round 7, item 9) and staff edits (SEC-04,
+ * img-04, img-24).
  */
 import { eq } from "drizzle-orm";
 import request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
+import { sameNameSearch } from "@shared/api/players";
 import { findForbiddenKeys } from "@shared/api/public";
 import { auditLog, playerHomeClubs, players, tournamentRegistrations } from "@shared/schema";
 import { createClub, createPlayer, createRegistration, createTournament, createUser } from "../factories";
@@ -162,14 +164,20 @@ describe("POST /api/players", () => {
     expect(await testDb().select().from(players).where(eq(players.userId, account.id))).toEqual([]);
   });
 
-  it("needs a phone number from an anonymous visitor", async () => {
-    for (const phone of [undefined, "", "n/a"]) {
-      const response = await (await anon()).post("/api/players").send({ name: "No Number", phone });
+  it("lets an anonymous visitor sign up without a phone number, as a new player every time: a name alone matches nobody (round 7, item 9)", async () => {
+    const stored = await createPlayer({ name: "No Number", phone: null });
 
-      expect(response.status).toBe(400);
-      expect(response.body).toMatchObject({ error: "Invalid player data", code: "VALIDATION", details: [{ path: ["phone"] }] });
+    const ids: string[] = [];
+    for (const body of [{}, { phone: null }, { phone: "" }, { phone: "   " }]) {
+      const response = await (await anon()).post("/api/players").send({ name: "No Number", ...body });
+
+      expect(response.status).toBe(201);
+      expect(response.body).toEqual({ id: expect.any(String), name: "No Number", imageUrl: null, signUpToken: expect.any(String) });
+      expect(findForbiddenKeys(response.body)).toEqual([]);
+      expect((await playerRow(response.body.id)).phone).toBeNull();
+      ids.push(response.body.id);
     }
-    expect(await allPlayers()).toEqual([]);
+    expect(new Set([stored.id, ...ids]).size).toBe(5);
   });
 
   it("lets signed-in staff create a player with only a name, answering with the staff fields", async () => {
@@ -554,6 +562,65 @@ describe("the club that adds a player is their home club, so nobody can claim th
     const finished = await createTournament({ clubId: club.id, status: "completed" });
     expect((await (await anon()).post("/api/players").send({ ...body, tournamentId: finished.id })).body.code).toBe("TOURNAMENT_CLOSED");
     expect(await allPlayers()).toEqual([]);
+  });
+});
+
+describe("a phone number is optional (round 7, item 9)", () => {
+  it("lets the QR page find a player without one by name at their club only, as PublicPlayer, and sign them up as themselves", async () => {
+    const home = await createClub();
+    const first = await createTournament({ clubId: home.id, status: "registration" });
+    const created = await (await anon()).post("/api/players").send({ name: "Sam Taylor", email: "sam@example.test", tournamentId: first.id });
+    expect(created.status).toBe(201);
+    expect(await homeClubOf(created.body.id)).toBe(home.id);
+    const next = await createTournament({ clubId: home.id, status: "registration" });
+    const elsewhere = await createTournament({ clubId: (await createClub()).id, status: "registration" });
+
+    // "Already played here? That's me": what the QR page asks before making a second Sam Taylor.
+    const found = await (await anon()).get(`/api/public/tournaments/${next.id}/players`).query(sameNameSearch("  sam   TAYLOR ") ?? {});
+    expect(found.status).toBe(200);
+    expect(found.body).toEqual([{ id: created.body.id, name: "Sam Taylor", imageUrl: null }]);
+    expect(findForbiddenKeys(found.body)).toEqual([]);
+    // Found by the club's own search, so its page signs them up with no token.
+    const signedUp = await (await anon()).post(`/api/tournaments/${next.id}/registrations`).send({ playerId: created.body.id });
+    expect(signedUp.status).toBe(201);
+    expect(findForbiddenKeys(signedUp.body)).toEqual([]);
+
+    // Another club's page neither finds them nor signs them up.
+    expect((await (await anon()).get(`/api/public/tournaments/${elsewhere.id}/players`).query({ q: "Sam Taylor" })).body).toEqual([]);
+    const stranger = await (await anon()).post(`/api/tournaments/${elsewhere.id}/registrations`).send({ playerId: created.body.id });
+    expect(stranger.status).toBe(404);
+    expect(stranger.body.code).toBe("PLAYER_NOT_FOUND");
+  });
+
+  it("lets the desk add a player with only a name for the tournament's club, listed for its staff and registered at once", async () => {
+    const club = await createClub();
+    const tournament = await createTournament({ clubId: club.id, status: "registration" });
+    const manager = await signInClubRole("manager", club.id);
+
+    const added = await manager.agent.post("/api/players").send({ name: "Desk Walk-in", phone: "", tournamentId: tournament.id });
+
+    expect(added.status).toBe(201);
+    expect(added.body).toMatchObject({ name: "Desk Walk-in", phone: null, email: null });
+    expect(await homeClubOf(added.body.id)).toBe(club.id);
+    expect((await manager.agent.get("/api/players")).body).toEqual([expect.objectContaining({ id: added.body.id, phone: null, canEdit: true })]);
+    expect((await manager.agent.post(`/api/tournaments/${tournament.id}/registrations`).send({ playerId: added.body.id })).status).toBe(201);
+  });
+
+  it("still matches a sign-up that gives a number by that number, never by the name of a player without one", async () => {
+    const noNumber = await createPlayer({ name: "Sam Taylor", phone: null });
+    const withNumber = await createPlayer({ name: "Sam Taylor", phone: "021 555 0101" });
+
+    const byNumber = await (await anon()).post("/api/players").send({ name: "sam taylor", phone: "0215550101" });
+    const newNumber = await (await anon()).post("/api/players").send({ name: "Sam Taylor", phone: "021 555 0202" });
+    const taken = await (await anon()).post("/api/players").send({ name: "Someone Else", phone: "021 555 0101" });
+
+    expect(byNumber.status).toBe(200);
+    expect(byNumber.body).toMatchObject({ id: withNumber.id, existing: true });
+    expect(newNumber.status).toBe(201);
+    expect([noNumber.id, withNumber.id]).not.toContain(newNumber.body.id);
+    expect(taken.status).toBe(409);
+    expect(taken.body.code).toBe("PHONE_TAKEN");
+    expect(taken.body).not.toHaveProperty("details");
   });
 });
 

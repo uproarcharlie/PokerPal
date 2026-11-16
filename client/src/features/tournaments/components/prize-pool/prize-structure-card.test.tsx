@@ -84,13 +84,39 @@ describe("PrizeStructureCard", () => {
     expect(within(table).getAllByText("Deal")).toHaveLength(4);
   });
 
-  it("says honestly where the money the prizes leave went, live (round 5, item 16)", async () => {
+  it("tells the staff the money the prizes leave goes to the club's fee, live (round 7), whatever was chosen before", async () => {
     const tournament = apTournament({ manualPrizePool: "600.00", prizeDifference: "carry" });
-    server.use(http.get("/api/tournaments/t1/prize-pool", () => HttpResponse.json(prizePoolDto(tournament, entrants(8), { carryTarget: "Winter League" }))));
+    server.use(http.get("/api/tournaments/t1/prize-pool", () => HttpResponse.json(prizePoolDto(tournament, entrants(8)))));
     renderWithApp(<PrizeStructureCard display={live} entrants={8} highHandAmount={null} tournament={tournament} />);
 
     // $800 in, $80 AP: $720 available, a $600 pool.
-    expect(await screen.findByTestId("pool-summary")).toHaveTextContent("Prize pool $600· AP $80· Carried over to Winter League $120");
+    expect(await screen.findByTestId("pool-summary")).toHaveTextContent("Prize pool $600· AP $80· Leftover $120 → AP");
+  });
+
+  it("tells the staff what the places with no player in the pool would pay goes to the club's fee, and a visitor nothing (R7FREV0-MONEY-01)", async () => {
+    // 2 paid of 5 playing: $200 less $20 AP is $180, of which 1st $90 and 2nd $54 are paid; 3rd's $36 is the club's.
+    server.use(http.get("/api/tournaments/t1/prize-pool", () => HttpResponse.json(prizePoolDto(apTournament(), entrants(2)))));
+    const two: PayoutDisplay = {
+      source: "live",
+      rows: [
+        { position: 1, amountCents: 9_000, percentage: 50 },
+        { position: 2, amountCents: 5_400, percentage: 30 },
+      ],
+      totalCents: 14_400,
+      undistributedCents: 0,
+    };
+    const { unmount } = renderWithApp(<PrizeStructureCard display={two} entrants={5} highHandAmount={null} tournament={apTournament()} />);
+
+    expect(await screen.findByTestId("undistributed")).toHaveTextContent(
+      "Only 2 paid players: places below 2nd are not paid, so the $36 they would pay goes to AP until more payments are confirmed.",
+    );
+    expect(screen.getByTestId("pool-summary")).toHaveTextContent("Prize pool $144· AP $20· Leftover $36 → AP");
+    unmount();
+
+    renderWithApp(<PrizeStructureCard display={two} entrants={5} highHandAmount={null} tournament={apTournament({ viewer: VISITOR_VIEW })} />);
+    expect(screen.getByRole("list", { name: "Top places" })).toBeInTheDocument();
+    expect(screen.queryByTestId("undistributed")).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/\$36|Leftover|not paid/);
   });
 
   it("says what the club added to prizes above the money available, and nothing when the prizes are what is available", async () => {
@@ -106,22 +132,13 @@ describe("PrizeStructureCard", () => {
     expect(screen.queryByTestId("pool-summary")).not.toBeInTheDocument();
   });
 
-  it("says where the difference went as finalize froze it", () => {
-    const difference = {
-      choice: "club" as const,
-      availableCents: 47_500,
-      setCents: 42_500,
-      cents: 5_000,
-      keptByClubCents: 5_000,
-      addedToPrizesCents: 0,
-      carriedOverCents: 0,
-      addedByClubCents: 0,
-    };
+  it("says what the leftover was as finalize froze it", () => {
+    const difference = { availableCents: 47_500, setCents: 42_500, cents: 5_000, keptByClubCents: 5_000, addedByClubCents: 0 };
     const snapshot = prizePoolSnapshotDto();
     const frozen = { ...snapshot, pool: { ...snapshot.pool, netCents: 42_500, impliedRakeCents: 7_500, difference } };
     renderWithApp(<PrizeStructureCard display={{ ...dealt, rows: [] }} entrants={3} highHandAmount={null} tournament={apTournament({ status: "completed", prizePoolSnapshot: frozen })} />);
 
-    expect(screen.getByTestId("pool-summary")).toHaveTextContent("Prize pool $425· Rake $25· Kept by the club $50");
+    expect(screen.getByTestId("pool-summary")).toHaveTextContent("Prize pool $425· Rake $25· Leftover $50 → Rake");
   });
 
   it("never shows a 0% share for a place paid outside the structure", () => {

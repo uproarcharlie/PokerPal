@@ -14,6 +14,8 @@ import type { FinalizeInput, FinalizePreviewDto, FinalizePreviewInput, FinalizeR
 import type {
   AdjustCountsInput,
   ConfirmedRegistrationDto,
+  FreeEntryChangedDto,
+  FreeEntryChangeInput,
   ManagedRegistration,
   PaymentConfirmedDto,
   PendingRegistrationDto,
@@ -85,6 +87,13 @@ export const removeRegistration = (id: string) => apiSend("DELETE", `/api/regist
 /** Confirms a payment; under "once they've paid" the answer says where auto-seat put the player (round 5). */
 export const confirmPayment = (registrationId: string) =>
   apiSend<PaymentConfirmedDto>("PATCH", `/api/registrations/${segment(registrationId)}/confirm-payment`);
+
+/**
+ * Gives a free entry (round 7), changes one, takes one back (a normal unpaid entry) or marks one paid.
+ * Giving one accepts the player like a payment, and the answer says where auto-seat put them.
+ */
+export const changeFreeEntry = (registrationId: string, input: FreeEntryChangeInput) =>
+  apiSend<FreeEntryChangedDto>("POST", `/api/registrations/${segment(registrationId)}/free-entry`, input);
 
 /**
  * A re-buy or add-on sold at the desk (or a count corrected): added on the server under its lock, with

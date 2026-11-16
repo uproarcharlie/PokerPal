@@ -5,9 +5,13 @@ import { Button } from "@/components/ui/button";
 import { playerName } from "@/features/tournaments/player-name";
 import { cn } from "@/lib/utils";
 import { UnpaidDot } from "./unpaid-dot";
+import { FreeEntryBadge } from "@/features/tournaments/components/free-entry/free-entry-badge";
+import type { FreeEntryStatus } from "@shared/api/registrations";
 
 interface UnseatedListProps {
   unseated: SeatingDto["unseated"];
+  /** The players let in free (round 7), by registration id: marked FREE. */
+  freeEntries?: ReadonlyMap<string, FreeEntryStatus>;
   selectedId: string | null;
   readOnly: boolean;
   busy: boolean;
@@ -18,7 +22,7 @@ interface UnseatedListProps {
 }
 
 /** Players still in without a seat (late sign-ups, re-entries, unseated): pick one up, or seat them at random in one tap. */
-export function UnseatedList({ unseated, selectedId, readOnly, busy, onSelect, onSeat }: UnseatedListProps) {
+export function UnseatedList({ unseated, freeEntries, selectedId, readOnly, busy, onSelect, onSeat }: UnseatedListProps) {
   const headingId = useId();
   if (unseated.length === 0) return null;
   return (
@@ -30,6 +34,7 @@ export function UnseatedList({ unseated, selectedId, readOnly, busy, onSelect, o
         {unseated.map((entry) => {
           const name = playerName(entry);
           const selected = entry.registrationId === selectedId;
+          const free = freeEntries?.get(entry.registrationId);
           return (
             <li key={entry.registrationId} className={cn("flex items-center gap-1 rounded-full border bg-card p-1", selected ? "border-primary ring-2 ring-primary" : "border-border")}>
               {readOnly ? (
@@ -37,6 +42,7 @@ export function UnseatedList({ unseated, selectedId, readOnly, busy, onSelect, o
                   <PlayerAvatar name={name} imageUrl={entry.player.imageUrl} size="xs" />
                   <span className="text-sm text-foreground">{name}</span>
                   {entry.paymentConfirmed ? null : <UnpaidDot />}
+                  {free ? <FreeEntryBadge entry={free} /> : null}
                 </span>
               ) : (
                 <>
@@ -50,6 +56,7 @@ export function UnseatedList({ unseated, selectedId, readOnly, busy, onSelect, o
                     <PlayerAvatar name={name} imageUrl={entry.player.imageUrl} size="xs" />
                     <span className="text-sm text-foreground">{name}</span>
                     {entry.paymentConfirmed ? null : <UnpaidDot />}
+                    {free ? <FreeEntryBadge entry={free} /> : null}
                   </button>
                   <Button type="button" size="sm" variant="secondary" className="h-11 rounded-full" busy={busy} aria-label={`Seat ${name} at random`} onClick={() => onSeat(entry.registrationId)}>
                     Seat

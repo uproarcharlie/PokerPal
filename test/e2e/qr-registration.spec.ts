@@ -131,6 +131,10 @@ test("a player registers from the QR code on a phone: new with a selfie, then an
     await page.getByTestId("player-name").fill(newcomer.name);
     await page.getByTestId("player-phone").fill(newcomer.phone);
     await page.getByTestId("step2-next").click();
+    // The club has a player with this name: asked about with a number typed too (R7FREV1-02), and it is them.
+    const suggestion = page.getByTestId("same-name-suggestion");
+    await expect(suggestion).toBeVisible();
+    await suggestion.getByRole("button", { name: `${newcomer.name} That's me` }).click();
 
     await expect(toast(page, "Welcome back!")).toBeVisible();
     await expect(page.getByTestId("registering-as")).toHaveText(`Registering ${newcomer.name}`);

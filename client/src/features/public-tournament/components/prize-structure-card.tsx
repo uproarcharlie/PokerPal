@@ -25,7 +25,7 @@ interface PrizeStructureCardProps {
   prizes: PublicPrizesDto;
   /** The field (not the waiting list behind a full one): who finished where, and how many are playing. */
   registrations: readonly PublicRegistration[];
-  /** Whether points are shown: the tournament tracks them (`trackPoints`). */
+  /** Whether points are shown: the tournament tracks them and something scores them (`showsPoints`). */
   trackPoints: boolean;
   pointsRules: PointsRulesFigure;
   /** Asks for the points rules again, after they failed. */
@@ -50,8 +50,8 @@ export function PrizeStructureCard({ prizes, registrations, trackPoints, pointsR
   const paidDeal = prizes.deal;
   const dealt = new Set(paidDeal?.players.map((player) => player.registrationId) ?? []);
   const carried = revealed && !cancelled ? carriedInNote(prizes.carriedIn) : null;
-  // Places beyond the paid players in the pool are not paid: while part of it is not, the places listed are one per paid player.
-  const undistributed = revealed ? undistributedNote(prizes, { paid: prizes.payouts.length, field: registrations.length }) : null;
+  // Only a pool paid before round 7 can have left part of it unpaid: since then the pool is what the places pay.
+  const undistributed = revealed ? undistributedNote(prizes) : null;
 
   return (
     <Card>

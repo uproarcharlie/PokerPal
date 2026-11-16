@@ -23,6 +23,14 @@ describe("TablePlan", () => {
     expect(within(plan).getByText("Aroha N.")).toHaveAttribute("class", expect.stringContaining("truncate"));
   });
 
+  it("marks a player the club let in free for the TD, in the seat's name too (round 7)", () => {
+    render(<TablePlan name="Table 2" seatCount={2} seats={[{ seatNumber: 1, player: { id: "p1", name: "Aroha Ngata", imageUrl: null }, free: true }]} />);
+
+    const plan = screen.getByRole("group", { name: "Table 2: 1 of 2 seats taken" });
+    expect(within(plan).getByText("Seat 1: Aroha Ngata, free entry")).toBeInTheDocument();
+    expect(within(plan).getByText("Free")).toBeInTheDocument();
+  });
+
   it("makes every seat a button for the TD, the one picked up pressed", async () => {
     const onSeatPress = vi.fn();
     const user = userEvent.setup();

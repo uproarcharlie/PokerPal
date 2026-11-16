@@ -1,6 +1,6 @@
 import { useId } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
-import { Check, CheckCircle2, Clock, Hourglass, Trophy } from "lucide-react";
+import { Check, CheckCircle2, Clock, Hourglass, Ticket, Trophy, Undo2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -8,9 +8,11 @@ import { EmptyState, LoadingRows, QueryState } from "@/components/shared/query-s
 import { ResponsiveTable, type ResponsiveColumn } from "@/components/shared/responsive-table";
 import { formatMoney, formatTime, plural } from "@/lib/format";
 import type { ConfirmedRegistrationDto, PendingRegistrationDto, StaffRegistrationDto } from "@shared/api/registrations";
+import { isFreeEntry } from "@shared/domain/prize-pool";
 import { toCents } from "@shared/domain/money";
 import { waitingListPlaceOf } from "@/features/public-tournament/waiting-list";
 import { playerName } from "../../player-name";
+import { FreeEntryBadge } from "../free-entry/free-entry-badge";
 
 /** A phone number for the player's own club; another club's player keeps theirs (ClubPlayer.canEdit). */
 const phoneOf = (registration: StaffRegistrationDto) =>
@@ -63,6 +65,13 @@ const earlyBirdColumn = <T extends StaffRegistrationDto>(toggle: EarlyBirdToggle
   cell: (registration) => <EarlyBirdSwitch registration={registration} toggle={toggle} />,
 });
 
+/** Under the total collected: "confirmed and paid", or how many of them came in free. */
+function freeEntryNote(rows: readonly ConfirmedRegistrationDto[], freeTournament: boolean): string {
+  if (freeTournament) return "accepted";
+  const free = rows.filter(isFreeEntry).length;
+  return free > 0 ? `confirmed · ${free} free ${free === 1 ? "entry" : "entries"}` : "confirmed and paid";
+}
+
 /** The server's amounts (dollars), added up to the cent. */
 const totalCents = (amounts: readonly number[]) => amounts.reduce((sum, amount) => sum + toCents(amount), 0);
 
@@ -87,6 +96,16 @@ interface PendingPaymentsProps {
   /** The registration being confirmed: only its own button waits for the server. */
   confirmingIds: ReadonlySet<string>;
   onConfirm: (registrationId: string) => void;
+  /**
+   * Opens the free-entry sheet for a sign-up (round 7, item 6): "Free entry" beside Confirm Payment.
+   * Left out where nobody pays a buy-in (`freeTournament`).
+   */
+  onFreeEntry?: (registration: PendingRegistrationDto) => void;
+  /**
+   * The game has no buy-in (round 7, item 8): nobody pays to play, so each sign-up is accepted
+   * ("Accept"), which confirms it at $0 (or at what its high hand costs).
+   */
+  freeTournament?: boolean;
   earlyBirds: EarlyBirdToggle;
   /**
    * Why nobody more can be accepted now ("18 of 18 players accepted: raise Max players to accept
@@ -113,19 +132,37 @@ function splitPending(rows: readonly PendingRegistrationDto[]): { field: Pending
  * one's payment accepts them, which the server refuses while Max players are accepted, so the list
  * says so first. Their amounts are not in the total: they pay once a place opens.
  */
-export function PendingPayments({ query, timeZone, confirmingIds, onConfirm, earlyBirds, full = null }: PendingPaymentsProps) {
+export function PendingPayments({ query, timeZone, confirmingIds, onConfirm, onFreeEntry, freeTournament = false, earlyBirds, full = null }: PendingPaymentsProps) {
   const waitingListHeading = useId();
   const confirmButton = (registration: PendingRegistrationDto) => (
-    <Button
-      className="h-11 md:h-10"
-      onClick={() => onConfirm(registration.id)}
-      busy={confirmingIds.has(registration.id)}
-      aria-label={`Confirm payment for ${playerName(registration)}`}
-      data-testid={`confirm-payment-${registration.id}`}
-    >
-      <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-      Confirm Payment
-    </Button>
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      {onFreeEntry && !freeTournament ? (
+        <Button
+          variant="outline"
+          className="h-11 md:h-10"
+          // Not while its payment is being confirmed: one answer at a time for a row.
+          onClick={() => {
+            if (!confirmingIds.has(registration.id)) onFreeEntry(registration);
+          }}
+          aria-disabled={confirmingIds.has(registration.id) || undefined}
+          aria-label={`Free entry for ${playerName(registration)}`}
+          data-testid={`free-entry-${registration.id}`}
+        >
+          <Ticket className="h-4 w-4" aria-hidden="true" />
+          Free entry
+        </Button>
+      ) : null}
+      <Button
+        className="h-11 md:h-10"
+        onClick={() => onConfirm(registration.id)}
+        busy={confirmingIds.has(registration.id)}
+        aria-label={freeTournament ? `Accept ${playerName(registration)}` : `Confirm payment for ${playerName(registration)}`}
+        data-testid={`confirm-payment-${registration.id}`}
+      >
+        <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+        {freeTournament ? "Accept" : "Confirm Payment"}
+      </Button>
+    </div>
   );
   const player: ResponsiveColumn<PendingRegistrationDto> = { id: "player", header: "Player", phone: "title", className: "font-medium", cell: playerName };
   const phone: ResponsiveColumn<PendingRegistrationDto> = { id: "phone", header: "Phone", className: "text-muted-foreground", cell: phoneOf };
@@ -197,10 +234,15 @@ export function PendingPayments({ query, timeZone, confirmingIds, onConfirm, ear
                   rowProps={(registration) => ({ "data-testid": `registration-${registration.id}` })}
                   caption="Registrations waiting for payment"
                 />
-                <Total label="Total Pending" cents={totalCents(field.map((row) => row.amountOwed))} players={field.length} note="awaiting confirmation" />
+                <Total
+                  label={freeTournament ? "Still to pay" : "Total Pending"}
+                  cents={totalCents(field.map((row) => row.amountOwed))}
+                  players={field.length}
+                  note={freeTournament ? "waiting to be accepted" : "awaiting confirmation"}
+                />
               </>
             ) : (
-              <p className="text-sm text-muted-foreground">Everyone in the field has paid.</p>
+              <p className="text-sm text-muted-foreground">{freeTournament ? "Everyone in the field has been accepted." : "Everyone in the field has paid."}</p>
             )}
             {waiting.length > 0 ? (
               <section aria-labelledby={waitingListHeading} className="mt-6 space-y-3" data-testid="payment-waiting-list">
@@ -209,7 +251,9 @@ export function PendingPayments({ query, timeZone, confirmingIds, onConfirm, ear
                   Waiting list · {waiting.length}
                 </h3>
                 <p className="text-sm text-muted-foreground">
-                  Signed up after the field filled, in order. Confirming a payment accepts the player: take the next one&apos;s when a place opens.
+                  {freeTournament
+                    ? "Signed up after the field filled, in order. Accept the next one when a place opens."
+                    : "Signed up after the field filled, in order. Confirming a payment accepts the player: take the next one's when a place opens."}
                 </p>
                 {full ? (
                   <p className="rounded-md bg-muted px-3 py-2 text-sm font-medium text-foreground" data-testid="payment-waiting-full">
@@ -233,14 +277,70 @@ export function PendingPayments({ query, timeZone, confirmingIds, onConfirm, ear
   );
 }
 
+/** A free entry's other way out (round 7): back to a normal unpaid entry, or paid after all. */
+export type FreeEntryUndo = "take_back" | "mark_paid";
+
+/** What the confirmed list does with a free entry (round 7, item 6). */
+export interface FreeEntryActions {
+  /** The registrations whose change is being saved: their buttons wait for the server. */
+  busy: ReadonlySet<string>;
+  onChange: (registration: ConfirmedRegistrationDto, change: FreeEntryUndo) => void;
+}
+
+/** A free entry's FREE mark, and its way back: Mark paid, or Undo (a normal unpaid entry again). */
+function FreeEntryStatusCell({ registration, actions }: { registration: ConfirmedRegistrationDto; actions?: FreeEntryActions }) {
+  const name = playerName(registration);
+  const busy = actions?.busy.has(registration.id) ?? false;
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      <FreeEntryBadge entry={registration} />
+      {actions ? (
+        <>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-11 md:h-9"
+            busy={busy}
+            onClick={() => actions.onChange(registration, "mark_paid")}
+            aria-label={`Mark ${name} paid`}
+            data-testid={`free-entry-paid-${registration.id}`}
+          >
+            <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+            Mark paid
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-11 md:h-9"
+            busy={busy}
+            onClick={() => actions.onChange(registration, "take_back")}
+            aria-label={`Undo ${name}'s free entry`}
+            data-testid={`free-entry-undo-${registration.id}`}
+          >
+            <Undo2 className="h-4 w-4" aria-hidden="true" />
+            Undo
+          </Button>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 interface ConfirmedPaymentsProps {
   query: UseQueryResult<ConfirmedRegistrationDto[]>;
   timeZone: string;
   earlyBirds: EarlyBirdToggle;
+  /** Mark paid and Undo for a free entry; left out, its FREE mark is shown alone. */
+  freeEntries?: FreeEntryActions;
+  /** The game has no buy-in (round 7, item 8): the players were accepted, not paid. */
+  freeTournament?: boolean;
 }
 
-/** Players who have paid: what each paid, by the same formula as what they owed. */
-export function ConfirmedPayments({ query, timeZone, earlyBirds }: ConfirmedPaymentsProps) {
+/**
+ * Players who have paid, or were let in free (round 7: FREE, with Mark paid and Undo): what each paid,
+ * by the same formula as what they owed (a free entry's buy-in is not paid).
+ */
+export function ConfirmedPayments({ query, timeZone, earlyBirds, freeEntries, freeTournament = false }: ConfirmedPaymentsProps) {
   const columns: ResponsiveColumn<ConfirmedRegistrationDto>[] = [
     {
       id: "player",
@@ -268,12 +368,16 @@ export function ConfirmedPayments({ query, timeZone, earlyBirds }: ConfirmedPaym
       id: "status",
       header: "Status",
       className: "text-right",
-      cell: () => (
-        <Badge className="bg-status-live text-status-live-foreground hover:bg-status-live">
-          <Check className="mr-1 h-3 w-3" aria-hidden="true" />
-          Confirmed
-        </Badge>
-      ),
+      phone: "actions",
+      cell: (registration) =>
+        isFreeEntry(registration) ? (
+          <FreeEntryStatusCell registration={registration} actions={freeEntries} />
+        ) : (
+          <Badge className="bg-status-live text-status-live-foreground hover:bg-status-live">
+            <Check className="mr-1 h-3 w-3" aria-hidden="true" />
+            {freeTournament ? "Accepted" : "Confirmed"}
+          </Badge>
+        ),
     },
   ];
 
@@ -285,8 +389,8 @@ export function ConfirmedPayments({ query, timeZone, earlyBirds }: ConfirmedPaym
       empty={
         <EmptyState
           icon={<CheckCircle2 className="h-8 w-8" />}
-          title="No confirmed players yet"
-          description="Confirmed players will appear here"
+          title={freeTournament ? "Nobody accepted yet" : "No confirmed players yet"}
+          description={freeTournament ? "Accepted players will appear here" : "Confirmed players will appear here"}
         />
       }
     >
@@ -297,9 +401,14 @@ export function ConfirmedPayments({ query, timeZone, earlyBirds }: ConfirmedPaym
             columns={columns}
             rowKey={(registration) => registration.id}
             rowProps={(registration) => ({ "data-testid": `confirmed-registration-${registration.id}` })}
-            caption="Players who have paid"
+            caption={freeTournament ? "Players accepted" : "Players who have paid"}
           />
-          <Total label="Total Collected" cents={totalCents(rows.map((row) => row.amountPaid))} players={rows.length} note="confirmed and paid" />
+          <Total
+            label="Total Collected"
+            cents={totalCents(rows.map((row) => row.amountPaid))}
+            players={rows.length}
+            note={freeEntryNote(rows, freeTournament)}
+          />
         </>
       )}
     </QueryState>

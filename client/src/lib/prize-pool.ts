@@ -5,9 +5,11 @@
  */
 import type { PublicPrizesDto } from "@shared/api/live-display";
 import { formatMoney, type Cents } from "@shared/domain/money";
+import { placeName } from "@shared/domain/payouts";
 import {
   computePrizePool,
   payoutsForDisplay,
+  unfilledPlacesCents,
   type EntryInput,
   type PayoutDisplay,
   type PayoutDisplayTournament,
@@ -18,14 +20,14 @@ import {
 import { fieldEntries, type WaitingListEntry } from "@shared/domain/waiting-list";
 
 export interface TournamentMoney {
-  /** The live calculation (gross, AP, net, v2 payouts, high hand). */
+  /** The live calculation (gross, AP, net, v3 payouts, high hand). */
   breakdown: PrizePoolBreakdown;
-  /** The payouts to show: what was paid for a completed tournament, none for a cancelled one, else the live v2 split. */
+  /** The payouts to show: what was paid for a completed tournament, none for a cancelled one, else the live v3 split. */
   display: PayoutDisplay;
   /**
    * The prize pool to headline: the paid total once completed, nothing once cancelled, else the
-   * current net pool (also for a completed tournament whose prizes were never recorded, which screens
-   * label as not recorded).
+   * current net pool, what the places pay (round 7; also for a completed tournament whose prizes were
+   * never recorded, which screens label as not recorded).
    */
   poolCents: Cents;
 }
@@ -79,10 +81,7 @@ export function clubTake(pool: { impliedCents: Cents; netSource: PrizePoolBreakd
 
 /** Who a running game's pool is from: the players whose money is in it, and everyone playing. */
 export interface PoolPlayers {
-  /**
-   * The paid players the pool counts (round 6). While part of the pool is not paid out, the places
-   * listed are one per paid player, so a screen not told who has paid counts its places.
-   */
+  /** The accepted players the pool counts (round 6: paid, or given a free entry). */
   paid: number;
   /** Everyone in the field, paid or not (the waiting list behind a full one is not). */
   field: number;
@@ -93,23 +92,34 @@ export function poolPlayersOf(money: TournamentMoney, tournament: Pick<PrizePool
   return { paid: money.breakdown.counts.registrations, field: fieldEntries(registrations, tournament.maxPlayers).length };
 }
 
-/** Who reads the note: the club's staff, who confirm the payments, or the room. */
-export type NoteReader = "staff" | "room";
-
 /**
- * Why part of the pool is not paid out, in one wording for every screen that says so (the TD's and the
- * players' prize structure, the TV, the paid pool): fewer players in the pool than paid places. Only
- * paid players are in it (round 6), so while some of the field has not paid the note counts the paid
- * players and says the money comes as payments do, not as more players enter (R6REV0-MONEY-02). Null
- * when all of it is paid out. `players` is for a game still running.
+ * Why part of a completed tournament's pool was not paid out, in one wording for every screen that says
+ * so (the TD's and the players' prize structure, the paid pool): a snapshot frozen before round 7 kept
+ * the share of places beyond the players in its pool. Null when all of it was paid out, as always since
+ * round 7 (the pool is what the places pay: unfilledPlacesNote says, to the staff only, what the places
+ * with no player in them would pay).
  */
-export function undistributedNote(display: Pick<PayoutDisplay, "source" | "undistributedCents">, players: PoolPlayers, reader: NoteReader = "room"): string | null {
+export function undistributedNote(display: Pick<PayoutDisplay, "undistributedCents">): string | null {
   if (display.undistributedCents <= 0) return null;
-  const amount = formatMoney(display.undistributedCents);
-  if (display.source !== "live") return `${amount} of the pool was not paid out: there were fewer players than paid places.`;
-  const { paid, field } = players;
-  if (paid >= field) return `Only ${paid} ${paid === 1 ? "player" : "players"}: ${amount} of the pool is not paid out unless more players enter.`;
-  const until = reader === "staff" ? "until more payments are confirmed" : "yet";
-  return `Only ${paid} paid ${paid === 1 ? "player" : "players"}: ${amount} of the pool is not paid out ${until}.`;
+  return `${formatMoney(display.undistributedCents)} of the pool was not paid out: there were fewer players than paid places.`;
 }
 
+/**
+ * For the club's staff only (round 7: it is part of the club's fee): while fewer players are in the pool
+ * than there are paid places, the places below them are not paid and what they would pay goes to the
+ * club's fee with the rest of the leftover. Only accepted players are in the pool (round 6), so while
+ * some of the field (`players.field`) is not, the money comes as payments are confirmed
+ * (R6REV0-MONEY-02). Null when every place has a player, or nobody is in the pool yet.
+ */
+export function unfilledPlacesNote(
+  breakdown: Pick<PrizePoolBreakdown, "manualPrizePool" | "netAfterAp" | "structure" | "counts">,
+  players: PoolPlayers,
+  rakeLabel: string,
+): string | null {
+  const cents = unfilledPlacesCents(breakdown);
+  const { paid, field } = players;
+  if (cents <= 0 || paid <= 0) return null;
+  const who = paid >= field ? `${paid} ${paid === 1 ? "player" : "players"}` : `${paid} paid ${paid === 1 ? "player" : "players"}`;
+  const until = paid >= field ? "unless more players enter" : "until more payments are confirmed";
+  return `Only ${who}: places below ${placeName(paid)} are not paid, so the ${formatMoney(cents)} they would pay goes to ${rakeLabel} ${until}.`;
+}

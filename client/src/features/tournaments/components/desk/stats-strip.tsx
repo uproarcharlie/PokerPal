@@ -130,7 +130,7 @@ export function StatsStrip({ tournament, money, totalPlayers, waitingList, entri
         {editing === "pool" && canEditPool && !apFixed ? (
           <ManualPoolEditor
             tournamentId={tournament.id}
-            current={tournament.manualPrizePool}
+            current={tournament.manualPrizePool ?? null}
             calculatedCents={money.breakdown.netAfterAp}
             onDone={poolSaved}
           />

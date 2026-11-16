@@ -26,7 +26,7 @@ import {
 
 const percent = (value: string): PayoutRowValues => ({ kind: "percent", value });
 const amount = (value: string): PayoutRowValues => ({ kind: "amount", value });
-const custom = (...places: PayoutRowValues[]): PayoutEditorValues => ({ payoutStructure: "custom", places, prizeDifference: "club", reason: "" });
+const custom = (...places: PayoutRowValues[]): PayoutEditorValues => ({ payoutStructure: "custom", places, reason: "" });
 
 describe("the payout editor's boxes", () => {
   it("show a place as the number typed: whole dollars without cents", () => {
@@ -45,20 +45,19 @@ describe("the payout editor's boxes", () => {
   });
 
   it("open on the stored structure, with the stored custom places or else Standard's", () => {
-    expect(startingValues({ payoutStructure: "top5", customPayouts: null, prizeDifference: null })).toEqual({
+    expect(startingValues({ payoutStructure: "top5", customPayouts: null })).toEqual({
       payoutStructure: "top5",
       places: [percent("50"), percent("30"), percent("20")],
-      prizeDifference: "club",
       reason: "",
     });
-    const stored = startingValues({ payoutStructure: "custom", customPayouts: '{"v":2,"places":[{"percent":60},{"amountCents":15000}]}', prizeDifference: "carry" });
+    const stored = startingValues({ payoutStructure: "custom", customPayouts: '{"v":2,"places":[{"percent":60},{"amountCents":15000}]}' });
     expect(stored.places).toEqual([percent("60"), amount("150")]);
-    expect(stored.prizeDifference).toBe("carry");
-    // An unknown structure, or custom places that cannot be read, open on what is paid: Standard; an unknown choice, the club keeping it.
-    expect(startingValues({ payoutStructure: "top4", customPayouts: "[70,20]", prizeDifference: "rest" as never })).toMatchObject({
+    // Nothing asks where a leftover goes any more (round 7): it is the club's fee.
+    expect(stored).not.toHaveProperty("prizeDifference");
+    // An unknown structure, or custom places that cannot be read, open on what is paid: Standard.
+    expect(startingValues({ payoutStructure: "top4", customPayouts: "[70,20]" })).toMatchObject({
       payoutStructure: "standard",
       places: [percent("50"), percent("30"), percent("20")],
-      prizeDifference: "club",
     });
   });
 
@@ -86,21 +85,17 @@ describe("the payout editor's boxes", () => {
 
 describe("payoutsFormSchema", () => {
   it("sends a standard structure without places, and a blank reason as none", () => {
-    expect(payoutsFormSchema.parse({ payoutStructure: "top5", places: [percent("")], prizeDifference: "club", reason: "  " })).toEqual({
-      payoutStructure: "top5",
-      prizeDifference: "club",
-    });
+    expect(payoutsFormSchema.parse({ payoutStructure: "top5", places: [percent("")], reason: "  " })).toEqual({ payoutStructure: "top5" });
   });
 
   it("sends custom places as the request schema wants them", () => {
-    expect(payoutsFormSchema.parse({ ...custom(percent("50"), amount("300"), percent("12.5")), prizeDifference: "carry", reason: " Short field " })).toEqual({
+    expect(payoutsFormSchema.parse({ ...custom(percent("50"), amount("300"), percent("12.5")), reason: " Short field " })).toEqual({
       payoutStructure: "custom",
       places: [
         { kind: "percent", percent: 50 },
         { kind: "amount", amount: "300.00" },
         { kind: "percent", percent: 12.5 },
       ],
-      prizeDifference: "carry",
       reason: "Short field",
     });
   });
@@ -150,40 +145,34 @@ describe("the money the editor works from", () => {
 });
 
 describe("the editor's sentences", () => {
-  const difference = (setCents: number, availableCents: number, choice: "club" | "first" | "pro_rata" | "carry" = "club") =>
-    settleDifference([setCents], setCents, availableCents, choice).difference;
-
-  it("say what is left over and where it goes, what the club adds, or that the prizes add up", () => {
-    expect(sumLine(difference(63_500, 73_500), "Winter League")).toEqual({ tone: "leftover", text: "$100 left over is kept by the club" });
-    expect(sumLine(difference(63_500, 73_500, "first"), "Winter League").text).toBe("$100 left over goes to 1st");
-    expect(sumLine(difference(63_500, 73_500, "pro_rata"), "Winter League").text).toBe("$100 left over is shared across the paid places");
-    expect(sumLine(difference(63_500, 73_500, "carry"), "Winter League").text).toBe("$100 left over is carried over to Winter League");
-    expect(sumLine(difference(78_500, 73_500), "x")).toEqual({ tone: "over", text: "Added by the club: $50" });
-    expect(sumLine(difference(73_500, 73_500), "x")).toEqual({ tone: "exact", text: "Adds up to the $735 available for prizes exactly" });
-    expect(sumLine(difference(0, 0), "x").tone).toBe("empty");
+  it("say what is left over for the club's fee under its name for it, what the club adds, or that the prizes add up (round 7)", () => {
+    expect(sumLine(settleDifference(63_500, 73_500), "AP")).toEqual({ tone: "leftover", text: "Leftover $100 → AP" });
+    // The rounding of each place to whole dollars is part of the leftover too.
+    expect(sumLine(settleDifference(73_400, 73_550), "Rake").text).toBe("Leftover $1.50 → Rake");
+    expect(sumLine(settleDifference(78_500, 73_500), "AP")).toEqual({ tone: "over", text: "Added by the club: $50" });
+    expect(sumLine(settleDifference(73_500, 73_500), "AP")).toEqual({ tone: "exact", text: "Adds up to the $735 available for prizes exactly" });
+    expect(sumLine(settleDifference(0, 0), "AP").tone).toBe("empty");
   });
 
   it("say when there are more places than players", () => {
-    expect(unpaidPlacesNote(5, 3)).toBe("Only 3 players have paid: places below 3rd are paid only once more players pay.");
-    expect(unpaidPlacesNote(3, 1)).toBe("Only 1 player has paid: places below 1st are paid only once more players pay.");
-    expect(unpaidPlacesNote(3, 3)).toBeNull();
-    expect(unpaidPlacesNote(3, 0)).toBeNull();
+    expect(unpaidPlacesNote(5, 3, "AP")).toBe("Only 3 players have paid: places below 3rd are paid only once more players pay. Until then, what they would pay goes to AP.");
+    expect(unpaidPlacesNote(3, 1, "Rake")).toBe("Only 1 player has paid: places below 1st are paid only once more players pay. Until then, what they would pay goes to Rake.");
+    expect(unpaidPlacesNote(3, 3, "AP")).toBeNull();
+    expect(unpaidPlacesNote(3, 0, "AP")).toBeNull();
   });
 
-  it("know when nothing would change: the same structure, places and choice", () => {
-    const stored = { payoutStructure: "custom", customPayouts: "[50, 30, 20]", prizeDifference: null };
+  it("know when nothing would change: the same structure and places", () => {
+    const stored = { payoutStructure: "custom", customPayouts: "[50, 30, 20]" };
     expect(sameAsStored(custom(percent("50"), percent("30"), percent("20")), stored)).toBe(true);
-    expect(sameAsStored({ ...custom(percent("50"), percent("30"), percent("20")), prizeDifference: "first" }, stored)).toBe(false);
-    expect(sameAsStored({ ...custom(percent("50"), percent("30"), percent("20")), prizeDifference: "first" }, { ...stored, prizeDifference: "first" })).toBe(true);
     expect(sameAsStored(custom(percent("50"), percent("30"), amount("20")), stored)).toBe(false);
-    expect(sameAsStored({ payoutStructure: "top3", places: [], prizeDifference: "club", reason: "" }, stored)).toBe(false);
-    const standard = { payoutStructure: "standard", customPayouts: null, prizeDifference: null };
-    expect(sameAsStored({ payoutStructure: "standard", places: [], prizeDifference: "club", reason: "Again" }, standard)).toBe(true);
+    expect(sameAsStored({ payoutStructure: "top3", places: [], reason: "" }, stored)).toBe(false);
+    const standard = { payoutStructure: "standard", customPayouts: null };
+    expect(sameAsStored({ payoutStructure: "standard", places: [], reason: "Again" }, standard)).toBe(true);
     expect(sameAsStored(custom(percent("50"), percent("30"), percent("20")), { ...stored, customPayouts: null })).toBe(false);
   });
 });
 
-describe("what Save asks first (R5REV-HOST-06, round 5 item 16)", () => {
+describe("what Save asks first (R5REV-HOST-06)", () => {
   const check = (pool: number, available: number, ...places: Parameters<typeof toPayoutPlaces>[0]) =>
     payoutsSaveCheck(previewPayoutPlaces(pool, toPayoutPlaces(places), { availableCents: available }).difference);
 
@@ -196,7 +185,7 @@ describe("what Save asks first (R5REV-HOST-06, round 5 item 16)", () => {
     });
   });
 
-  it("asks nothing for a leftover (the editor asks where it goes as the TD types), prizes that add up, or places with a problem", () => {
+  it("asks nothing for a leftover (the club's fee, said in the sum line as the TD types), prizes that add up, or places with a problem", () => {
     // The owner's example: 1st $600, 2nd $300, 3rd $150 with $1,260 available.
     expect(check(126_000, 126_000, { kind: "amount", amount: "600" }, { kind: "amount", amount: "300" }, { kind: "amount", amount: "150" })).toBeNull();
     expect(check(73_500, 73_500, { kind: "percent", percent: 50 }, { kind: "percent", percent: 30 }, { kind: "percent", percent: 20 })).toBeNull();

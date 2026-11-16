@@ -11,7 +11,19 @@ const ANY = "any";
 export interface TournamentFilterValues {
   clubId?: string;
   status?: TournamentStatus;
+  /** True: only one-off games (no season, round 7); false: only season games. */
+  oneOff?: boolean;
 }
+
+/** Whether any filter is set. */
+export const hasFilters = (value: TournamentFilterValues) => Object.values(value).some((filter) => filter !== undefined);
+
+/** The season menu's choices, and the `oneOff` filter each one sets. */
+const GAME_KINDS = [
+  { value: ANY, label: "All games", oneOff: undefined },
+  { value: "season", label: "Season games", oneOff: false },
+  { value: "one-off", label: "One-off games", oneOff: true },
+] as const;
 
 interface TournamentFiltersProps {
   /** The clubs to filter by; undefined until they have loaded (the club menu waits for them). */
@@ -20,11 +32,11 @@ interface TournamentFiltersProps {
   onChange: (value: TournamentFilterValues) => void;
 }
 
-/** Narrows the list to one club and/or one status; the server applies both together. */
+/** Narrows the list to one club, season games or one-off games, and one status; the server applies them together. */
 export function TournamentFilters({ clubs, value, onChange }: TournamentFiltersProps) {
-  const filtered = value.clubId !== undefined || value.status !== undefined;
+  const kind = GAME_KINDS.find((choice) => choice.oneOff === value.oneOff) ?? GAME_KINDS[0];
   return (
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-end" role="search" aria-label="Filter tournaments">
+    <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end" role="search" aria-label="Filter tournaments">
       <div className="space-y-1 sm:w-56">
         <Label htmlFor="tournament-club-filter">Club</Label>
         <Select
@@ -40,6 +52,24 @@ export function TournamentFilters({ clubs, value, onChange }: TournamentFiltersP
             {(clubs ?? []).map((club) => (
               <SelectItem key={club.id} value={club.id}>
                 {club.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-1 sm:w-56">
+        <Label htmlFor="tournament-season-filter">Season</Label>
+        <Select
+          value={kind.value}
+          onValueChange={(choice) => onChange({ ...value, oneOff: GAME_KINDS.find((option) => option.value === choice)?.oneOff })}
+        >
+          <SelectTrigger id="tournament-season-filter" data-testid="season-filter">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {GAME_KINDS.map((choice) => (
+              <SelectItem key={choice.value} value={choice.value}>
+                {choice.label}
               </SelectItem>
             ))}
           </SelectContent>
@@ -64,7 +94,7 @@ export function TournamentFilters({ clubs, value, onChange }: TournamentFiltersP
           </SelectContent>
         </Select>
       </div>
-      {filtered ? (
+      {hasFilters(value) ? (
         <Button variant="ghost" onClick={() => onChange({})} data-testid="clear-filters">
           Clear filters
         </Button>

@@ -2,8 +2,9 @@
  * The payout editor (round 5, item 1): PUT /api/tournaments/:id/prize-pool/payouts
  * (server/services/payouts.ts). A standard structure, or custom places each a percentage of the pool or
  * a fixed amount, changed mid-game (also while the pool is locked) until the tournament closes; stored
- * backwards-compatibly in custom_payouts; logged publicly with its reason and audited; and what every
- * screen and finalize then pay.
+ * backwards-compatibly in custom_payouts; logged to the staff's feed with its reason and audited; and what
+ * every screen and finalize then pay. Since round 7 whatever the places leave of the money available is
+ * the club's fee, whatever a TD chose before, and what they need beyond it the club adds.
  */
 import { eq } from "drizzle-orm";
 import fc from "fast-check";
@@ -13,7 +14,6 @@ import type { ApUpdateResponse, PayoutPlaceInput } from "@shared/api/prize-pool"
 import { findForbiddenKeys } from "@shared/api/public";
 import { evenChop } from "@shared/domain/deal";
 import { allocatePayouts, parseCustomPayouts, PAYOUT_STRUCTURES, type StandardPayoutKey } from "@shared/domain/payouts";
-import { PRIZE_DIFFERENCE_CHOICES } from "@shared/domain/prize-difference";
 import { activityLog, auditLog, tournamentRegistrations, tournaments } from "@shared/schema";
 import { createPlayer, createRegistration, createSeason, createTournament, type NewTournament } from "../factories";
 import { resetDb, signIn, UNKNOWN_ID, testDb } from "../helpers";
@@ -69,10 +69,10 @@ describe("PUT /api/tournaments/:id/prize-pool/payouts", () => {
     expect((await row(tournament.id)).payoutStructure).toBe(response.status === 200 ? "top5" : "standard");
   });
 
-  it("pays custom places exactly as set, the club keeping the leftover by default, logged with the reason and audited", async () => {
+  it("pays custom places exactly as set, the leftover going to the club's fee, logged with the reason and audited", async () => {
     const { staff, tournament } = await poolTournament();
 
-    // $360: 50% is $180, $100 fixed, 10% is $36; the $44 left over the club keeps unless told otherwise.
+    // $360: 50% is $180, $100 fixed, 10% is $36; the $44 left over is the club's (round 7).
     const response = await put(staff.manager.agent, tournament.id, {
       payoutStructure: "custom",
       places: [percent(50), amount("100"), percent(10)],
@@ -103,13 +103,14 @@ describe("PUT /api/tournaments/:id/prize-pool/payouts", () => {
       [10_000, "amount"],
       [3_600, "percent"],
     ]);
-    expect(body.prizePool.breakdown).toMatchObject({ net: 31_600, impliedRake: 8_400, difference: { choice: "club", cents: 4_400, keptByClubCents: 4_400 } });
+    expect(body.prizePool.breakdown).toMatchObject({ net: 31_600, impliedRake: 8_400 });
+    expect(body.prizePool.breakdown.difference).toEqual({ availableCents: 36_000, setCents: 31_600, cents: 4_400, keptByClubCents: 4_400, addedByClubCents: 0 });
     expect(body.prizePool.display).toMatchObject({ source: "live", totalCents: 31_600, undistributedCents: 0 });
 
     const [entry] = await activity(tournament.id);
     expect(entry).toMatchObject({
       eventType: "payouts_changed",
-      description: "Payouts changed to Custom: 1st 50%, 2nd $100, 3rd 10%; $44 left over: the club keeps it (Short field)",
+      description: "Payouts changed to Custom: 1st 50%, 2nd $100, 3rd 10%; Leftover $44 → AP (Short field)",
       playerId: null,
     });
     expect(JSON.parse(entry.eventData ?? "")).toEqual({
@@ -120,17 +121,7 @@ describe("PUT /api/tournaments/:id/prize-pool/payouts", () => {
         { kind: "percent", basisPoints: 1000 },
       ],
       reason: "Short field",
-      prizeDifference: "club",
-      difference: {
-        choice: "club",
-        availableCents: 36_000,
-        setCents: 31_600,
-        cents: 4_400,
-        keptByClubCents: 4_400,
-        addedToPrizesCents: 0,
-        carriedOverCents: 0,
-        addedByClubCents: 0,
-      },
+      difference: { availableCents: 36_000, setCents: 31_600, cents: 4_400, keptByClubCents: 4_400, addedByClubCents: 0 },
     });
     expect(findForbiddenKeys(entry)).toEqual([]);
     expect(await audits(tournament.id)).toMatchObject([
@@ -143,49 +134,53 @@ describe("PUT /api/tournaments/:id/prize-pool/payouts", () => {
           after: { payoutStructure: "custom", customPayouts: stored.customPayouts },
           reason: "Short field",
           netCents: 31_600,
-          prizeDifference: { before: null, after: null },
         },
       },
     ]);
+    expect((await audits(tournament.id))[0].data).not.toHaveProperty("prizeDifference");
   });
 
-  it("pays the leftover where the TD chose: to 1st, shared across the places, or carried over to the season (round 5, item 16)", async () => {
+  it("gives the leftover to the club's fee whatever choice a page loaded before round 7 sends, writing and logging nothing for the choice", async () => {
     const { staff, tournament } = await poolTournament();
     const places = [percent(50), amount("100"), percent(10)];
     const paid = (response: { body: ApUpdateResponse }) => response.body.prizePool.breakdown.payouts.map((payout) => payout.amountCents);
 
     const first = await put(staff.owner.agent, tournament.id, { payoutStructure: "custom", places, prizeDifference: "first" });
     expect(first.status).toBe(200);
-    expect((await row(tournament.id)).prizeDifference).toBe("first");
-    expect(paid(first)).toEqual([22_400, 10_000, 3_600]);
-    expect((await activity(tournament.id))[0].description).toBe("Payouts changed to Custom: 1st 50%, 2nd $100, 3rd 10%; $44 left over: it goes to 1st");
+    expect(paid(first)).toEqual([18_000, 10_000, 3_600]);
+    expect(first.body.prizePool.breakdown.difference).toMatchObject({ cents: 4_400, keptByClubCents: 4_400 });
+    expect((await activity(tournament.id))[0].description).toBe("Payouts changed to Custom: 1st 50%, 2nd $100, 3rd 10%; Leftover $44 → AP");
 
-    // The choice alone is a change, logged on its own.
-    const shared = await put(staff.owner.agent, tournament.id, { payoutStructure: "custom", places, prizeDifference: "pro_rata" });
-    expect(paid(shared)).toEqual([20_600, 11_300, 4_100]);
-    expect(shared.body.prizePool.breakdown.net).toBe(36_000);
-    const carried = await put(staff.owner.agent, tournament.id, { payoutStructure: "custom", places, prizeDifference: "carry" });
-    expect(paid(carried)).toEqual([18_000, 10_000, 3_600]);
-    expect(carried.body.prizePool.breakdown).toMatchObject({ impliedRake: 4_000, difference: { carriedOverCents: 4_400 } });
-    const descriptions = (await activity(tournament.id)).map((entry) => entry.description);
-    expect(descriptions).toContain("Leftover prize money: Share it across the paid places; $44 left over: it is shared across the paid places");
-    expect(descriptions).toContain("Leftover prize money: Carry it over; $44 left over: it is carried over to the next tournament");
-
-    // Sending the same choice again writes nothing.
-    const logged = descriptions.length;
-    await put(staff.owner.agent, tournament.id, { payoutStructure: "custom", places, prizeDifference: "carry" });
-    expect(await activity(tournament.id)).toHaveLength(logged);
+    // Another choice alone is no change: the places are what is stored.
+    for (const prizeDifference of ["pro_rata", "carry", "club"]) {
+      const again = await put(staff.owner.agent, tournament.id, { payoutStructure: "custom", places, prizeDifference });
+      expect(again.status).toBe(200);
+      expect(paid(again)).toEqual([18_000, 10_000, 3_600]);
+      expect(again.body.prizePool.breakdown).toMatchObject({ net: 31_600, impliedRake: 8_400 });
+    }
+    expect((await row(tournament.id)).prizeDifference).toBeNull();
+    expect(await activity(tournament.id)).toHaveLength(1);
+    expect(await audits(tournament.id)).toHaveLength(1);
   });
 
-  it("names the season money is carried over to", async () => {
+  it("pays a tournament whose leftover was set before round 7 to go to 1st, the places or a later game as if it were the club's", async () => {
     const staff = await clubWithStaff({ rakeLabel: "AP" });
     const season = await createSeason({ clubId: staff.club.id, name: "Winter League" });
-    const { tournament } = await poolTournament({ seasonId: season.id }, 8, staff);
+    const customPayouts = '{"v":2,"places":[{"amountCents":20000},{"amountCents":10000}]}';
 
-    const response = await put(staff.owner.agent, tournament.id, { payoutStructure: "custom", places: [amount("200"), amount("100")], prizeDifference: "carry" });
+    for (const prizeDifference of ["first", "pro_rata", "carry"] as const) {
+      const { tournament } = await poolTournament({ seasonId: season.id, payoutStructure: "custom", customPayouts, prizeDifference }, 8, staff);
 
-    expect(response.body.prizePool.carryTarget).toBe("Winter League");
-    expect((await activity(tournament.id))[0].description).toBe("Payouts changed to Custom: 1st $200, 2nd $100; $60 left over: it is carried over to Winter League");
+      const response = await staff.owner.agent.get(`/api/tournaments/${tournament.id}/prize-pool`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.breakdown.payouts.map((payout: { amountCents: number }) => payout.amountCents)).toEqual([20_000, 10_000]);
+      // $360 available, $300 paid: the $60 left is the club's; nothing is carried over, so no game is named.
+      expect(response.body.breakdown).toMatchObject({ net: 30_000, impliedRake: 10_000 });
+      expect(response.body.breakdown.difference).toEqual({ availableCents: 36_000, setCents: 30_000, cents: 6_000, keptByClubCents: 6_000, addedByClubCents: 0 });
+      expect(response.body).not.toHaveProperty("carryTarget");
+      expect(response.body.display).toMatchObject({ source: "live", totalCents: 30_000 });
+    }
   });
 
   it("stores percentages adding up to 100% as the classic list every earlier build reads", async () => {
@@ -246,20 +241,20 @@ describe("PUT /api/tournaments/:id/prize-pool/payouts", () => {
     });
     expect(response.body.prizePool.breakdown).toMatchObject({ net: 40_000, impliedRake: 0, difference: { cents: -4_000, addedByClubCents: 4_000 } });
     expect(response.body.prizePool.display.rows.map((place: { amountCents: number }) => place.amountCents)).toEqual([30_000, 10_000]);
-    expect((await activity(tournament.id))[0].description).toBe("Payouts changed to Custom: 1st $300, 2nd $100; $40 added by the club");
+    expect((await activity(tournament.id))[0].description).toBe("Payouts changed to Custom: 1st $300, 2nd $100; Added by the club: $40");
   });
 
   it("pays a % place and a $ place that swap order at this pool as set, saying so everywhere and at finalize (R5REV1-PAY-01)", async () => {
     const { staff, tournament } = await poolTournament();
 
-    // From the $360 pool: 1st 30% = $108 + $52 left over (added to 1st) = $160, 2nd $200.
-    const response = await put(staff.owner.agent, tournament.id, { payoutStructure: "custom", places: [percent(30), amount("200")], prizeDifference: "first" });
+    // From the $360 available: 1st 30% = $108, 2nd $200; the $52 left is the club's, so the prize pool is $308.
+    const response = await put(staff.owner.agent, tournament.id, { payoutStructure: "custom", places: [percent(30), amount("200")] });
 
     expect(response.status).toBe(200);
-    expect(response.body.prizePool.breakdown.structure).toMatchObject({ used: "custom", warning: "From the $360 prize pool 2nd pays $200, more than 1st ($160)" });
-    expect(response.body.prizePool.breakdown.payouts.map((place: { amountCents: number }) => place.amountCents)).toEqual([16_000, 20_000]);
+    expect(response.body.prizePool.breakdown.structure).toMatchObject({ used: "custom", warning: "At this prize pool 2nd pays $200, more than 1st ($108)" });
+    expect(response.body.prizePool.breakdown.payouts.map((place: { amountCents: number }) => place.amountCents)).toEqual([10_800, 20_000]);
     const preview = await staff.owner.agent.post(`/api/tournaments/${tournament.id}/finalize/preview`).send({});
-    expect(preview.body.warnings).toContain("From the $360 prize pool 2nd pays $200, more than 1st ($160)");
+    expect(preview.body.warnings).toContain("At this prize pool 2nd pays $200, more than 1st ($108)");
   });
 
   it("is allowed while the pool is locked, and refused once the tournament is completed or cancelled", async () => {
@@ -305,10 +300,10 @@ describe("PUT /api/tournaments/:id/prize-pool/payouts", () => {
     expect((await put(agent, UNKNOWN_ID, { payoutStructure: "standard" })).status).toBe(404);
   });
 
-  it("is what finalize pays, with the places and where the leftover went frozen in the snapshot", async () => {
+  it("is what finalize pays, with the places and the leftover kept by the club frozen in the snapshot, whatever an old page chose", async () => {
     const { staff, tournament, registrations } = await poolTournament({}, 4);
     await bustAllBut(registrations, 1);
-    // $180: the places pay $100, 20% ($36) and $20; the $24 left over goes to 1st, as the TD chose.
+    // $180: the places pay $100, 20% ($36) and $20; the $24 left over is the club's, though a page loaded before round 7 said "first".
     await put(staff.owner.agent, tournament.id, { payoutStructure: "custom", places: [amount("100"), percent(20), amount("20")], prizeDifference: "first" });
 
     const response = await staff.owner.agent.post(`/api/tournaments/${tournament.id}/finalize`);
@@ -323,12 +318,13 @@ describe("PUT /api/tournaments/:id/prize-pool/payouts", () => {
         { kind: "amount", amountCents: 2_000 },
       ],
     });
-    expect(response.body.snapshot.paid.map((place: { amountCents: number }) => place.amountCents)).toEqual([12_400, 3_600, 2_000]);
-    expect(response.body.snapshot.pool.difference).toMatchObject({ choice: "first", cents: 2_400, addedToPrizesCents: 2_400 });
+    expect(response.body.snapshot.paid.map((place: { amountCents: number }) => place.amountCents)).toEqual([10_000, 3_600, 2_000]);
+    expect(response.body.snapshot.algorithm).toBe("v3-floor-remainder-fee");
+    expect(response.body.snapshot.pool.difference).toEqual({ availableCents: 18_000, setCents: 15_600, cents: 2_400, keptByClubCents: 2_400, addedByClubCents: 0 });
     const prizes = await testDb().select().from(tournamentRegistrations).where(eq(tournamentRegistrations.tournamentId, tournament.id));
-    expect(prizes.map((registration) => registration.prizeAmount).sort()).toEqual(["124.00", "20.00", "36.00", null].sort());
+    expect(prizes.map((registration) => registration.prizeAmount).sort()).toEqual(["100.00", "20.00", "36.00", null].sort());
     expect((await activity(tournament.id)).map((entry) => entry.description)).toContain(
-      "The prizes add up to $156, $24 less than the $180 available for prizes: it goes to 1st",
+      "Leftover $24 → AP: the prizes add up to $156 of the $180 available for prizes",
     );
   });
 
@@ -343,17 +339,24 @@ describe("PUT /api/tournaments/:id/prize-pool/payouts", () => {
     expect(response.body.snapshot.paid.map((place: { amountCents: number }) => place.amountCents)).toEqual([10_000, 3_600, 2_000]);
     expect(response.body.snapshot.pool).toMatchObject({ netCents: 15_600, impliedRakeCents: 4_400, difference: { keptByClubCents: 2_400 } });
     const [audit] = (await audits(tournament.id)).filter((entry) => entry.action === "tournament.finalize");
-    expect(audit.data).toMatchObject({ netCents: 15_600, difference: { choice: "club", keptByClubCents: 2_400 } });
+    expect(audit.data).toMatchObject({ netCents: 15_600, difference: { cents: 2_400, keptByClubCents: 2_400, addedByClubCents: 0 } });
   });
 
-  it("pays every standard structure exactly as before round 5", async () => {
+  it("pays every standard structure by the shared v3 rule, the rounding remainder to the club's fee (round 7)", async () => {
     const { staff, tournament } = await poolTournament({ buyInAmount: "47.35" }, 7);
 
     for (const key of Object.keys(PAYOUT_STRUCTURES) as StandardPayoutKey[]) {
       const response = await put(staff.owner.agent, tournament.id, { payoutStructure: key });
-      const { net, payouts } = (response.body as ApUpdateResponse).prizePool.breakdown;
+      const { net, netAfterAp, payouts, difference } = (response.body as ApUpdateResponse).prizePool.breakdown;
 
-      expect(payouts).toEqual(allocatePayouts(net, PAYOUT_STRUCTURES[key]));
+      // Top 8 and Top 9 have more places than the 7 players: those places are not paid, and what they would pay is the club's too (R7FREV0-MONEY-01).
+      const places = allocatePayouts(netAfterAp, PAYOUT_STRUCTURES[key]);
+      const unfilled = places.slice(7).reduce((sum, place) => sum + place.amountCents, 0);
+      expect(payouts).toEqual(places.slice(0, 7));
+      expect(payouts.every((payout) => payout.amountCents % 100 === 0)).toBe(true);
+      expect(net).toBe(payouts.reduce((sum, payout) => sum + payout.amountCents, 0));
+      expect(difference.keptByClubCents).toBe(netAfterAp - net);
+      expect(difference.keptByClubCents - unfilled).toBeLessThan(100 * places.length);
     }
   });
 });
@@ -391,12 +394,13 @@ const gameArbitrary = fc
     stillIn: fc.integer({ min: 2, max: 4 }),
     /** How the players still in split what they share: by these weights, whatever is left to the first. */
     dealWeights: fc.array(fc.nat({ max: 100 }), { minLength: 4, maxLength: 4 }),
-    prizeDifference: fc.constantFrom(...PRIZE_DIFFERENCE_CHOICES),
+    /** What a page loaded before round 7 may still send: it changes nothing (the leftover is the club's). */
+    prizeDifference: fc.constantFrom(undefined, "club", "first", "pro_rata", "carry"),
   })
   .chain((game) => placesFor(game.players * game.buyInCents * 0.9).map((places) => ({ ...game, places })));
 
 describe("payouts with fixed places, and deals (property)", () => {
-  it("always pay the pool to the cent, and a deal always shares exactly what the places still in pay", async () => {
+  it("always pay each place as set, account for the money available to the cent, and a deal always shares exactly what the places still in pay", async () => {
     const staff = await clubWithStaff({ rakeLabel: "AP" });
     await fc.assert(
       fc.asyncProperty(gameArbitrary, async ({ players, buyInCents, places, stillIn, dealWeights, prizeDifference }) => {
@@ -409,14 +413,15 @@ describe("payouts with fixed places, and deals (property)", () => {
         const { breakdown } = (saved.body as ApUpdateResponse).prizePool;
         const { difference } = breakdown;
         expect(breakdown.payouts.reduce((sum, payout) => sum + payout.amountCents, 0)).toBe(breakdown.net > 0 ? breakdown.net : 0);
-        expect(breakdown.net).toBe(breakdown.netAfterAp - difference.keptByClubCents - difference.carriedOverCents + difference.addedByClubCents);
+        // The prizes, the club's fee (its AP and the leftover) and what it adds account for every cent paid in.
+        expect(breakdown.net + breakdown.rake.applied + difference.keptByClubCents - difference.addedByClubCents).toBe(breakdown.gross.total);
+        expect(difference.keptByClubCents * difference.addedByClubCents).toBe(0);
         if (breakdown.structure.used === "custom" && breakdown.structure.places) {
-          breakdown.payouts.slice(1).forEach((payout, index) => {
-            const place = breakdown.structure.places?.[index + 1];
+          breakdown.payouts.forEach((payout, index) => {
+            const place = breakdown.structure.places?.[index];
             const own = place?.kind === "amount" ? place.amountCents : Math.floor((breakdown.netAfterAp * (place?.basisPoints ?? 0)) / 1_000_000) * 100;
-            // Only a share of the leftover is added below 1st, and only when the TD chose to share it.
-            if (prizeDifference === "pro_rata") expect(payout.amountCents).toBeGreaterThanOrEqual(own);
-            else expect(payout.amountCents).toBe(own);
+            // Every place, 1st included, pays exactly its own amount: nothing left over is added to any place.
+            expect(payout.amountCents).toBe(own);
           });
         }
 

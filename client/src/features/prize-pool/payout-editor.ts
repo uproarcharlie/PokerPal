@@ -1,9 +1,9 @@
 /**
- * The payout editor's values and wording (round 5, items 1 and 16): the boxes the TD types into, read as
- * the places shared/domain/payouts pays (each place a percentage of the pool or a fixed amount, paid
- * exactly as set), where any money they leave over goes (shared/domain/prize-difference: the club keeps
- * it unless the TD chooses otherwise), checked by the request schema the server checks with
- * (payoutsUpdateSchema), and the live sum line. What a place pays is always the domain's figure, never
+ * The payout editor's values and wording (round 5, item 1): the boxes the TD types into, read as the
+ * places shared/domain/payouts pays (each place a percentage of the pool or a fixed amount, paid exactly
+ * as set), checked by the request schema the server checks with (payoutsUpdateSchema), and the live sum
+ * line: what the places leave over goes to the club's fee ("Leftover $44 → AP", round 7), what they need
+ * beyond the money available the club adds. What a place pays is always the domain's figure, never
  * worked out here.
  */
 import { z } from "zod";
@@ -25,12 +25,7 @@ import {
   type PayoutStructureKey,
   type StandardPayoutKey,
 } from "@shared/domain/payouts";
-import {
-  PRIZE_DIFFERENCE_CHOICES,
-  readPrizeDifference,
-  type PrizeDifference,
-  type PrizeDifferenceChoice,
-} from "@shared/domain/prize-difference";
+import { leftoverText, type PrizeDifference } from "@shared/domain/prize-difference";
 import type { PrizePoolBreakdown } from "@shared/domain/prize-pool";
 
 /** One place as its boxes hold it: how it is set, and the number typed ("50" for 50%, "300" for $300). */
@@ -43,8 +38,6 @@ export interface PayoutEditorValues {
   payoutStructure: PayoutStructureKey;
   /** The custom places (shown and sent only for "custom"; kept while a standard structure is looked at). */
   places: PayoutRowValues[];
-  /** Where money the prizes leave over goes (round 5, item 16). */
-  prizeDifference: PrizeDifferenceChoice;
   reason: string;
 }
 
@@ -112,10 +105,10 @@ export function storedPlaces(tournament: Pick<TournamentDetailDto, "customPayout
  * What the editor opens on: the stored structure, and as the custom places those stored, or else
  * Standard's, so Custom always starts from something that pays.
  */
-export function startingValues(tournament: Pick<TournamentDetailDto, "payoutStructure" | "customPayouts" | "prizeDifference">): PayoutEditorValues {
+export function startingValues(tournament: Pick<TournamentDetailDto, "payoutStructure" | "customPayouts">): PayoutEditorValues {
   const payoutStructure = isStructureKey(tournament.payoutStructure) ? tournament.payoutStructure : "standard";
   const places = storedPlaces(tournament) ?? placesFromShares(PAYOUT_STRUCTURES.standard);
-  return { payoutStructure, places: places.map(rowOf), prizeDifference: readPrizeDifference(tournament.prizeDifference), reason: "" };
+  return { payoutStructure, places: places.map(rowOf), reason: "" };
 }
 
 /** A standard structure's places, to start the custom ones from ("Change these places"). */
@@ -143,8 +136,8 @@ const TYPE_MESSAGES: Readonly<Record<PayoutPlace["kind"], string>> = {
 };
 
 /** The request the boxes make (each custom place's box holding a number of its kind). */
-function requestOf({ payoutStructure, places, prizeDifference, reason }: PayoutEditorValues) {
-  return { payoutStructure, ...(payoutStructure === "custom" ? { places: places.map(inputOf) } : {}), prizeDifference, reason };
+function requestOf({ payoutStructure, places, reason }: PayoutEditorValues) {
+  return { payoutStructure, ...(payoutStructure === "custom" ? { places: places.map(inputOf) } : {}), reason };
 }
 
 /** Where an issue of the request goes on the form: a place's issue on its box, the rest where the request has it. */
@@ -159,7 +152,6 @@ export const payoutsFormSchema = z
   .object({
     payoutStructure: z.enum(PAYOUT_STRUCTURE_KEYS),
     places: z.array(z.object({ kind: z.enum(["percent", "amount"]), value: z.string() })),
-    prizeDifference: z.enum(PRIZE_DIFFERENCE_CHOICES),
     reason: z.string(),
   })
   .superRefine((values, ctx) => {
@@ -187,31 +179,23 @@ export interface PayoutSumLine {
   text: string;
 }
 
-/** Where money left over goes, as the end of "$44 left over …". */
-const LEFTOVER_GOES: Readonly<Record<PrizeDifferenceChoice, (carryTarget: string) => string>> = {
-  club: () => "is kept by the club",
-  first: () => "goes to 1st",
-  pro_rata: () => "is shared across the paid places",
-  carry: (carryTarget) => `is carried over to ${carryTarget}`,
-};
-
 /**
- * The live sum check of the prizes as set against the money available: what is left over and where it
- * goes, what the club adds when they are more, or that they add up exactly.
+ * The live sum check of the prizes as set against the money available: what is left over, which goes to
+ * the club's fee under its name for it (`rakeLabel`: "Leftover $44 → AP", the rounding included), what
+ * the club adds when they are more, or that they add up exactly. Staff-only, like the editor.
  */
-export function sumLine(difference: Pick<PrizeDifference, "cents" | "choice" | "availableCents" | "setCents">, carryTarget: string): PayoutSumLine {
+export function sumLine(difference: Pick<PrizeDifference, "cents" | "availableCents" | "setCents">, rakeLabel: string): PayoutSumLine {
   if (difference.availableCents <= 0 && difference.setCents <= 0) {
     return { tone: "empty", text: "No prize pool yet: each place is worked out as players enter." };
   }
   if (difference.cents < 0) return { tone: "over", text: `Added by the club: ${formatMoney(-difference.cents)}` };
-  if (difference.cents > 0) return { tone: "leftover", text: `${formatMoney(difference.cents)} left over ${LEFTOVER_GOES[difference.choice](carryTarget)}` };
+  if (difference.cents > 0) return { tone: "leftover", text: leftoverText(difference.cents, rakeLabel) };
   return { tone: "exact", text: `Adds up to the ${formatMoney(difference.availableCents)} available for prizes exactly` };
 }
 
 /**
  * The sum line while the places still have a problem (a box half typed, percentages over 100%): what
- * the places typed so far add up to beside the money available, with no word yet on where a
- * difference goes.
+ * the places typed so far add up to beside the money available.
  */
 export function roughSumLine(placedCents: Cents, availableCents: Cents): PayoutSumLine {
   const so = `The places add up to ${formatMoney(placedCents)}`;
@@ -231,7 +215,7 @@ export interface PayoutsSaveCheck {
 /**
  * Whether saving needs the TD's word first (R5REV-HOST-06): when the prizes as set add up to more than
  * the money available, the club adds the difference (a guarantee). A leftover needs no second question:
- * the editor asks where it goes as the TD types. Null otherwise.
+ * it is the club's fee, and the sum line says so as the TD types. Null otherwise.
  */
 export function payoutsSaveCheck(difference: Pick<PrizeDifference, "cents" | "availableCents" | "setCents"> | null): PayoutsSaveCheck | null {
   if (!difference || difference.cents >= 0) return null;
@@ -248,21 +232,19 @@ export function payoutsSaveCheck(difference: Pick<PrizeDifference, "cents" | "av
 /**
  * Why the places beyond the paid players are not paid yet, or null when everyone placed can be paid.
  * Only paid players are in the pool (round 6), so a player who has entered but not paid fills no place
- * until their payment is confirmed (R6REV0-MONEY-02).
+ * until their payment is confirmed (R6REV0-MONEY-02); until then what those places would pay goes to
+ * the club's fee with the rest of the leftover (round 7).
  */
-export function unpaidPlacesNote(places: number, paidPlayers: number): string | null {
+export function unpaidPlacesNote(places: number, paidPlayers: number, rakeLabel: string): string | null {
   if (paidPlayers <= 0 || paidPlayers >= places) return null;
   const players = `${paidPlayers} ${paidPlayers === 1 ? "player has" : "players have"}`;
-  return `Only ${players} paid: places below ${placeName(paidPlayers)} are paid only once more players pay.`;
+  return `Only ${players} paid: places below ${placeName(paidPlayers)} are paid only once more players pay. Until then, what they would pay goes to ${rakeLabel}.`;
 }
 
-/** Whether the payouts sent would pay what is paid now: the same structure and choice, and for Custom the same places. */
-export function sameAsStored(
-  values: PayoutEditorValues,
-  tournament: Pick<TournamentDetailDto, "payoutStructure" | "customPayouts" | "prizeDifference">,
-): boolean {
+/** Whether the payouts sent would pay what is paid now: the same structure, and for Custom the same places. */
+export function sameAsStored(values: PayoutEditorValues, tournament: Pick<TournamentDetailDto, "payoutStructure" | "customPayouts">): boolean {
   const stored = startingValues(tournament);
-  if (values.payoutStructure !== stored.payoutStructure || values.prizeDifference !== stored.prizeDifference) return false;
+  if (values.payoutStructure !== stored.payoutStructure) return false;
   if (values.payoutStructure !== "custom") return true;
   const saved = storedPlaces(tournament);
   if (!saved) return false;

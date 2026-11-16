@@ -15,6 +15,7 @@ import {
   placeValueText,
   previewPayoutPlaces,
   previewShares,
+  prizesAsSet,
   removePayoutPlace,
   serializeCustomPayouts,
   type PayoutPlace,
@@ -23,10 +24,8 @@ import {
   PAYOUT_STRUCTURES,
   parseCustomPayouts,
   resolvePayoutStructure,
-  undistributedCents,
   type StandardPayoutKey,
 } from "./payouts";
-import { PRIZE_DIFFERENCE_CHOICES } from "./prize-difference";
 import { legacyPayouts } from "@test/helpers/legacy-money";
 
 /**
@@ -75,8 +74,8 @@ const anyShares = fc.oneof(
 );
 
 describe("payout tables", () => {
-  it("names the v2 algorithm", () => {
-    expect(PAYOUT_ALGORITHM).toBe("v2-floor-remainder-first");
+  it("names the v3 algorithm (round 7: the rounding remainder goes to the club's fee)", () => {
+    expect(PAYOUT_ALGORITHM).toBe("v3-floor-remainder-fee");
   });
 
   it.each(STANDARD_KEYS)("%s adds up to 100%% and never increases", (key) => {
@@ -203,27 +202,27 @@ describe("resolvePayoutStructure", () => {
   });
 });
 
-describe("allocatePayouts (v2: floor to whole dollars, remainder to 1st)", () => {
-  it("pays $475 as 238/142/95, where today's rounding pays $476", () => {
-    expect(amounts(allocatePayouts(47_500, PAYOUT_STRUCTURES.standard))).toEqual([23_800, 14_200, 9_500]);
+describe("allocatePayouts (v3: each share rounded down to whole dollars, the remainder to the club's fee)", () => {
+  it("pays $475 as 237/142/95, where the legacy rounding paid $476 and v2 gave the $1 left to 1st", () => {
+    expect(amounts(allocatePayouts(47_500, PAYOUT_STRUCTURES.standard))).toEqual([23_700, 14_200, 9_500]);
     expect(legacyPayouts(475, "standard").map((p) => p.amount)).toEqual([238, 143, 95]);
   });
 
-  it("gives the leftover cents to 1st", () => {
-    expect(amounts(allocatePayouts(47_550, PAYOUT_STRUCTURES.standard))).toEqual([23_850, 14_200, 9_500]);
-    expect(amounts(allocatePayouts(10_001, PAYOUT_STRUCTURES.standard))).toEqual([5_001, 3_000, 2_000]);
+  it("pays no place the cents or dollars the rounding leaves", () => {
+    expect(amounts(allocatePayouts(47_550, PAYOUT_STRUCTURES.standard))).toEqual([23_700, 14_200, 9_500]);
+    expect(amounts(allocatePayouts(10_001, PAYOUT_STRUCTURES.standard))).toEqual([5_000, 3_000, 2_000]);
   });
 
   it.each([
-    // [structure, pool in dollars, today's total, v2 amounts]
-    ["standard", 103, 104, [53, 30, 20]],
-    ["top5", 101, 100, [41, 25, 20, 10, 5]],
-    ["top9", 475, 477, [145, 95, 71, 57, 42, 28, 19, 9, 9]],
-    ["top8", 1000, 1000, [350, 220, 150, 120, 80, 40, 20, 20]],
-  ] as const)("%s pays a pool of %d dollars exactly (today: %d)", (key, pool, legacyTotal, expected) => {
-    const v2 = allocatePayouts(pool * 100, PAYOUT_STRUCTURES[key]);
-    expect(amounts(v2)).toEqual(expected.map((d) => d * 100));
-    expect(total(amounts(v2))).toBe(pool * 100);
+    // [structure, pool in dollars, legacy total, v3 amounts, left for the club's fee]
+    ["standard", 103, 104, [51, 30, 20], 2],
+    ["top5", 101, 100, [40, 25, 20, 10, 5], 1],
+    ["top9", 475, 477, [142, 95, 71, 57, 42, 28, 19, 9, 9], 3],
+    ["top8", 1000, 1000, [350, 220, 150, 120, 80, 40, 20, 20], 0],
+  ] as const)("%s pays a pool of %d dollars in whole dollars (legacy: %d)", (key, pool, legacyTotal, expected, left) => {
+    const v3 = allocatePayouts(pool * 100, PAYOUT_STRUCTURES[key]);
+    expect(amounts(v3)).toEqual(expected.map((d) => d * 100));
+    expect(pool * 100 - total(amounts(v3))).toBe(left * 100);
     expect(total(legacyPayouts(pool, key).map((p) => p.amount))).toBe(legacyTotal);
   });
 
@@ -236,9 +235,10 @@ describe("allocatePayouts (v2: floor to whole dollars, remainder to 1st)", () =>
     });
   });
 
-  it("gives a pool under $1 entirely to 1st", () => {
-    expect(amounts(allocatePayouts(50, PAYOUT_STRUCTURES.standard))).toEqual([50, 0, 0]);
-    expect(amounts(allocatePayouts(199, PAYOUT_STRUCTURES.standard))).toEqual([199, 0, 0]);
+  it("pays $0 a place from a pool under $1 a place", () => {
+    expect(amounts(allocatePayouts(50, PAYOUT_STRUCTURES.standard))).toEqual([0, 0, 0]);
+    expect(amounts(allocatePayouts(199, PAYOUT_STRUCTURES.standard))).toEqual([0, 0, 0]);
+    expect(amounts(allocatePayouts(200, PAYOUT_STRUCTURES.standard))).toEqual([100, 0, 0]);
   });
 
   it.each([0, -1, -47_500])("pays nothing from a pool of %d cents", (pool) => {
@@ -264,11 +264,13 @@ describe("allocatePayouts (v2: floor to whole dollars, remainder to 1st)", () =>
   describe("properties, for every pool from $0 to $100,000 in cents", () => {
     const pools = fc.integer({ min: 0, max: 10_000_000 });
 
-    it("adds up to the pool exactly, to the cent", () => {
+    it("never pays more than the pool, and leaves under $1 a place for the club's fee", () => {
       fc.assert(
         fc.property(pools, anyShares, (pool, shares) => {
           const paid = amounts(allocatePayouts(pool, shares));
-          expect(total(paid)).toBe(pool);
+          const left = pool - total(paid);
+          expect(left).toBeGreaterThanOrEqual(0);
+          expect(left).toBeLessThan(100 * Math.max(paid.length, 1));
           expect(paid).toHaveLength(pool > 0 ? shares.length : 0);
         }),
         { numRuns: 2000 },
@@ -288,21 +290,16 @@ describe("allocatePayouts (v2: floor to whole dollars, remainder to 1st)", () =>
       );
     });
 
-    it("pays every place below 1st its share rounded down to whole dollars", () => {
+    it("pays every place, 1st included, its share rounded down to whole dollars", () => {
       fc.assert(
         fc.property(pools, anyShares, (pool, shares) => {
           const paid = amounts(allocatePayouts(pool, shares));
-          for (let i = 1; i < paid.length; i++) {
-            expect(paid[i] % 100).toBe(0);
+          paid.forEach((amount, i) => {
+            expect(amount % 100).toBe(0);
             // paid ≤ exact share < paid + $1, in exact integer arithmetic
-            expect(paid[i] * 10_000).toBeLessThanOrEqual(pool * shares[i]);
-            expect(pool * shares[i]).toBeLessThan((paid[i] + 100) * 10_000);
-          }
-          if (paid.length > 0) {
-            // 1st gets at least its own share, plus under $1 of rounding per other place
-            expect(paid[0] * 10_000).toBeGreaterThanOrEqual(pool * shares[0]);
-            expect(paid[0] - pool * shares[0] / 10_000).toBeLessThan(100 * shares.length);
-          }
+            expect(amount * 10_000).toBeLessThanOrEqual(pool * shares[i]);
+            expect(pool * shares[i]).toBeLessThan((amount + 100) * 10_000);
+          });
         }),
         { numRuns: 2000 },
       );
@@ -332,17 +329,6 @@ describe("legacyPayouts (today's Math.round per place)", () => {
   it("pays nothing from an empty or negative pool", () => {
     expect(legacyPayouts(0, "standard")).toEqual([]);
     expect(legacyPayouts(-5, "standard")).toEqual([]);
-  });
-});
-
-describe("undistributedCents", () => {
-  it("is what the places beyond the entrants would have been paid", () => {
-    const payouts = allocatePayouts(10_000, PAYOUT_STRUCTURES.standard);
-    expect(undistributedCents(payouts, 2)).toBe(2_000);
-    expect(undistributedCents(payouts, 1)).toBe(5_000);
-    expect(undistributedCents(payouts, 3)).toBe(0);
-    expect(undistributedCents(payouts, 9)).toBe(0);
-    expect(undistributedCents([], 0)).toBe(0);
   });
 });
 
@@ -614,13 +600,30 @@ describe("the payout editor's helpers", () => {
     expect(changePlaceKind([pct(100)], 3, "amount", 100_000)).toEqual([pct(100)]);
   });
 
+  describe("prizesAsSet (the one rule finalize and the editor pay by)", () => {
+    it("pays a share table its shares rounded down, adding up to what they pay", () => {
+      expect(prizesAsSet(47_550, { basisPoints: PAYOUT_STRUCTURES.standard })).toEqual({ amounts: [23_700, 14_200, 9_500], setCents: 47_400 });
+    });
+
+    it("keeps a pool of zero or less as it is, paying nothing", () => {
+      expect(prizesAsSet(-500, { basisPoints: PAYOUT_STRUCTURES.standard })).toEqual({ amounts: [0, 0, 0], setCents: -500 });
+    });
+
+    it("pays custom places their own amounts", () => {
+      expect(prizesAsSet(100_000, { basisPoints: [], places: [pct(33.33), usd(300)] })).toEqual({ amounts: [33_300, 30_000], setCents: 63_300 });
+    });
+  });
+
   describe("previewShares (a share table in the editor)", () => {
-    it("splits the pool as v2 does and settles what a manual pool leaves of the money available", () => {
+    it("splits the pool in whole dollars and measures it against the money available", () => {
       expect(previewShares(47_500, PAYOUT_STRUCTURES.standard)).toEqual({
-        amounts: [23_800, 14_200, 9_500],
-        difference: { choice: "club", availableCents: 47_500, setCents: 47_500, cents: 0, keptByClubCents: 0, addedToPrizesCents: 0, carriedOverCents: 0, addedByClubCents: 0 },
+        amounts: [23_700, 14_200, 9_500],
+        difference: { availableCents: 47_500, setCents: 47_400, cents: 100, keptByClubCents: 100, addedByClubCents: 0 },
       });
-      expect(previewShares(40_000, PAYOUT_STRUCTURES.standard, { availableCents: 50_000, choice: "first" }).amounts).toEqual([30_000, 12_000, 8_000]);
+      expect(previewShares(40_000, PAYOUT_STRUCTURES.standard, { availableCents: 50_000 })).toMatchObject({
+        amounts: [20_000, 12_000, 8_000],
+        difference: { keptByClubCents: 10_000 },
+      });
       expect(previewShares(40_000, PAYOUT_STRUCTURES.standard, { availableCents: 30_000 }).difference.addedByClubCents).toBe(10_000);
       expect(previewShares(0, PAYOUT_STRUCTURES.standard).amounts).toEqual([0, 0, 0]);
       expect(previewShares(Number.NaN, PAYOUT_STRUCTURES.top3).amounts).toEqual([0, 0, 0]);
@@ -628,53 +631,33 @@ describe("the payout editor's helpers", () => {
   });
 
   describe("previewPayoutPlaces (the live sum check)", () => {
-    it("shows what each place pays as set, what is left over and, by default, that the club keeps it", () => {
+    it("shows what each place pays and what is left over for the club's fee", () => {
       const preview = previewPayoutPlaces(100_000, [pct(50), usd(300), pct(10)]);
       expect(preview).toEqual({
         rows: [
-          { position: 1, place: pct(50), amountCents: 50_000, setCents: 50_000 },
-          { position: 2, place: usd(300), amountCents: 30_000, setCents: 30_000 },
-          { position: 3, place: pct(10), amountCents: 10_000, setCents: 10_000 },
+          { position: 1, place: pct(50), amountCents: 50_000 },
+          { position: 2, place: usd(300), amountCents: 30_000 },
+          { position: 3, place: pct(10), amountCents: 10_000 },
         ],
         placedCents: 90_000,
         leftoverCents: 10_000,
         overCents: 0,
-        difference: {
-          choice: "club",
-          availableCents: 100_000,
-          setCents: 90_000,
-          cents: 10_000,
-          keptByClubCents: 10_000,
-          addedToPrizesCents: 0,
-          carriedOverCents: 0,
-          addedByClubCents: 0,
-        },
+        difference: { availableCents: 100_000, setCents: 90_000, cents: 10_000, keptByClubCents: 10_000, addedByClubCents: 0 },
         problems: [],
         warnings: [],
       });
     });
 
-    it("pays percentages adding up to 100% as the share table they are stored as: the rounding to 1st, nothing left over", () => {
-      const preview = previewPayoutPlaces(100_000, [pct(33.34), pct(33.33), pct(33.33)]);
-      expect(preview.rows.map((row) => row.amountCents)).toEqual([33_400, 33_300, 33_300]);
-      expect(preview).toMatchObject({ placedCents: 100_000, leftoverCents: 0 });
-      expect(preview.difference?.cents).toBe(0);
-    });
-
-    it("pays the leftover as the TD chose: to 1st, shared across the places, or carried over", () => {
-      const places = [pct(50), usd(300), pct(10)];
-      const first = previewPayoutPlaces(100_000, places, { choice: "first" });
-      expect(first.rows.map((row) => row.amountCents)).toEqual([60_000, 30_000, 10_000]);
-      expect(first.rows.map((row) => row.setCents)).toEqual([50_000, 30_000, 10_000]);
-      expect(previewPayoutPlaces(100_000, places, { choice: "pro_rata" }).rows.map((row) => row.amountCents)).toEqual([55_600, 33_300, 11_100]);
-      const carried = previewPayoutPlaces(100_000, places, { choice: "carry" });
-      expect(carried.rows.map((row) => row.amountCents)).toEqual([50_000, 30_000, 10_000]);
-      expect(carried.difference).toMatchObject({ carriedOverCents: 10_000, keptByClubCents: 0 });
+    it("pays percentages adding up to 100% as the share table they are stored as: each rounded down, the rest to the fee", () => {
+      const preview = previewPayoutPlaces(100_050, [pct(33.34), pct(33.33), pct(33.33)]);
+      expect(preview.rows.map((row) => row.amountCents)).toEqual([33_300, 33_300, 33_300]);
+      expect(preview).toMatchObject({ placedCents: 99_900, leftoverCents: 150 });
+      expect(preview.difference?.keptByClubCents).toBe(150);
     });
 
     it("measures the places against the money available, which may differ from the pool their percentages are of", () => {
       // A manual pool of $1,000 with $1,200 available: 50% + 30% of $1,000 leave $400.
-      const preview = previewPayoutPlaces(100_000, [pct(50), pct(30)], { availableCents: 120_000, choice: "club" });
+      const preview = previewPayoutPlaces(100_000, [pct(50), pct(30)], { availableCents: 120_000 });
       expect(preview).toMatchObject({ placedCents: 80_000, leftoverCents: 40_000, overCents: 0 });
       expect(preview.difference).toMatchObject({ availableCents: 120_000, keptByClubCents: 40_000 });
     });
@@ -683,11 +666,10 @@ describe("the payout editor's helpers", () => {
       const preview = previewPayoutPlaces(100_000, [pct(30), usd(600)]);
       expect(preview.rows.map((row) => row.amountCents)).toEqual([30_000, 60_000]);
       expect(preview.problems).toEqual([]);
-      expect(preview.warnings).toEqual([{ place: 2, message: "From the $1,000 prize pool 2nd pays $600, more than 1st ($300)" }]);
-      // A bigger pool puts them back in order; the leftover added to 1st can too.
+      expect(preview.warnings).toEqual([{ place: 2, message: "At this prize pool 2nd pays $600, more than 1st ($300)" }]);
+      // A bigger pool puts them back in order.
       expect(previewPayoutPlaces(300_000, [pct(30), usd(600)]).warnings).toEqual([]);
       expect(previewPayoutPlaces(100_000, [pct(40), usd(500)]).warnings).toHaveLength(1);
-      expect(previewPayoutPlaces(100_000, [pct(40), usd(500)], { choice: "first" }).warnings).toEqual([]);
       expect(previewPayoutPlaces(0, [pct(30), usd(600)]).warnings).toEqual([]);
     });
 
@@ -708,30 +690,23 @@ describe("the payout editor's helpers", () => {
       expect(previewPayoutPlaces(Number.NaN, [{ kind: "percent", basisPoints: 12.5 }]).placedCents).toBe(0);
     });
 
-    it("always pays the money available to the cent, or the places as set plus what the club adds", () => {
+    it("always accounts for the money available to the cent: the places + the leftover − what the club adds", () => {
       const place = fc.oneof(
         fc.integer({ min: 1, max: 3_000 }).map((bp): PayoutPlace => ({ kind: "percent", basisPoints: bp })),
         fc.integer({ min: 100, max: 100_000 }).map((cents): PayoutPlace => ({ kind: "amount", amountCents: cents })),
       );
       fc.assert(
-        fc.property(
-          fc.integer({ min: 0, max: 5_000_000 }),
-          fc.integer({ min: 0, max: 5_000_000 }),
-          fc.array(place, { minLength: 1, maxLength: 8 }),
-          fc.constantFrom(...PRIZE_DIFFERENCE_CHOICES),
-          (pool, available, raw, choice) => {
-            const places = ordered(raw);
-            fc.pre(payoutPlacesProblems(places).length === 0);
-            const preview = previewPayoutPlaces(pool, places, { availableCents: available, choice });
-            const paid = preview.rows.map((row) => row.amountCents as number);
-            const difference = preview.difference;
-            if (!difference) throw new Error("no difference worked out");
-            const kept = difference.keptByClubCents + difference.carriedOverCents;
-            expect(total(paid)).toBe(available - kept + difference.addedByClubCents);
-            expect(total(paid)).toBe(preview.placedCents + difference.addedToPrizesCents);
-            expect(preview.leftoverCents - preview.overCents).toBe(difference.cents);
-          },
-        ),
+        fc.property(fc.integer({ min: 0, max: 5_000_000 }), fc.integer({ min: 0, max: 5_000_000 }), fc.array(place, { minLength: 1, maxLength: 8 }), (pool, available, raw) => {
+          const places = ordered(raw);
+          fc.pre(payoutPlacesProblems(places).length === 0);
+          const preview = previewPayoutPlaces(pool, places, { availableCents: available });
+          const paid = preview.rows.map((row) => row.amountCents as number);
+          const difference = preview.difference;
+          if (!difference) throw new Error("no difference worked out");
+          expect(total(paid)).toBe(preview.placedCents);
+          expect(total(paid) + difference.keptByClubCents - difference.addedByClubCents).toBe(available);
+          expect(preview.leftoverCents - preview.overCents).toBe(difference.cents);
+        }),
         { numRuns: 1000 },
       );
     });

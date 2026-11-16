@@ -81,6 +81,8 @@ export interface PlayerFilter {
   clubIds: readonly string[] | "known" | "all";
   /** Name contains this (case-insensitive). */
   nameContains?: string;
+  /** Name is this, compared as normaliseName compares names (spacing tidied, case folded): pass it normalised. */
+  nameIs?: string;
   limit?: number;
 }
 
@@ -91,6 +93,9 @@ export async function findPlayers(ex: Executor, filter: PlayerFilter, order: "cr
   if (filter.clubIds === "known") conditions.push(knownAnywhere());
   else if (filter.clubIds !== "all") conditions.push(knownAtClubs(filter.clubIds));
   if (filter.nameContains) conditions.push(ilike(players.name, containsPattern(filter.nameContains)));
+  if (filter.nameIs !== undefined) {
+    conditions.push(sql`lower(btrim(regexp_replace(${players.name}, '[[:space:]]+', ' ', 'g'))) = ${filter.nameIs}`);
+  }
   const query = ex
     .select()
     .from(players)

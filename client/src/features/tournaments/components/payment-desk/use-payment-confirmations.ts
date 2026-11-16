@@ -11,9 +11,13 @@ import type { EarlyBirdToggle } from "./payment-lists";
  * What the pending payments list does with a tap, wherever it is shown (the payment desk, the phone's
  * "Take payment" sheet): confirm a payment, saying where a player seated by it sits, and switch an
  * early-bird bonus. Each row waits for its own answer, and each answer is told for its own row
- * (P3REV0-PARITY-03).
+ * (P3REV0-PARITY-03). In a game with no buy-in (`freeTournament`, round 7, item 8) nobody pays:
+ * the same tap accepts the player, and the toast says so.
  */
-export function usePaymentConfirmations(tournamentId: string): { confirmingIds: ReadonlySet<string>; confirm: (registrationId: string) => void; earlyBirds: EarlyBirdToggle } {
+export function usePaymentConfirmations(
+  tournamentId: string,
+  { freeTournament = false }: { freeTournament?: boolean } = {},
+): { confirmingIds: ReadonlySet<string>; confirm: (registrationId: string) => void; earlyBirds: EarlyBirdToggle } {
   const { toast } = useToast();
   const confirmPayment = useConfirmPayment(tournamentId);
   const rows = useBusyRows();
@@ -25,14 +29,18 @@ export function usePaymentConfirmations(tournamentId: string): { confirmingIds: 
       const paid = await rows.run(registrationId, () => confirmPayment.mutateAsync(registrationId));
       const seat = autoSeatText(paid.seating);
       const name = paid.player?.name ?? "The player";
-      const confirmed = seat ? `${name} has paid. ${seat}` : "Registration payment has been confirmed.";
+      const confirmed = freeTournament
+        ? [`${name} is in.`, seat].filter(Boolean).join(" ")
+        : seat
+          ? `${name} has paid. ${seat}`
+          : "Registration payment has been confirmed.";
       const left = highHandLeftText(paid.highHandUnawardedCents);
-      toast({ title: "Payment Confirmed", description: left ? `${confirmed} ${left}` : confirmed });
+      toast({ title: freeTournament ? "Player accepted" : "Payment Confirmed", description: left ? `${confirmed} ${left}` : confirmed });
     } catch (error) {
       // Max players are accepted (round 5, item 15): no override, the server's sentence says how to make room.
       toast({
-        title: hasErrorCode(error, "TOURNAMENT_FULL") ? "Tournament full" : "Could not confirm the payment",
-        description: errorMessage(error, "Failed to confirm payment. Please try again."),
+        title: hasErrorCode(error, "TOURNAMENT_FULL") ? "Tournament full" : freeTournament ? "Could not accept the player" : "Could not confirm the payment",
+        description: errorMessage(error, freeTournament ? "Failed to accept the player. Please try again." : "Failed to confirm payment. Please try again."),
         variant: "destructive",
       });
     }

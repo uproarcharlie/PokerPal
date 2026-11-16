@@ -1,10 +1,11 @@
 import type { RefObject } from "react";
-import { Banknote, CheckCircle2, Plus, RefreshCw, ShoppingCart, UserPlus, UserX } from "lucide-react";
+import { Banknote, CheckCircle2, Plus, RefreshCw, ShoppingCart, Ticket, UserPlus, UserX } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { offersAddons, offersRebuys } from "@shared/domain/player-actions";
+import { isFreeTournament } from "@shared/domain/prize-pool";
 import type { WaitingCount } from "../desk/desk-actions";
 import type { DeskDialog } from "../desk/tournament-actions-bar";
 
@@ -12,7 +13,7 @@ import type { DeskDialog } from "../desk/tournament-actions-bar";
 const ABOVE_TAB_BAR = "bottom-[calc(4.5rem+env(safe-area-inset-bottom))]";
 
 interface QuickActionsProps {
-  tournament: Pick<TournamentDetailDto, "rebuyAmount" | "addonAmount">;
+  tournament: Pick<TournamentDetailDto, "buyInAmount" | "rebuyAmount" | "addonAmount">;
   waitingRequests: WaitingCount;
   /** Players in the field whose payment is not confirmed (their money is not in the prize pool yet: round 6); 0 for none. */
   awaitingPayment: number;
@@ -28,10 +29,13 @@ const ITEM = "min-h-12 gap-3 text-base md:min-h-12 [&_svg]:size-5";
  * reach, opening the night's most used things: register a player, bust one, sell a re-buy or an
  * add-on (when the tournament has them), take a payment (how many have not paid beside it: only paid
  * players are in the pool; under "once they've paid" also the step that seats a late arrival, which sat
- * at the foot of the Money tab: R5REV-HOST-09), and the player requests waiting. Each opens its own sheet.
+ * at the foot of the Money tab: R5REV-HOST-09), give a free entry (round 7, item 6), and the player
+ * requests waiting. Each opens its own sheet. A game with no buy-in (round 7, item 8) accepts its
+ * players instead of taking payments, and has no buy-in to let anyone off.
  */
 export function QuickActions({ tournament, waitingRequests, awaitingPayment, onOpen, triggerRef }: QuickActionsProps) {
   const waiting = typeof waitingRequests === "number" ? waitingRequests : 0;
+  const freeTournament = isFreeTournament(tournament);
   return (
     // Not modal: an item opens a sheet, which must get the focus and the pointer.
     <DropdownMenu modal={false}>
@@ -69,14 +73,20 @@ export function QuickActions({ tournament, waitingRequests, awaitingPayment, onO
         ) : null}
         <DropdownMenuItem className={ITEM} onSelect={() => onOpen("payments")} data-testid="quick-payments">
           <Banknote aria-hidden="true" />
-          Take payment
+          {freeTournament ? "Accept players" : "Take payment"}
           {awaitingPayment > 0 ? (
             <Badge variant="destructive" className="ml-auto">
               {awaitingPayment}
-              <span className="sr-only"> waiting to pay</span>
+              <span className="sr-only">{freeTournament ? " waiting to be accepted" : " waiting to pay"}</span>
             </Badge>
           ) : null}
         </DropdownMenuItem>
+        {freeTournament ? null : (
+          <DropdownMenuItem className={ITEM} onSelect={() => onOpen("freeEntry")} data-testid="quick-free-entry">
+            <Ticket aria-hidden="true" />
+            Free entry
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem className={ITEM} onSelect={() => onOpen("requests")} data-testid="quick-requests">
           <CheckCircle2 aria-hidden="true" />
           Approve requests

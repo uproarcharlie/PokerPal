@@ -103,6 +103,7 @@ export const AUDIT_ACTIONS = [
   "tournament.refinalize",
   "player.update",
   "registration.remove",
+  "registration.free_entry", // round 7: a free entry given, changed, taken back or marked paid (target = registration)
   "pending_action.dismiss",
   "high_hand.split", // target = tournament
   "clock.key_issued", // the venue TV's clock key (target = tournament)
@@ -131,9 +132,9 @@ type FinalizedPool = {
   /** Round 5: the deal the players still in made, as the snapshot records it. Only with a deal. */
   deal?: SnapshotDeal;
   /**
-   * Round 5 (item 16): where a difference between the prizes as set and the money available went
-   * (kept by the club, added to the places, carried over with its `carryTarget`, or added by the club),
-   * as the snapshot records it. Only when there was a difference.
+   * The difference between the prizes as set and the money available, as the snapshot records it: the
+   * leftover to the club's fee or what the club added (before round 7 it could also say it was added to
+   * the places or carried over, with its `carryTarget`). Only when there was a difference.
    */
   difference?: SnapshotDifference;
   /**
@@ -147,7 +148,8 @@ type FinalizedPool = {
 
 /**
  * Round 5 (item 16): tournaments.prize_difference before and after: "club" (the club keeps it), "first",
- * "pro_rata", "carry", or null (never chosen: the club keeps it).
+ * "pro_rata", "carry", or null (never chosen: the club keeps it). Only in entries written before round 7,
+ * which stopped asking where a leftover goes.
  */
 type PrizeDifferenceChange = { before: string | null; after: string | null };
 
@@ -181,7 +183,7 @@ export type AuditData = {
     previous: { manualPrizePool: string | null; rakeOverride: string | null; reason: string | null };
     netCentsBefore: Cents;
     netCentsAfter: Cents;
-    /** Round 5 (item 16): only when a manual pool's change also changed where its difference goes. */
+    /** Round 5 (item 16): only when a manual pool's change also changed where its difference goes (before round 7). */
     prizeDifference?: PrizeDifferenceChange;
   };
   /** The AP rate columns before and after, and whether the manual AP total was cleared. */
@@ -192,7 +194,7 @@ export type AuditData = {
     after: { payoutStructure: string; customPayouts: string | null };
     reason: string | null;
     netCents: Cents;
-    /** Round 5 (item 16): only when the change also changed where a leftover goes (absent from earlier entries). */
+    /** Round 5 (item 16): only when the change also changed where a leftover goes (only in entries from round 5 to round 7). */
     prizeDifference?: PrizeDifferenceChange;
   };
   "tournament.finalize": FinalizedPool;
@@ -214,6 +216,16 @@ export type AuditData = {
   "player.update": FieldChanges;
   /** The whole registration row as it was. */
   "registration.remove": { tournamentId: string; playerName: string; requestsRemoved: number; registration: TournamentRegistration };
+  /** Round 7 (item 6): a free entry, and the registration's free-entry and payment state before the change. */
+  "registration.free_entry": {
+    tournamentId: string;
+    playerName: string;
+    change: "given" | "changed" | "taken_back" | "marked_paid";
+    reason: string | null;
+    note: string | null;
+    funded: boolean;
+    before: { freeEntry: boolean; funded: boolean; paymentConfirmed: boolean };
+  };
   /** target = tournament: the request staff dismissed without applying it. */
   "pending_action.dismiss": { actionId: string; actionType: string; playerId: string; targetPlayerId: string | null; requestedAt: string | null };
   "high_hand.split": {

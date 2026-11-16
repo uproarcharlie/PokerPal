@@ -11,7 +11,13 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import type { FinalizeInput, FinalizePreviewInput } from "@shared/api/finalize";
 import type { ConfirmPendingActionInput, PendingActionDto } from "@shared/api/pending-actions";
-import type { AdjustCountsInput, PendingRegistrationDto, StaffRegistrationInput, UpdateRegistrationInput } from "@shared/api/registrations";
+import type {
+  AdjustCountsInput,
+  FreeEntryChangeInput,
+  PendingRegistrationDto,
+  StaffRegistrationInput,
+  UpdateRegistrationInput,
+} from "@shared/api/registrations";
 import type { PublicRegistration } from "@shared/api/public";
 import type { UpdateTournamentInput } from "@shared/api/tournaments";
 import { hasErrorCode } from "@/lib/api/http";
@@ -20,6 +26,7 @@ import { qk } from "@/lib/api/query-keys";
 import { unlessRefused } from "@/lib/live-refresh";
 import {
   adjustCounts,
+  changeFreeEntry,
   confirmPayment,
   confirmPendingAction,
   createTournament,
@@ -208,6 +215,23 @@ export function useConfirmPayment(tournamentId: string) {
     mutationFn: confirmPayment,
     onSuccess: (_registration, registrationId) => {
       dropFromList<PendingRegistrationDto>(queryClient, qk.tournaments.pendingRegistrations(tournamentId), registrationId);
+      void invalidateTournament(queryClient, tournamentId);
+    },
+  });
+}
+
+/**
+ * A free entry given, changed, taken back or marked paid (round 7). The answer is the registration as
+ * it now stands: it replaces the player's row in the standings at once, a free entry given leaves the
+ * pending list (it is accepted), then everything else refreshes (the pool, both desk lists).
+ */
+export function useChangeFreeEntry(tournamentId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ registrationId, input }: { registrationId: string; input: FreeEntryChangeInput }) => changeFreeEntry(registrationId, input),
+    onSuccess: (registration, { registrationId, input }) => {
+      replaceRow(queryClient, tournamentId, registration);
+      if (input.action === "give") dropFromList<PendingRegistrationDto>(queryClient, qk.tournaments.pendingRegistrations(tournamentId), registrationId);
       void invalidateTournament(queryClient, tournamentId);
     },
   });

@@ -354,7 +354,7 @@ describe("PublicRegisterPage: new player details", () => {
     await user.click(screen.getByTestId("photo-skip"));
   }
 
-  it("asks for a name and a phone number before signing anyone up", async () => {
+  it("asks for a name before signing anyone up (the mobile number is optional: round 7, item 9)", async () => {
     mockTournament();
     let posts = 0;
     server.use(
@@ -369,8 +369,9 @@ describe("PublicRegisterPage: new player details", () => {
     await openNewPlayer(user);
     await user.click(screen.getByTestId("step2-next"));
 
-    expect(await screen.findByText("Phone number is required")).toBeInTheDocument();
+    expect(await screen.findByText("Required")).toBeInTheDocument();
     expect(screen.getByTestId("player-name")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByTestId("player-phone")).not.toHaveAttribute("aria-invalid", "true");
     expect(posts).toBe(0);
   });
 
