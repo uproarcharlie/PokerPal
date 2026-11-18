@@ -10,6 +10,7 @@ import { toCents } from "@shared/domain/money";
 import { isFreeTournament } from "@shared/domain/prize-pool";
 import { acceptRefusal } from "@shared/domain/waiting-list";
 import { usePaymentDesk } from "../../staff-hooks";
+import { useEntryFixes } from "../entry-fix/use-entry-fixes";
 import { FreeEntrySheet } from "../free-entry/free-entry-sheet";
 import { useFreeEntryChanges } from "../free-entry/use-free-entry-changes";
 import { ConfirmedPayments, PendingPayments } from "./payment-lists";
@@ -17,7 +18,7 @@ import { transferDeskOf } from "./transfer-split";
 import { usePaymentConfirmations } from "./use-payment-confirmations";
 
 interface PaymentDeskCardsProps {
-  tournament: Pick<TournamentDetailDto, "id" | "maxPlayers" | "buyInAmount" | "showBankTransfer">;
+  tournament: TournamentDetailDto;
   timeZone: string;
   /** The club's name for its take ("AP"), for what a funded free entry leaves out. */
   rakeLabel: string;
@@ -48,7 +49,7 @@ const WORDS = {
  * (round 7, item 8): accepting confirms them at $0. A game that shows bank transfer details after
  * sign-up (round 8) shows each sign-up's transfer Reference and what of its amount the door still
  * collects (the high hand), finds a name from the bank statement, and confirms each payment as Cash or
- * Transfer.
+ * Transfer. Each confirmed row's Fix menu (round 9) corrects a mistake made at the desk.
  */
 export function PaymentDeskCards({ tournament, timeZone, rakeLabel }: PaymentDeskCardsProps) {
   const { pending, confirmed } = usePaymentDesk(tournament.id);
@@ -62,14 +63,19 @@ export function PaymentDeskCards({ tournament, timeZone, rakeLabel }: PaymentDes
   const buyInCents = toCents(tournament.buyInAmount);
   const transfers = transferDeskOf(tournament);
   const words = freeTournament ? WORDS.free : WORDS.paid;
-  // Max players accepted already (round 5, item 15): the waiting list says so before a refused tap. Both lists are needed to count.
-  const full = pending.data && confirmed.data ? acceptRefusal([...pending.data, ...confirmed.data], tournament.maxPlayers) : null;
+  // Both lists are needed to count: Max players accepted already (round 5, item 15), so the waiting list
+  // says so before a refused tap, and what a payment taken back (round 9) takes out of the pool.
+  const everyone = pending.data && confirmed.data ? [...pending.data, ...confirmed.data] : undefined;
+  const full = everyone ? acceptRefusal(everyone, tournament.maxPlayers) : null;
+  const confirmedTitle = useRef<HTMLHeadingElement>(null);
+  const fixes = useEntryFixes({ tournament, registrations: everyone, returnFocusTo: confirmedTitle });
 
   return (
     <>
       <Card>
         <CardHeader>
-          <CardTitle>{words.pendingTitle}</CardTitle>
+          {/* As the other card's title, where focus goes back to after a Fix (round 9). */}
+          <CardTitle className="focus:outline-none">{words.pendingTitle}</CardTitle>
           <CardDescription>{words.pendingDescription}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -105,7 +111,9 @@ export function PaymentDeskCards({ tournament, timeZone, rakeLabel }: PaymentDes
 
       <Card>
         <CardHeader>
-          <CardTitle>{words.confirmedTitle}</CardTitle>
+          <CardTitle ref={confirmedTitle} tabIndex={-1} className="focus:outline-none">
+            {words.confirmedTitle}
+          </CardTitle>
           <CardDescription>{words.confirmedDescription}</CardDescription>
         </CardHeader>
         <CardContent>
@@ -116,9 +124,11 @@ export function PaymentDeskCards({ tournament, timeZone, rakeLabel }: PaymentDes
             freeEntries={freeEntryChanges}
             freeTournament={freeTournament}
             transfers={transfers}
+            fixes={fixes}
           />
         </CardContent>
       </Card>
+      {fixes.dialogs}
 
       <FreeEntrySheet
         tournamentId={tournament.id}

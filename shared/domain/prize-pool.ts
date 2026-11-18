@@ -356,6 +356,35 @@ function paidPlaces(
   return { structure, payouts, net };
 }
 
+/** What taking back one entry's payment takes out (paymentDropCents). */
+export interface PaymentDrop {
+  /** Out of the prize pool, what the places pay: 0 when it is set by hand. */
+  poolCents: Cents;
+  /** Out of the high-hand pot. */
+  highHandCents: Cents;
+  /** The prize pool as set by hand, which a payment taken back leaves as it is; null when it is worked out. */
+  manualPoolCents: Cents | null;
+}
+
+/**
+ * What marking an entry as not paid (round 9, the desk's Fix menu) takes out of the prize pool and the
+ * high-hand pot, as the server will work them out: each with the entry paid, less each with it not
+ * paid (only paid entries are in either; the places paid and the AP follow). `entries` are every
+ * registration with its payment status, as the club's staff are sent them.
+ */
+export function paymentDropCents(tournament: PrizePoolInput, entries: readonly (EntryInput & { id: string })[], registrationId: string): PaymentDrop {
+  const before = computePrizePool(tournament, entries);
+  const after = computePrizePool(
+    tournament,
+    entries.map((entry) => (entry.id === registrationId ? { ...entry, paymentConfirmed: false } : entry)),
+  );
+  return {
+    poolCents: before.net - after.net,
+    highHandCents: before.highHand.net - after.highHand.net,
+    manualPoolCents: before.manualPrizePool,
+  };
+}
+
 /**
  * What the places with no accepted player in them would pay as set (0 when every place has one, or
  * nothing is paid): part of the leftover the club keeps (round 7), which the staff's screens name so the

@@ -22,6 +22,8 @@ import { canManageClub, type AuthUser, type ClubScope } from "../http/authz";
 import { badRequest, forbidden, notFound, unauthenticated } from "../http/errors";
 import { getClub } from "../repositories/clubs";
 import * as playersRepo from "../repositories/players";
+import { insertActivity } from "../repositories/activity";
+import { registrationsOf } from "../repositories/registrations";
 import { getTournament } from "../repositories/tournaments";
 import { assertOpen } from "./tournament-views";
 import { recordAudit } from "./audit";
@@ -220,6 +222,23 @@ export type UpdatePlayerOutcome = { kind: "updated"; player: Player } | { kind: 
 
 const AUDITED_FIELDS = ["name", "phone", "email", "imageUrl"] as const;
 
+/** A corrected detail as the tournament's feed names it (round 9). */
+const DETAIL_WORDS: Readonly<Record<(typeof AUDITED_FIELDS)[number], string>> = { name: "name", phone: "mobile number", email: "email", imageUrl: "photo" };
+
+/** "name", "name and photo", "name, mobile number and photo". */
+const listWords = (words: readonly string[]) => (words.length < 2 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`);
+
+/**
+ * A correction from a tournament's Fix menu (round 9) is only for a player entered in it, by someone
+ * who runs its club: never a line in another club's feed.
+ */
+async function assertCorrectableFrom(ex: Executor, req: Request, tournamentId: string, playerId: string): Promise<void> {
+  const tournament = await getTournament(ex, tournamentId);
+  if (tournament && !(await canManageClub(req.user, tournament.clubId))) throw forbidden("Only the tournament's club can correct its entries");
+  const entered = tournament ? (await registrationsOf(ex, tournament.id)).some((registration) => registration.playerId === playerId) : false;
+  if (!entered) throw badRequest("This player has no entry in that tournament", "INVALID_TARGET");
+}
+
 /**
  * PUT /api/players/:id. Absent fields keep their value; null clears. A new phone number that another
  * player already has is refused (an unchanged one is kept even if a legacy duplicate shares it). A
@@ -227,11 +246,12 @@ const AUDITED_FIELDS = ["name", "phone", "email", "imageUrl"] as const;
  * always leaves a trail of who made it (P2REV0-01). A replaced photo is logged as an orphan once the
  * change is stored.
  */
-export async function updatePlayer(env: AppEnv, req: Request, id: string, input: UpdatePlayerInput): Promise<UpdatePlayerOutcome> {
+export async function updatePlayer(env: AppEnv, req: Request, id: string, { tournamentId, ...input }: UpdatePlayerInput): Promise<UpdatePlayerOutcome> {
   let previousImageUrl: string | null = null;
   const outcome = await db.transaction(async (tx): Promise<UpdatePlayerOutcome> => {
     const current = await playersRepo.getPlayer(tx, id);
     if (!current) throw notFound("Player not found");
+    if (tournamentId) await assertCorrectableFrom(tx, req, tournamentId, id);
     assertOwnedImage(env, input.imageUrl, current.imageUrl, INVALID_MESSAGE);
     previousImageUrl = current.imageUrl;
 
@@ -248,7 +268,18 @@ export async function updatePlayer(env: AppEnv, req: Request, id: string, input:
     const changed = AUDITED_FIELDS.filter((field) => current[field] !== player[field]);
     if (changed.length > 0) {
       const pick = (row: Player) => Object.fromEntries(changed.map((field) => [field, row[field]]));
-      await recordAudit(req, { action: "player.update", targetType: "player", targetId: id, data: { before: pick(current), after: pick(player) } }, tx);
+      const data = { before: pick(current), after: pick(player), ...(tournamentId ? { tournamentId } : {}) };
+      await recordAudit(req, { action: "player.update", targetType: "player", targetId: id, data }, tx);
+      // Which details, never what they now say: the phone number and email stay in the audit row.
+      if (tournamentId) {
+        await insertActivity(tx, {
+          tournamentId,
+          playerId: id,
+          eventType: "entry_corrected",
+          description: `${player.name}'s details were corrected (${listWords(changed.map((field) => DETAIL_WORDS[field]))})`,
+          eventData: JSON.stringify({ correction: "player", fields: changed }),
+        });
+      }
     }
     return { kind: "updated", player };
   });

@@ -121,7 +121,8 @@ export type StaffRegistrationInput = z.infer<typeof staffRegistrationSchema>;
  *   is locked: 409 PRIZE_POOL_LOCKED. Re-buys beyond maxRebuys: 409 MAX_REBUYS_REACHED.
  * - completed or cancelled tournament: only paymentConfirmed and the high-hand fields may change
  *   (payments are often reconciled after the game); anything else is 409 TOURNAMENT_CLOSED (for a
- *   completed one the message points to Correct Results).
+ *   completed one the message points to Correct Results). A payment is taken in then, never taken
+ *   back: paymentConfirmed true → false is 409 TOURNAMENT_CLOSED too (round 9).
  * - highHandWinner true: the server works out the award (the high-hand pot left over the winners still
  *   to come, the last taking the remainder) and ignores any highHandAmount sent; past the number of
  *   winners, 409 HIGH_HAND_AWARDED; no high hand, 400 HIGH_HAND_NOT_AVAILABLE. false clears the amount.
@@ -142,6 +143,9 @@ export type StaffRegistrationInput = z.infer<typeof staffRegistrationSchema>;
  *   of a waiting-list entry: past Max players, 409 TOURNAMENT_FULL (round 5, item 15; no override).
  *   true → false takes the entry's money out of the pool: a manual AP total must still be within what
  *   the paid entries took in (400 AP_EXCEEDS_GROSS); how it paid (paidBy, round 8) is cleared with it.
+ *   The entry keeps its seat and its place in the field, and nobody on the waiting list is accepted.
+ * - Round 9 (the desk's Fix menu): a payment taken back and a high-hand entry changed are each a
+ *   staff-only activity entry ("entry_corrected") and an audit row ("registration.correct").
  */
 export const updateRegistrationSchema = z
   .object({
@@ -178,7 +182,9 @@ export type AdjustCountsInput = z.infer<typeof adjustCountsSchema>;
 /**
  * PATCH /api/registrations/:id/confirm-payment (staff), round 8: how the player paid, for the club's
  * records (`paidBy`; left out, not recorded). Confirming a payment already confirmed changes only how
- * it was paid, when sent, and logs nothing. A free entry keeps "free": mark it paid instead.
+ * it was paid, when sent: a correction (round 9, the desk's Fix menu), logged as a staff-only
+ * "entry_corrected" activity entry and a "registration.correct" audit row; sent unchanged, or left
+ * out, it changes and logs nothing. A free entry keeps "free": mark it paid instead.
  */
 export const confirmPaymentSchema = z.object({ paidBy: z.enum(PAYMENT_METHODS).optional() });
 export type ConfirmPaymentInput = z.infer<typeof confirmPaymentSchema>;

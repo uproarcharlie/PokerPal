@@ -738,7 +738,7 @@ describe("PUT /api/registrations/:id", () => {
       expect((await registrationRow(bea.registration.id)).paymentConfirmed).toBe(true);
     });
 
-    it("takes any payment after the game whatever its high-hand pot, which is paid out (R6REV0-MONEY-01)", async () => {
+    it("takes any payment after the game whatever its high-hand pot, which is paid out, and takes none back (R6REV0-MONEY-01, round 9)", async () => {
       // Finalized (it has a snapshot) before only paid entries counted: $60 awarded from all 6 entries, 4 of them paid.
       const { tournament, agent } = await ownedTournament({ enableHighHand: true, highHandAmount: "10.00", highHandPayouts: 1, status: "completed" });
       await testDb().update(tournaments).set({ prizePoolSnapshot: sql`'{"v":1}'::jsonb` }).where(eq(tournaments.id, tournament.id));
@@ -752,8 +752,8 @@ describe("PUT /api/registrations/:id", () => {
       const takenBack = await agent.put(`/api/registrations/${paid[0].registration.id}`).send({ paymentConfirmed: false });
 
       expect([confirmed.status, confirmed.body.highHandUnawardedCents]).toEqual([200, 0]);
-      expect([viaUpdate.status, takenBack.status]).toEqual([200, 200]);
-      expect((await registrationsOf(tournament.id)).filter((entry) => entry.paymentConfirmed).length).toBe(5);
+      expect([viaUpdate.status, takenBack.status, takenBack.body.code]).toEqual([200, 409, "TOURNAMENT_CLOSED"]);
+      expect((await registrationsOf(tournament.id)).filter((entry) => entry.paymentConfirmed).length).toBe(6);
     });
   });
 

@@ -15,6 +15,7 @@ import {
   isFreeTournament,
   nextHighHandAward,
   paidPercentage,
+  paymentDropCents,
   payoutsForDisplay,
   poolEntries,
   prizeMoneyCents,
@@ -1436,6 +1437,49 @@ describe("unawardedHighHandCents (R6REV0-MONEY-01)", () => {
     expect(unawardedHighHandCents({ net: 4_500, winners: 1 }, [])).toBe(0);
     expect(unawardedHighHandCents({ net: 4_000, winners: 1 }, [4_000])).toBe(0);
     expect(unawardedHighHandCents({ net: 4_000, winners: 1 }, [5_000])).toBe(0);
+  });
+});
+
+describe("paymentDropCents: what marking a paid entry as not paid takes out (round 9)", () => {
+  const game = { buyInAmount: "50.00", rakeType: "percentage", rakeAmount: "10", payoutStructure: "standard", highHandAmount: "10.00", maxPlayers: 10 };
+  const entries = [
+    { id: "ann", buyIns: 1, paymentConfirmed: true, enteringHighHands: true },
+    { id: "bea", buyIns: 1, paymentConfirmed: true },
+    { id: "cy", buyIns: 1, paymentConfirmed: true },
+    { id: "dee", buyIns: 1, paymentConfirmed: true },
+    { id: "eve", buyIns: 1, paymentConfirmed: false },
+  ];
+
+  it("is the prize pool the places pay with the entry paid, less without it: its money after the AP, as the places round it", () => {
+    // $200 in less 10% AP pays $180; $150 less 10% leaves $135, which the places pay as $134.
+    expect(paymentDropCents(game, entries, "bea")).toEqual({ poolCents: paidFrom(18_000) - paidFrom(13_500), highHandCents: 0, manualPoolCents: null });
+    expect(paidFrom(18_000) - paidFrom(13_500)).toBe(4_600);
+  });
+
+  it("takes its high-hand entry out of the pot too", () => {
+    expect(paymentDropCents(game, entries, "ann")).toMatchObject({ poolCents: 4_600, highHandCents: 1_000 });
+  });
+
+  it("leaves a prize pool set by hand as it is, and saying so", () => {
+    expect(paymentDropCents({ ...game, manualPrizePool: "500.00" }, entries, "bea")).toEqual({ poolCents: 0, highHandCents: 0, manualPoolCents: 50_000 });
+  });
+
+  it("is nothing for an entry whose money is not in the pool: unpaid, or a free entry the club does not pay for", () => {
+    expect(paymentDropCents(game, entries, "eve")).toEqual({ poolCents: 0, highHandCents: 0, manualPoolCents: null });
+    expect(paymentDropCents(game, [...entries.slice(0, 4), { id: "fay", buyIns: 1, paymentConfirmed: true, freeEntry: true }], "fay").poolCents).toBe(0);
+  });
+
+  it("agrees with the pool worked out both ways, whatever the entries", () => {
+    fc.assert(
+      fc.property(fc.array(fc.record({ buyIns: fc.integer({ min: 1, max: 3 }), rebuys: fc.integer({ min: 0, max: 3 }), paid: fc.boolean(), highHand: fc.boolean() }), { minLength: 1, maxLength: 12 }), (rows) => {
+        const list = rows.map((entry, index) => ({ id: `r${index}`, buyIns: entry.buyIns, rebuys: entry.rebuys, paymentConfirmed: entry.paid, enteringHighHands: entry.highHand }));
+        const drop = paymentDropCents({ ...game, rebuyAmount: "40.00" }, list, "r0");
+        const without = list.map((entry) => (entry.id === "r0" ? { ...entry, paymentConfirmed: false } : entry));
+        const [before, after] = [computeAnyPool({ ...game, rebuyAmount: "40.00" }, list), computeAnyPool({ ...game, rebuyAmount: "40.00" }, without)];
+        expect(drop.poolCents).toBe(before.net - after.net);
+        expect(drop.highHandCents).toBe(before.highHand.net - after.highHand.net);
+      }),
+    );
   });
 });
 

@@ -106,6 +106,7 @@ export const AUDIT_ACTIONS = [
   "player.update",
   "registration.remove",
   "registration.free_entry", // round 7: a free entry given, changed, taken back or marked paid (target = registration)
+  "registration.correct", // round 9: a paid entry's payment taken back, how it paid, or its high-hand entry (target = registration)
   "pending_action.dismiss",
   "high_hand.split", // target = tournament
   "clock.key_issued", // the venue TV's clock key (target = tournament)
@@ -117,6 +118,9 @@ export const AUDIT_ACTIONS = [
   "seed_club_theme", // boot seed, actor NULL: Central Stars' electric blue and gold
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
+
+/** What a correction to an entry (round 9) can change: whether it has paid, how, and whether it is in the high hand. */
+type CorrectedEntry = { paymentConfirmed: boolean; paidBy: string | null; enteringHighHands: boolean };
 
 /** The before/after of the fields a change touched, keyed by field. */
 type FieldChanges = { before: Record<string, unknown>; after: Record<string, unknown> };
@@ -219,8 +223,8 @@ export type AuditData = {
       }>;
     };
   };
-  /** The changed name, phone, email and photo. */
-  "player.update": FieldChanges;
+  /** The changed name, phone, email and photo; `tournamentId` when it was corrected from that tournament's desk (round 9). */
+  "player.update": FieldChanges & { tournamentId?: string };
   /** The whole registration row as it was. */
   "registration.remove": { tournamentId: string; playerName: string; requestsRemoved: number; registration: TournamentRegistration };
   /** Round 7 (item 6): a free entry, and the registration's free-entry and payment state before the change. */
@@ -232,6 +236,14 @@ export type AuditData = {
     note: string | null;
     funded: boolean;
     before: { freeEntry: boolean; funded: boolean; paymentConfirmed: boolean };
+  };
+  /** Round 9 (item 1): a staff Fix to an entry, with the fields it can change as they were and are now. */
+  "registration.correct": {
+    tournamentId: string;
+    playerName: string;
+    change: "not_paid" | "paid_by" | "high_hand";
+    before: CorrectedEntry;
+    after: CorrectedEntry;
   };
   /** target = tournament: the request staff dismissed without applying it. */
   "pending_action.dismiss": { actionId: string; actionType: string; playerId: string; targetPlayerId: string | null; requestedAt: string | null };

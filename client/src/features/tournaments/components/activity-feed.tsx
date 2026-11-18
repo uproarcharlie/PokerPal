@@ -25,6 +25,7 @@ import {
   UserMinus,
   UserPlus,
   UserX,
+  Wrench,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -96,6 +97,7 @@ const EVENT_STYLES: Readonly<Record<ActivityEventType, EventStyle>> = {
   deal: { Icon: Handshake, tone: "accent", label: "Deal" },
   table_opened: { Icon: Table2, tone: "primary", label: "Table Opened" },
   seat_waiting: { Icon: Armchair, tone: "accent", label: "Waiting" },
+  entry_corrected: { Icon: Wrench, tone: "muted", label: "Correction" },
 };
 
 /** Rows written before Phase 2 may hold an event type the app no longer writes. */

@@ -77,6 +77,8 @@ export const ACTIVITY_EVENT_TYPES = [
   "deal", // finalize with a deal: "Deal: Alice $1,200, Bob $1,000 (Chip chop at 2 handed)"
   "table_opened", // the advisor's Open Table: "Opened Table 3: 4 players seated, 2 moved" (can be undone)
   "seat_waiting", // a new arrival auto-seat had no seat for: "Test Player 17 is waiting for a seat: every table is full"
+  // Round 9
+  "entry_corrected", // a staff Fix: "Tama Rangi's payment was taken back: not paid yet", how they paid, the high hand, their details
 ] as const;
 export type ActivityEventType = (typeof ACTIVITY_EVENT_TYPES)[number];
 
@@ -99,4 +101,5 @@ export const STAFF_ONLY_ACTIVITY_TYPES = [
   "clock_structure_updated",
   "early_bird",
   "seat_waiting",
+  "entry_corrected",
 ] as const satisfies readonly ActivityEventType[];

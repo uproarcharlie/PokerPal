@@ -19,6 +19,8 @@ import type { PublicRegistration } from "@shared/api/public";
 import { registrationRemovalProblem, standingsFor } from "@shared/domain/standings";
 import { useSeating } from "@/features/seating/staff-hooks";
 import type { SeatingDto } from "@shared/api/seating";
+import type { TournamentDetailDto } from "@shared/api/tournaments";
+import { isClosedStatus } from "@shared/domain/tournaments";
 import { useRemoveRegistration, useUpdateRegistration } from "../../staff-hooks";
 import { playerName } from "../../player-name";
 import { BustSheet } from "../mobile/bust-sheet";
@@ -29,17 +31,18 @@ import { lineupOf } from "@/features/public-tournament/waiting-list";
 import { acceptRefusal } from "@shared/domain/waiting-list";
 import { WaitingListCard } from "./waiting-list-card";
 import { FreeEntryBadge, freeEntryOf } from "../free-entry/free-entry-badge";
+import { useEntryFixes } from "../entry-fix/use-entry-fixes";
 
 interface StandingsTableProps {
-  tournamentId: string;
+  /**
+   * Its Max players caps the field: sign-ups past it are on the waiting list, shown under the standings
+   * (round 5, item 15). Eliminate, restore, remove and Fix are for the club's staff (viewer.canManage)
+   * while it is open: once completed or cancelled the standings no longer change here (a finished one
+   * is fixed with Correct Results).
+   */
+  tournament: TournamentDetailDto;
+  /** As the viewer is sent them: the club's staff get each one's payment status (ManagedRegistration), which the Fix menu reads. */
   registrations: readonly PublicRegistration[];
-  /** The field's cap: sign-ups past it are on the waiting list, shown under the standings (round 5, item 15). */
-  maxPlayers: number;
-  /** Eliminate, restore and remove are for the club's staff (viewer.canManage). */
-  canManage: boolean;
-  /** Completed or cancelled: the standings can no longer change here (a finished one is fixed with Correct Results). */
-  closed: boolean;
-  completed: boolean;
 }
 
 function PlayerCell({ registration }: { registration: PublicRegistration }) {
@@ -105,10 +108,15 @@ function entryText(registration: PublicRegistration): string {
 }
 
 /**
- * The players, best first, with the TD's eliminate, restore and remove controls while the game is
- * open; under them the waiting list behind a full field, whose players are in none of it.
+ * The players, best first, with the TD's eliminate, restore, Fix (round 9: a payment taken back, how it
+ * was paid, the high hand, the player's details) and remove controls while the game is open; under
+ * them the waiting list behind a full field, whose players are in none of it.
  */
-export function StandingsTable({ tournamentId, registrations: everyone, maxPlayers, canManage, closed, completed }: StandingsTableProps) {
+export function StandingsTable({ tournament, registrations: everyone }: StandingsTableProps) {
+  const { id: tournamentId, maxPlayers } = tournament;
+  const canManage = tournament.viewer.canManage;
+  const closed = isClosedStatus(tournament.status);
+  const completed = tournament.status === "completed";
   // Worked out once per answer: the focus effect below follows the field.
   const { field: registrations, waiting: waitingList } = useMemo(() => lineupOf(everyone, maxPlayers), [everyone, maxPlayers]);
   const { toast } = useToast();
@@ -139,6 +147,8 @@ export function StandingsTable({ tournamentId, registrations: everyone, maxPlaye
   }));
   const afterEliminate = useFirstInPage(eliminatedControl, heading);
   const phone = useMediaQuery(PHONE_QUERY);
+  // A payment taken back keeps the player in the field: the row stays, so focus does too.
+  const fixes = useEntryFixes({ tournament, registrations: everyone, returnFocusTo: heading, testIdPrefix: "standings-fix" });
   const onEliminated = (registrationId: string) => {
     keepFocus.current = { registrationId, eliminated: true };
   };
@@ -262,6 +272,7 @@ export function StandingsTable({ tournamentId, registrations: everyone, maxPlaye
                 Eliminate
               </Button>
             )}
+            {fixes.menu(registration)}
             {/* An entry nothing has happened to yet: the server's own rule (CQ-P2-03). */}
             {registrationRemovalProblem(registration, registrations) === null ? (
               <Button
@@ -331,6 +342,8 @@ export function StandingsTable({ tournamentId, registrations: everyone, maxPlaye
             toast({ title: "Entry removed", description: "The player is no longer registered for this tournament" });
           }}
         />
+
+        {controls ? fixes.dialogs : null}
 
         {/* On a phone the bust is the photo picker's two taps from here (round5-contracts §8.1); a wider screen keeps the dialog. */}
         {phone ? (

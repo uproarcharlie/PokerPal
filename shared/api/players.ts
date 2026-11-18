@@ -89,15 +89,21 @@ export const createPlayerSchema = z.object({
 });
 export type CreatePlayerInput = z.infer<typeof createPlayerSchema>;
 
-/** PUT /api/players/:id (staff). Absent keeps; null or blank clears (a removed photo really is removed: img-04). */
+/**
+ * PUT /api/players/:id (staff). Absent keeps; null or blank clears (a removed photo really is removed: img-04).
+ * `tournamentId` (round 9): the edit is a correction from that tournament's Fix menu, so its staff-only
+ * feed says the player's details were corrected (and the audit row names it). The player must have an
+ * entry in it (400 INVALID_TARGET) and the caller must run its club (403); it is not itself a change.
+ */
 export const updatePlayerSchema = z
   .object({
     name: requiredText(PLAYER_NAME_MAX).optional(),
     phone: phoneSchema,
     email: optionalEmail,
     imageUrl: playerImageUrlSchema,
+    tournamentId: idSchema.optional(),
   })
-  .refine((input) => Object.values(input).some((value) => value !== undefined), "Nothing to update");
+  .refine(({ tournamentId: _context, ...changes }) => Object.values(changes).some((value) => value !== undefined), "Nothing to update");
 export type UpdatePlayerInput = z.infer<typeof updatePlayerSchema>;
 
 /**

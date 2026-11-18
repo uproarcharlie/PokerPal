@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { ChevronRight, MonitorPlay } from "lucide-react";
+import { ChevronRight, MonitorPlay, Pencil } from "lucide-react";
 import type { ClockDto } from "@shared/api/clock";
 import type { LiveDisplayDto } from "@shared/api/live-display";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
@@ -119,6 +119,29 @@ function ToolRow({ title, description, onOpen, disabled }: { title: string; desc
 }
 
 /**
+ * The structure on a phone, read-only, the level the clock is on marked; for the club's staff with an
+ * Edit button that opens the full-screen editor, the same as Clock tools → Edit the blind structure.
+ */
+function StructureCard({ clock, derived, onEdit }: { clock: ClockDto; derived: DerivedClock; onEdit?: () => void }) {
+  return (
+    <Card data-testid="structure-card">
+      <CardHeader className="flex-row items-center justify-between gap-3 space-y-0 p-4">
+        <CardTitle>Blind structure</CardTitle>
+        {onEdit ? (
+          <Button variant="outline" className="h-11 shrink-0" onClick={onEdit} aria-label="Edit levels and breaks" data-testid="structure-card-edit">
+            <Pencil aria-hidden="true" />
+            Edit
+          </Button>
+        ) : null}
+      </CardHeader>
+      <CardContent className="p-4 pt-0">
+        <StructureTable structure={clock.structure} currentIndex={derived.levelIndex} caption="Blind structure" />
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
  * The Clock tab on a phone (round 5, items 10 and 17): the clock and its controls fit one screen, the
  * Start / Pause button the width of it; the structure, the rest of it, the TV's settings and early
  * birds each open in a sheet of their own, the whole screen.
@@ -173,17 +196,13 @@ function PhoneWorkspace({ tournament, display, clock, derived, canEdit, timeZone
           </CardContent>
         </Card>
       ) : (
-        <Card>
-          <CardHeader className="p-4">
-            <CardTitle>Blind structure</CardTitle>
-          </CardHeader>
-          <CardContent className="p-4 pt-0">
-            <StructureTable structure={clock.structure} currentIndex={derived.levelIndex} caption="Blind structure" />
-          </CardContent>
-        </Card>
+        <StructureCard clock={clock} derived={derived} />
       )}
 
       <ChipFigures stats={display.stats} structure={clock.structure} derived={derived} />
+
+      {/* Every level at a glance, and per-level editing one tap from it (round 9, item 2: the owner looked for it here). */}
+      {canEdit ? <StructureCard clock={clock} derived={derived} onEdit={() => onSheet("structure")} /> : null}
 
       {canEdit ? (
         <>

@@ -131,6 +131,39 @@ describe("the Clock tab on a phone, 390 px wide (round 5, items 10 and 17)", () 
   });
 });
 
+describe("the blind structure on a phone's Clock tab, 390 px wide (round 9, item 2)", () => {
+  beforeEach(() => screenWidth(390));
+
+  it("shows every level, the one the clock is on marked, with Edit opening the same full-screen editor as Clock tools", async () => {
+    serveDisplay({ clock: runningClock(Date.now(), { levelIndex: 1 }) });
+    showPanel();
+    const keys = user();
+
+    const card = await screen.findByTestId("structure-card");
+    expect(within(card).getByRole("table", { name: "Blind structure" })).toBeInTheDocument();
+    const edit = within(card).getByRole("button", { name: "Edit levels and breaks" });
+    expect(edit).toHaveTextContent("Edit");
+    expect(edit).toHaveClass("h-11");
+    await keys.click(edit);
+
+    const sheet = await screen.findByRole("dialog", { name: "Blind structure" });
+    expect(sheet).toHaveClass("w-full");
+    expect(within(sheet).getByRole("form", { name: "Blind structure" })).toBeInTheDocument();
+    expect(within(sheet).getByTestId("level-row-0")).toBeInTheDocument();
+    await keys.click(within(sheet).getByRole("button", { name: "Close" }));
+    await vi.waitFor(() => expect(screen.queryByRole("dialog", { name: "Blind structure" })).not.toBeInTheDocument());
+  });
+
+  it("shows it read-only, with no Edit, to someone who does not run the club", async () => {
+    serveDisplay({ clock: runningClock(Date.now(), { levelIndex: 1 }) });
+    renderWithApp(<ClockPanel tournament={clockTournamentDto({ viewer: { canManage: false, canOwn: false } })} />);
+
+    const card = await screen.findByTestId("structure-card");
+    expect(within(card).queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Edit the blind structure/ })).not.toBeInTheDocument();
+  });
+});
+
 describe("the TV's settings from a phone, 390 px wide (round 5, items 20–26)", () => {
   beforeEach(() => screenWidth(390));
 

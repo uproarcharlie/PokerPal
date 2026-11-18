@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useForm } from "react-hook-form";
 import { Check } from "lucide-react";
 import { updatePlayerSchema, type StaffPlayer } from "@shared/api/players";
@@ -27,27 +27,34 @@ interface PlayerFormValues {
 const FIELDS = ["name", "email", "phone", "imageUrl"] as const;
 
 interface EditPlayerSheetProps {
-  /** The player being edited; null when closed. */
+  /** The player being edited; null when closed (unless `placeholder` holds it open). */
   player: EditablePlayer | null;
   onClose: () => void;
+  /**
+   * Round 9: the tournament whose Fix menu the edit comes from, sent with it so that tournament's
+   * staff feed says the player's details were corrected.
+   */
+  tournamentId?: string;
+  /** What the open sheet shows while there is no player to edit yet (a Fix menu looking their details up), or why there will be none. */
+  placeholder?: ReactNode;
 }
 
 /** Edit a player's photo (or avatar), name, email and mobile number (optional: round 7, item 9) in a panel from the side. */
-export function EditPlayerSheet({ player, onClose }: EditPlayerSheetProps) {
+export function EditPlayerSheet({ player, onClose, tournamentId, placeholder }: EditPlayerSheetProps) {
   return (
-    <Sheet open={player !== null} onOpenChange={(open) => (open ? undefined : onClose())}>
+    <Sheet open={player !== null || placeholder !== undefined} onOpenChange={(open) => (open ? undefined : onClose())}>
       <SheetContent side="right" className="flex w-full flex-col sm:max-w-[540px]">
         <SheetHeader className="shrink-0">
           <SheetTitle>Edit Player</SheetTitle>
           <SheetDescription>Update player information and profile.</SheetDescription>
         </SheetHeader>
-        {player ? <PlayerForm key={player.id} player={player} onDone={onClose} /> : null}
+        {player ? <PlayerForm key={player.id} player={player} tournamentId={tournamentId} onDone={onClose} /> : placeholder}
       </SheetContent>
     </Sheet>
   );
 }
 
-function PlayerForm({ player, onDone }: { player: EditablePlayer; onDone: () => void }) {
+function PlayerForm({ player, tournamentId, onDone }: { player: EditablePlayer; tournamentId?: string; onDone: () => void }) {
   const { toast } = useToast();
   const save = useUpdatePlayer();
   const [uploading, setUploading] = useState(false);
@@ -65,7 +72,7 @@ function PlayerForm({ player, onDone }: { player: EditablePlayer; onDone: () => 
   const onSubmit = form.handleSubmit(async (values) => {
     try {
       // A cleared email, phone or photo goes as null, so it really is removed (CA-24, img-04).
-      await save.mutateAsync({ id: player.id, input: updatePlayerSchema.parse(values) });
+      await save.mutateAsync({ id: player.id, input: updatePlayerSchema.parse(tournamentId ? { ...values, tournamentId } : values) });
       toast({ title: "Player updated", description: `${values.name.trim()}'s details are saved.` });
       onDone();
     } catch (error) {

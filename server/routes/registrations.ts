@@ -100,7 +100,7 @@ export function registrationsRoutes({ env, limiters }: RouteDeps): Router {
     requireClubManager(clubFrom.registration()),
     validateBody(confirmPaymentSchema, INVALID),
     asyncHandler<{ id: string }, unknown, ConfirmPaymentInput>(async (req, res) => {
-      res.json(await confirmPayment(req.params.id, req.body));
+      res.json(await confirmPayment(req, req.params.id, req.body));
     }),
   );
 

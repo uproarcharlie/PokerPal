@@ -222,6 +222,20 @@ describe("ClockPanel controls", () => {
     expect(structure).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("makes Show and edit stand out while the structure is folded, saying every level can still change (round 9, item 2)", async () => {
+    serveDisplay({ clock: paused() });
+    showPanel();
+    const keys = user();
+
+    const structure = await screen.findByRole("button", { name: "Show and edit the blind structure" });
+    expect(screen.getByTestId("structure-folded-hint")).toHaveTextContent("Any level, break or ante can still be changed while the clock runs.");
+    await keys.click(structure);
+
+    expect(screen.getByRole("button", { name: "Hide the blind structure" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByTestId("structure-folded-hint")).not.toBeInTheDocument();
+    expect(screen.getByTestId("level-row-0")).toBeVisible();
+  });
+
   it("names the change Undo takes back, sends the undo it showed, then offers to redo it (TDN2-UNDO-REDO-TRAP, R2-CQ-01)", async () => {
     const undo = undoDto();
     serveDisplay({ clock: paused({ undo }), viewer: { canControl: true } });

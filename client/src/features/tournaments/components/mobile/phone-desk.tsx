@@ -123,14 +123,7 @@ export function PhoneDesk({
                 <p className="text-sm text-muted-foreground" data-testid="field-summary">
                   {fieldText(tournament, lineup)}
                 </p>
-                <StandingsTable
-                  tournamentId={tournament.id}
-                  registrations={registrations}
-                  maxPlayers={tournament.maxPlayers}
-                  canManage={canManage}
-                  closed={closed}
-                  completed={tournament.status === "completed"}
-                />
+                <StandingsTable tournament={tournament} registrations={registrations} />
               </div>
             ),
           },
@@ -190,7 +183,7 @@ export function PhoneDesk({
             returnFocusTo={quickActionsRef}
           />
           <PaymentsSheet
-            tournamentId={tournament.id}
+            tournament={tournament}
             timeZone={timeZone}
             freeTournament={isFreeTournament(tournament)}
             full={acceptRefusal(registrations, tournament.maxPlayers)}

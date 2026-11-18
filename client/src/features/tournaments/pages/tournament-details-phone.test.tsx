@@ -40,6 +40,8 @@ function mockDesk({
     http.get("/api/clubs/c1", () => HttpResponse.json(clubDto())),
     http.get("/api/tournaments/t1/registrations", () => HttpResponse.json(registrations)),
     http.get("/api/tournaments/t1/pending-actions", () => HttpResponse.json(requests)),
+    // The Take payment sheet lists who has paid under who has not (round 9).
+    http.get("/api/tournaments/t1/confirmed-registrations", () => HttpResponse.json([])),
   );
 }
 
@@ -743,6 +745,35 @@ describe("TournamentDetailsPage on a phone: taking payments without leaving the 
     const sheet = await screen.findByRole("dialog", { name: "Take payment" });
     expect(await within(sheet).findByTestId("confirm-payment-r3")).toBeInTheDocument();
     expect(location()).toBe("/admin/tournaments/t1?tab=money");
+  });
+
+  it("lists who has paid under the payments to take, so a payment confirmed by mistake is put right in the sheet (round 9)", async () => {
+    mockDesk({ registrations: [field[0], field[1], unpaidCat] });
+    const cat: PendingRegistrationDto = { ...unpaidCat, player: staffPlayer("p-r3", "Cat"), amountOwed: 100 };
+    const bob: ConfirmedRegistrationDto = { ...field[1], paidBy: "cash", player: staffPlayer("p-r2", "Bob"), amountPaid: 200 };
+    const updates = recordBodies();
+    server.use(
+      http.get("/api/tournaments/t1/pending-registrations", () => HttpResponse.json([cat])),
+      http.get("/api/tournaments/t1/confirmed-registrations", () => HttpResponse.json([bob])),
+      http.put("/api/registrations/r2", async ({ request }) => HttpResponse.json({ ...field[1], ...((await updates.record(request)) as object), paidBy: null })),
+    );
+    const { user } = renderPhone();
+
+    await user.click(await screen.findByRole("button", { name: "Quick actions" }));
+    await user.click(await screen.findByRole("menuitem", { name: /Take payment/ }));
+    const sheet = within(await screen.findByRole("dialog", { name: "Take payment" }));
+    const paidList = within(await sheet.findByTestId("payments-sheet-paid"));
+    expect(await paidList.findByRole("heading", { name: "Paid · 1" })).toBeInTheDocument();
+    await user.click(paidList.getByRole("button", { name: "Fix Bob's entry" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Mark as not paid…" }));
+    const question = await screen.findByRole("alertdialog", { name: "Mark Bob as not paid?" });
+    expect(question).toHaveTextContent("Bob goes back to Not paid yet; the prize pool drops by");
+    await user.click(within(question).getByRole("button", { name: "Mark as not paid" }));
+
+    await waitFor(() => expect(updates.bodies).toEqual([{ paymentConfirmed: false }]));
+    expect(await notifications().findByText("Bob is back on the list to pay.")).toBeInTheDocument();
+    // Still in the sheet, where the TD was.
+    expect(screen.getByRole("dialog", { name: "Take payment" })).toBeInTheDocument();
   });
 
   it("counts everyone in the field who has not paid beside Take payment, whatever the seating mode", async () => {

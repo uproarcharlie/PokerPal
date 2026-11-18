@@ -1,6 +1,6 @@
 import { memo, useId, useState } from "react";
 import { useFieldArray, useForm, useWatch } from "react-hook-form";
-import { ChevronDown, Plus } from "lucide-react";
+import { ChevronDown, Pencil, Plus } from "lucide-react";
 import type { ClockDto } from "@shared/api/clock";
 import type { BlindPresetKey } from "@shared/domain/blind-structures";
 import { ANTE_MODE_LABELS, ANTE_MODES, type ClockStructure } from "@shared/domain/clock";
@@ -240,6 +240,11 @@ export const StructureEditor = memo(function StructureEditor({ tournamentId, clu
           <CardDescription>
             {rowsSummary(levels)}
           </CardDescription>
+          {open ? null : (
+            <p className="text-sm text-foreground" data-testid="structure-folded-hint">
+              Any level, break or ante can still be changed while the clock runs.
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           {onChangeRest ? (
@@ -247,8 +252,9 @@ export const StructureEditor = memo(function StructureEditor({ tournamentId, clu
               Change the rest…
             </Button>
           ) : null}
-          <Button type="button" variant="outline" size="sm" aria-expanded={open} aria-controls={contentId} onClick={() => setUnfolded(!open)}>
-            <ChevronDown aria-hidden="true" className={cn("transition-transform", open && "rotate-180")} />
+          {/* Folded once the clock has started: the way back in to every level stands out (round 9, item 2). */}
+          <Button type="button" variant={open ? "outline" : "default"} size="sm" aria-expanded={open} aria-controls={contentId} onClick={() => setUnfolded(!open)}>
+            {open ? <ChevronDown aria-hidden="true" className="rotate-180 transition-transform" /> : <Pencil aria-hidden="true" />}
             {open ? "Hide" : "Show and edit"}
             <span className="sr-only"> the blind structure</span>
           </Button>

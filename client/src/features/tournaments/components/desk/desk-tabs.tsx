@@ -67,7 +67,6 @@ export function DeskTabs({
   onLockPool,
 }: DeskTabsProps) {
   const closed = isClosedStatus(tournament.status);
-  const canManage = tournament.viewer.canManage;
   return (
     <TabHost
       value={tab}
@@ -98,16 +97,7 @@ export function DeskTabs({
         {
           value: "standings",
           label: "Standings",
-          content: (
-            <StandingsTable
-              tournamentId={tournament.id}
-              registrations={registrations}
-              maxPlayers={tournament.maxPlayers}
-              canManage={canManage}
-              closed={closed}
-              completed={tournament.status === "completed"}
-            />
-          ),
+          content: <StandingsTable tournament={tournament} registrations={registrations} />,
         },
         { value: "activity", label: "Activity", content: <ActivityFeed tournamentId={tournament.id} live={!closed} /> },
         {

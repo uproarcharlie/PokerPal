@@ -23,6 +23,7 @@ import { isFreeEntry } from "@shared/domain/prize-pool";
 import { toCents, type Cents } from "@shared/domain/money";
 import { waitingListPlaceOf } from "@/features/public-tournament/waiting-list";
 import { playerName } from "../../player-name";
+import type { EntryFixes } from "../entry-fix/use-entry-fixes";
 import { FreeEntryBadge } from "../free-entry/free-entry-badge";
 import { transferSplit, type TransferDesk, type TransferSplit } from "./transfer-split";
 
@@ -530,14 +531,18 @@ interface ConfirmedPaymentsProps {
   freeTournament?: boolean;
   /** Players may pay ahead by bank transfer (round 8): a payment confirmed as a transfer shows what the door collected. */
   transfers?: TransferDesk | null;
+  /** The ⋯ Fix menu on every row (round 9): a payment taken back, how it was paid, the high hand, the player's details. */
+  fixes?: Pick<EntryFixes, "menu">;
 }
 
 /**
  * Players who have paid, or were let in free (round 7: FREE, with Mark paid and Undo): what each paid,
  * by the same formula as what they owed (a free entry's buy-in is not paid). A payment confirmed as a
- * bank transfer (round 8) shows what the transfer paid and what was collected at the door.
+ * bank transfer (round 8) shows what the transfer paid and what was collected at the door. Each row's
+ * Fix menu (round 9) corrects a mistake: a payment confirmed that was not made, how it was made, the
+ * high hand, the player's details.
  */
-export function ConfirmedPayments({ query, timeZone, earlyBirds, freeEntries, freeTournament = false, transfers = null }: ConfirmedPaymentsProps) {
+export function ConfirmedPayments({ query, timeZone, earlyBirds, freeEntries, freeTournament = false, transfers = null, fixes }: ConfirmedPaymentsProps) {
   const splitOf = (registration: ConfirmedRegistrationDto) =>
     transfers && registration.paidBy === "transfer" ? transferSplit(registration, registration.amountPaid, transfers) : null;
   const columns: ResponsiveColumn<ConfirmedRegistrationDto>[] = [
@@ -568,18 +573,22 @@ export function ConfirmedPayments({ query, timeZone, earlyBirds, freeEntries, fr
       header: "Status",
       className: "text-right",
       phone: "actions",
-      cell: (registration) =>
-        isFreeEntry(registration) ? (
-          <FreeEntryStatusCell registration={registration} actions={freeEntries} />
-        ) : (
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <PaidByMark registration={registration} />
-            <Badge className="bg-status-live text-status-live-foreground hover:bg-status-live">
-              <Check className="mr-1 h-3 w-3" aria-hidden="true" />
-              {freeTournament ? "Accepted" : "Confirmed"}
-            </Badge>
-          </div>
-        ),
+      cell: (registration) => (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {isFreeEntry(registration) ? (
+            <FreeEntryStatusCell registration={registration} actions={freeEntries} />
+          ) : (
+            <>
+              <PaidByMark registration={registration} />
+              <Badge className="bg-status-live text-status-live-foreground hover:bg-status-live">
+                <Check className="mr-1 h-3 w-3" aria-hidden="true" />
+                {freeTournament ? "Accepted" : "Confirmed"}
+              </Badge>
+            </>
+          )}
+          {fixes?.menu(registration)}
+        </div>
+      ),
     },
   ];
 

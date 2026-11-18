@@ -722,6 +722,11 @@ export async function updateRegistration(req: Request, registrationId: string, i
     const changed = changedFields(input, current);
 
     if (isClosed(tournament) && changed.some((field) => !EDITABLE_WHEN_CLOSED.has(field))) throw closedRefusal(tournament);
+    // After the game a payment is taken in (late reconciliation), never taken back: its prize pool is settled (round 9).
+    const takesBackPayment = changed.includes("paymentConfirmed") && input.paymentConfirmed === false;
+    if (takesBackPayment && isClosed(tournament)) {
+      throw conflict("TOURNAMENT_CLOSED", `${closedMessage(tournament)}, so a payment can no longer be taken back`);
+    }
     if (input.eliminatedBy !== undefined && input.isEliminated !== true) {
       throw badRequest("Send eliminatedBy only when eliminating a player (isEliminated: true)");
     }
@@ -754,10 +759,9 @@ export async function updateRegistration(req: Request, registrationId: string, i
       knockouts: input.knockouts ?? current.knockouts,
     });
     // Ticking or unticking an entry moves the high-hand pot, which the awards already made must still
-    // fit. So does a payment taken back (only paid entries are in the pot) while the game is open. A
-    // payment taken is never refused for it (highHandLeftByPayment), nor is any payment after the game.
-    const movesPot =
-      changed.includes("enteringHighHands") || (changed.includes("paymentConfirmed") && input.paymentConfirmed === false && !isClosed(tournament));
+    // fit. So does a payment taken back (only paid entries are in the pot; only while the game is open).
+    // A payment taken is never refused for it (highHandLeftByPayment), nor is any payment after the game.
+    const movesPot = changed.includes("enteringHighHands") || takesBackPayment;
     const potBefore = movesPot ? await registrationsRepo.registrationsOf(tx, tournament.id) : undefined;
 
     const highHand = await highHandChange(tx, locked, input, changed);
@@ -770,7 +774,7 @@ export async function updateRegistration(req: Request, registrationId: string, i
       enteringHighHands: input.enteringHighHands,
       paymentConfirmed: input.paymentConfirmed,
       // A payment taken back takes how it was paid with it (round 8).
-      paidBy: changed.includes("paymentConfirmed") && input.paymentConfirmed === false ? null : undefined,
+      paidBy: takesBackPayment ? null : undefined,
       highHandWinner: input.highHandWinner,
       highHandAmount: highHand.amount,
     };
@@ -792,12 +796,13 @@ export async function updateRegistration(req: Request, registrationId: string, i
       assertHighHandAwardsFit({ tournament, registrations: potBefore }, { tournament, registrations: potAfter });
     }
     // Fewer entries, or a payment taken back, lowers the gross a manual AP total must stay within.
-    const unpaid = changed.includes("paymentConfirmed") && input.paymentConfirmed === false;
-    const lowered = unpaid || (["buyIns", "rebuys", "addons"] as const).some((field) => (input[field] ?? Infinity) < (current[field] ?? 0));
+    const lowered = takesBackPayment || (["buyIns", "rebuys", "addons"] as const).some((field) => (input[field] ?? Infinity) < (current[field] ?? 0));
     if (lowered) await assertApStillWithinGross(tx, tournament, await registrationsRepo.registrationsOf(tx, tournament.id));
 
     const player = await getPlayer(tx, current.playerId);
     await logIncreases(tx, tournament, updated, player, added);
+    if (takesBackPayment) await recordCorrection(req, tx, { tournament, before: current, after: updated, player, change: "not_paid" });
+    if (changed.includes("enteringHighHands")) await recordCorrection(req, tx, { tournament, before: current, after: updated, player, change: "high_hand" });
     if (changed.includes("highHandWinner") && input.highHandWinner === true) {
       await logHighHand(tx, updated, player, highHand);
     }
@@ -921,7 +926,7 @@ async function highHandLeftByPayment(tx: Transaction, tournament: Tournament): P
  * so their payment is always taken. Never refused for the high-hand pot: what it leaves there
  * unawarded is said (highHandLeftByPayment).
  */
-export async function confirmPayment(registrationId: string, input: ConfirmPaymentInput = {}) {
+export async function confirmPayment(req: Request, registrationId: string, input: ConfirmPaymentInput = {}) {
   return db.transaction(async (tx) => {
     const { tournament, registration } = await lockRegistrationById(tx, registrationId);
     await assertRoomToAccept(tx, tournament, registration, { ...registration, paymentConfirmed: true });
@@ -929,18 +934,67 @@ export async function confirmPayment(registrationId: string, input: ConfirmPayme
     const player = await getPlayer(tx, registration.playerId);
     const how = input.paidBy ? ` (${PAID_BY_LABELS[input.paidBy].toLowerCase()})` : "";
     if (confirmed) await logActivity(tx, confirmed, "payment_confirmed", `Payment confirmed for ${playerName(player)}${how}`);
-    // Confirmed already: only how it was paid may change (a free entry keeps "free"), and nothing is logged.
+    // Confirmed already: only how it was paid may change (a free entry keeps "free"), a correction the staff's feed and the audit log record (round 9).
     const recorded =
       confirmed ??
       (input.paidBy && registration.freeEntry !== true && registration.paidBy !== input.paidBy
         ? await registrationsRepo.updateTournamentRegistration(tx, registration.id, { paidBy: input.paidBy })
         : undefined);
+    if (!confirmed && recorded) await recordCorrection(req, tx, { tournament, before: registration, after: recorded, player, change: "paid_by" });
     // Round 5: a player waiting for their payment (or behind a full field) sits down as it is confirmed.
     const seating = confirmed && !isClosed(tournament) ? await autoSeatOnPayment(tx, tournament, registration.id) : null;
     const highHandUnawardedCents = confirmed && registration.enteringHighHands ? await highHandLeftByPayment(tx, tournament) : 0;
     // Accepted: in the field, never on the waiting list.
     return { ...toManagedRegistration(recorded ?? registration, player, new Map()), seating, highHandUnawardedCents };
   });
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Corrections (round 9, item 1: the desk's Fix menu)
+
+type Correction = AuditData["registration.correct"]["change"];
+
+/** The fields a correction can change, as the audit row keeps them. */
+const correctedFields = (registration: TournamentRegistration) => ({
+  paymentConfirmed: registration.paymentConfirmed === true,
+  paidBy: registration.paidBy ?? null,
+  enteringHighHands: registration.enteringHighHands === true,
+});
+
+/** How a payment was made, as the feed says it: "bank transfer". */
+const paidByWords = (paidBy: string | null) => (isPaidBy(paidBy) ? PAID_BY_LABELS[paidBy].toLowerCase() : null);
+
+/** The feed's words for a correction: what changed, never a phone number or an amount (the feed is the staff's, the audit row has the rest). */
+function correctionText(change: Correction, name: string, before: TournamentRegistration, after: TournamentRegistration): string {
+  if (change === "not_paid") return `${name}'s payment was taken back: not paid yet`;
+  if (change === "high_hand") return after.enteringHighHands ? `${name} is now in the high hand` : `${name} is no longer in the high hand`;
+  const was = paidByWords(before.paidBy);
+  const now = paidByWords(after.paidBy) ?? "not recorded";
+  return was ? `How ${name} paid changed from ${was} to ${now}` : `${name}'s payment recorded as ${now}`;
+}
+
+/**
+ * A staff Fix to an entry (round 9): its payment taken back, how it paid, or its high-hand entry. A
+ * staff-only feed entry ("entry_corrected", `eventData.correction` naming the change) and an audit row
+ * with the entry as it was and is, in the change's transaction.
+ */
+async function recordCorrection(
+  req: Request,
+  tx: Transaction,
+  { tournament, before, after, player, change }: { tournament: Tournament; before: TournamentRegistration; after: TournamentRegistration; player: Player | undefined; change: Correction },
+): Promise<void> {
+  const name = playerName(player);
+  await logActivity(tx, after, "entry_corrected", correctionText(change, name, before, after), { correction: change });
+  await recordAudit(
+    req,
+    {
+      action: "registration.correct",
+      targetType: "registration",
+      targetId: after.id,
+      data: { tournamentId: tournament.id, playerName: name, change, before: correctedFields(before), after: correctedFields(after) },
+    },
+    tx,
+  );
 }
 
 // ---------------------------------------------------------------------------------------------------
