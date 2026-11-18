@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { normaliseNzBankAccount } from "@shared/api/clubs";
 import { BANK_TRANSFER_FIELD_MAX, paymentParticulars, paymentReference } from "@shared/api/registrations";
-import type { Club, Tournament, TournamentRegistration } from "@shared/schema";
+import type { Club, TournamentHighHand } from "@shared/schema";
 import { bankDetailsOf, paymentInstructionsFor, type SignUpForPayment } from "./club-payments";
+import type { RegistrationWithHighHands, TournamentWithHighHands } from "./high-hands";
 
 const club = (overrides: Partial<Club> = {}) =>
   ({
@@ -15,8 +16,9 @@ const club = (overrides: Partial<Club> = {}) =>
     ...overrides,
   }) as Club;
 
-const tournament = (overrides: Partial<Tournament> = {}) =>
+const tournament = (overrides: Partial<TournamentWithHighHands> = {}) =>
   ({
+    highHands: null,
     id: "t1",
     name: "Wed Night",
     startDateTime: new Date("2026-11-18T06:30:00Z"),
@@ -27,10 +29,15 @@ const tournament = (overrides: Partial<Tournament> = {}) =>
     highHandAmount: "10.00",
     showBankTransfer: true,
     ...overrides,
-  }) as Tournament;
+  }) as TournamentWithHighHands;
 
-const registration = (overrides: Partial<TournamentRegistration> = {}) =>
-  ({ id: "r1", buyIns: 1, rebuys: 0, addons: 0, enteringHighHands: false, freeEntry: false, ...overrides }) as TournamentRegistration;
+const registration = (overrides: Partial<RegistrationWithHighHands> = {}) =>
+  ({ id: "r1", buyIns: 1, rebuys: 0, addons: 0, enteringHighHands: false, freeEntry: false, highHandIds: [], highHandWins: [], ...overrides }) as RegistrationWithHighHands;
+
+/** The legacy high hand at the door: "High hand ($10) — pay at the door". */
+const legacyAtDoor = [{ highHandId: "legacy", name: "High hand", feeCents: 1_000 }];
+
+const listed = (id: string, name: string, entryFee: string, position: number) => ({ id, name, entryFee, position, rakeType: "percentage", rakeAmount: "10.00", winners: 1, note: null }) as TournamentHighHand;
 
 const signUp = (overrides: Partial<SignUpForPayment> = {}): SignUpForPayment => ({
   tournament: tournament(),
@@ -108,28 +115,50 @@ describe("paymentInstructionsFor", () => {
       particulars: "Wed Night",
       reference: "Tama Rangi",
       highHandAtDoorCents: 1_000,
+      highHandsAtDoor: legacyAtDoor,
       waitingList: false,
     });
+  });
+
+  it("names each high hand the player chose, with its fee, to pay at the door: the transfer is still the buy-in only (round 10)", () => {
+    const twoHalves = tournament({ highHands: [listed("h1", "First half", "5.00", 1), listed("h2", "Second half", "5.00", 2)], highHandAmount: "10.00" });
+
+    const second = paymentInstructionsFor(signUp({ tournament: twoHalves, registration: registration({ enteringHighHands: true, highHandIds: ["h2"] }) }));
+    const both = paymentInstructionsFor(signUp({ tournament: twoHalves, registration: registration({ enteringHighHands: true, highHandIds: ["h1", "h2"] }) }));
+    const none = paymentInstructionsFor(signUp({ tournament: twoHalves, registration: registration() }));
+
+    expect(second).toMatchObject({ amountDueCents: 10_000, highHandAtDoorCents: 500, highHandsAtDoor: [{ highHandId: "h2", name: "Second half", feeCents: 500 }] });
+    expect(both).toMatchObject({
+      amountDueCents: 10_000,
+      highHandAtDoorCents: 1_000,
+      highHandsAtDoor: [
+        { highHandId: "h1", name: "First half", feeCents: 500 },
+        { highHandId: "h2", name: "Second half", feeCents: 500 },
+      ],
+    });
+    expect(none).toMatchObject({ amountDueCents: 10_000, highHandAtDoorCents: 0, highHandsAtDoor: [] });
+    // The AP of each high hand is the club's: never in what the player is told.
+    expect(JSON.stringify(both)).not.toMatch(/rake/i);
   });
 
   it("asks a free entry for nothing, without the club's account, and mentions no high hand the tournament does not offer", () => {
     const free = paymentInstructionsFor(signUp({ registration: registration({ freeEntry: true, enteringHighHands: true }), tournament: tournament({ enableHighHand: false }) }));
 
-    expect(free).toEqual({ amountDueCents: 0, highHandAtDoorCents: 0, waitingList: false });
+    expect(free).toEqual({ amountDueCents: 0, highHandAtDoorCents: 0, highHandsAtDoor: [], waitingList: false });
   });
 
   it("gives a free entry's high hand, to pay at the door, and a $0 game nothing to transfer, neither with the account", () => {
     const freeWithHighHand = paymentInstructionsFor(signUp({ registration: registration({ freeEntry: true, paymentConfirmed: true, enteringHighHands: true }) }));
     const freeroll = paymentInstructionsFor(signUp({ tournament: tournament({ buyInAmount: "0.00" }) }));
 
-    expect(freeWithHighHand).toEqual({ amountDueCents: 0, highHandAtDoorCents: 1_000, waitingList: false });
-    expect(freeroll).toEqual({ amountDueCents: 0, highHandAtDoorCents: 0, waitingList: false });
+    expect(freeWithHighHand).toEqual({ amountDueCents: 0, highHandAtDoorCents: 1_000, highHandsAtDoor: legacyAtDoor, waitingList: false });
+    expect(freeroll).toEqual({ amountDueCents: 0, highHandAtDoorCents: 0, highHandsAtDoor: [], waitingList: false });
   });
 
   it("tells the waiting list not to pay yet, and never gives it the club's account (R8REV0-PRIV-01)", () => {
     const waiting = paymentInstructionsFor(signUp({ waitingList: true, registration: registration({ enteringHighHands: true }) }));
 
-    expect(waiting).toEqual({ amountDueCents: 10_000, highHandAtDoorCents: 1_000, waitingList: true });
+    expect(waiting).toEqual({ amountDueCents: 10_000, highHandAtDoorCents: 1_000, highHandsAtDoor: legacyAtDoor, waitingList: true });
     expect(waiting).not.toHaveProperty("accountNumber");
     expect(JSON.stringify(waiting)).not.toContain("7890123");
   });
@@ -143,7 +172,12 @@ describe("paymentInstructionsFor", () => {
   it("is nothing while the tournament does not show bank details, or its club has none, nor for an entry already paid", () => {
     expect(paymentInstructionsFor(signUp({ tournament: tournament({ showBankTransfer: false }) }))).toBeUndefined();
     expect(paymentInstructionsFor(signUp({ registration: registration({ paymentConfirmed: true }) }))).toBeUndefined();
-    expect(paymentInstructionsFor(signUp({ registration: registration({ paymentConfirmed: true, freeEntry: true }) }))).toEqual({ amountDueCents: 0, highHandAtDoorCents: 0, waitingList: false });
+    expect(paymentInstructionsFor(signUp({ registration: registration({ paymentConfirmed: true, freeEntry: true }) }))).toEqual({
+      amountDueCents: 0,
+      highHandAtDoorCents: 0,
+      highHandsAtDoor: [],
+      waitingList: false,
+    });
     expect(paymentInstructionsFor(signUp({ club: club({ bankAccountNumber: null }) }))).toBeUndefined();
     expect(paymentInstructionsFor(signUp({ club: undefined }))).toBeUndefined();
   });

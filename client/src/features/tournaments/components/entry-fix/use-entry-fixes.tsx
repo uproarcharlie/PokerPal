@@ -5,6 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/api/http";
 import type { PaymentMethod } from "@shared/api/registrations";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
+import { highHandIdsOf, highHandLabel, highHandsOf, listsHighHands } from "@shared/domain/high-hands";
 import { isFreeTournament, paymentDropCents, type EntryInput } from "@shared/domain/prize-pool";
 import { playerName } from "../../player-name";
 import { useConfirmPayment, useUpdateRegistration } from "../../staff-hooks";
@@ -84,14 +85,19 @@ export function useEntryFixes({ tournament, registrations, returnFocusTo, testId
             "Could not change how they paid",
           )
         }
-        onHighHand={(entered) =>
+        onHighHand={(highHandId, entered) => {
+          const highHands = highHandsOf(tournament);
+          const which = highHands.length > 1 ? highHandLabel(highHands.find((highHand) => highHand.id === highHandId)?.name ?? "") : "high hand";
+          const now = highHandIdsOf(tournament, entry).filter((id) => id !== highHandId);
+          // A game that lists its high hands is sent the whole set (round 10); its one high hand of before, the flag as before.
+          const input = listsHighHands(tournament) ? { highHandIds: entered ? [...now, highHandId] : now } : { enteringHighHands: entered };
           void correct(
             entry,
-            () => update.mutateAsync({ registrationId: entry.id, input: { enteringHighHands: entered } }),
-            { title: "High hand updated", description: entered ? `${name} is now in the high hand.` : `${name} is no longer in the high hand.` },
+            () => update.mutateAsync({ registrationId: entry.id, input }),
+            { title: "High hand updated", description: entered ? `${name} is now in the ${which}.` : `${name} is no longer in the ${which}.` },
             "Could not change the high hand",
-          )
-        }
+          );
+        }}
         onEditPlayer={() => setEditing(entry)}
       />
     );

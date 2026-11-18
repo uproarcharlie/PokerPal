@@ -5,8 +5,9 @@
  * name for its AP is a club setting (PUT /api/clubs/:id, `updateClub` in features/clubs/staff-api).
  */
 import { queryOptions } from "@tanstack/react-query";
+import type { HighHandsUpdatedDto, HighHandsUpdateInput } from "@shared/api/high-hands";
 import type { ApUpdateResponse, CarryOversDto, PayoutsUpdateInput, PrizePoolAdjustmentInput, RakeRatesInput } from "@shared/api/prize-pool";
-import { apiGet, apiSend } from "@/lib/api/http";
+import { apiGet, apiSend, segment } from "@/lib/api/http";
 import { qk } from "@/lib/api/query-keys";
 import { prizePoolPath } from "./api";
 
@@ -40,3 +41,12 @@ export const applyCarryOver = (tournamentId: string, carryOverId: string) =>
 /** 404 when the money is not in this pool; 409 TOURNAMENT_CLOSED once the tournament is completed. */
 export const removeCarryOver = (tournamentId: string, carryOverId: string) =>
   apiSend<ApUpdateResponse>("DELETE", `${carryOversPath(tournamentId)}/${encodeURIComponent(carryOverId)}`);
+
+/**
+ * Round 10: the tournament's high hands, in order (PUT /api/tournaments/:id/high-hands): 409
+ * HIGH_HAND_ENTRIES (removing one players are in), HIGH_HAND_AWARDED / HIGH_HAND_OVER_POOL (a pot's
+ * awards no longer fit it; details.highHandId), ENTRIES_REPRICED (send again with `repriceEntries`),
+ * TOURNAMENT_CLOSED; 400 VALIDATION at `highHands.<i>.<field>`.
+ */
+export const updateHighHands = (tournamentId: string, input: HighHandsUpdateInput) =>
+  apiSend<HighHandsUpdatedDto>("PUT", `/api/tournaments/${segment(tournamentId)}/high-hands`, input);

@@ -5,9 +5,9 @@
 import { z } from "zod";
 import { createPlayerSchema, normaliseName, normalisePhone, type CreatePlayerInput } from "@shared/api/players";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
+import { highHandsAtDoor, readHighHandChoice, type HighHandAtDoor, type HighHandsInput } from "@shared/domain/high-hands";
 import { amountDueCents } from "@shared/domain/prize-pool";
 import { formatMoney } from "@/lib/format";
-import { offersHighHand } from "@shared/domain/player-actions";
 
 /** The mobile number's label wherever a player's details are typed: the QR page, the desk, the player edit. */
 export const MOBILE_LABEL = "Mobile (optional)";
@@ -43,10 +43,22 @@ export function sameDetails(a: PlayerDetails, b: PlayerDetails): boolean {
   return normaliseName(a.name) === normaliseName(b.name) && normalisePhone(a.phone) === normalisePhone(b.phone) && (a.imageUrl ?? null) === (b.imageUrl ?? null);
 }
 
-type DueTournament = Pick<TournamentDetailDto, "buyInAmount" | "rebuyAmount" | "addonAmount" | "highHandAmount" | "enableHighHand">;
+type DueTournament = Pick<TournamentDetailDto, "buyInAmount" | "rebuyAmount" | "addonAmount"> & HighHandsInput;
 
-/** One buy-in plus the high-hands entry, to the cent, as the payment desk will ask for it (amountDueCents). */
-export function amountDue(tournament: DueTournament, enteringHighHands: boolean): string {
-  const entry = { buyIns: 1, rebuys: 0, addons: 0, enteringHighHands: enteringHighHands && offersHighHand(tournament) };
-  return formatMoney(amountDueCents(tournament, entry), { forceCents: true });
+/**
+ * A sign-up's entry with the high hands chosen (round 10: each by its id, "legacy" for a tournament's
+ * one high hand of before round 10), only those the tournament runs.
+ */
+function signUpEntry(tournament: HighHandsInput, highHandIds: readonly string[]) {
+  const { ids } = readHighHandChoice(tournament, highHandIds);
+  return { buyIns: 1, rebuys: 0, addons: 0, enteringHighHands: ids.length > 0, highHandIds: ids };
 }
+
+/** One buy-in plus the high hands chosen, to the cent, as the payment desk will ask for it (amountDueCents). */
+export function amountDue(tournament: DueTournament, highHandIds: readonly string[]): string {
+  return formatMoney(amountDueCents(tournament, signUpEntry(tournament, highHandIds)), { forceCents: true });
+}
+
+/** The high hands chosen, each with its fee, paid at the door ("First half high hand $5.00"). */
+export const chosenAtDoor = (tournament: HighHandsInput, highHandIds: readonly string[]): HighHandAtDoor[] =>
+  highHandsAtDoor(tournament, signUpEntry(tournament, highHandIds));

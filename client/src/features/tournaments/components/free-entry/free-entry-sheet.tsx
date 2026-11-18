@@ -127,7 +127,7 @@ function FreeEntryForm({ tournamentId, registrationId, name, buyInCents, rakeLab
       const given = await change.mutateAsync({ registrationId, input: { action: "give", ...freeEntryInputOf(values) } });
       onDone();
       const seat = autoSeatText(given.seating);
-      const left = highHandLeftText(given.highHandUnawardedCents);
+      const left = highHandLeftText(given);
       toast({ title: "Free entry given", description: [`${name} is in with a free entry.`, seat, left].filter(Boolean).join(" ") });
     } catch (error) {
       // Max players are accepted (round 5, item 15): no override, the server's sentence says how to make room.

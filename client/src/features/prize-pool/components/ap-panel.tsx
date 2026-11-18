@@ -118,7 +118,7 @@ function PanelBody({ tournament, prizePool, label, timeZone }: PanelBodyProps) {
     );
   }
   const snapshot = display.source === "snapshot" ? tournament.prizePoolSnapshot : null;
-  if (snapshot) return <FrozenBreakdown tournament={tournament} pool={snapshot.pool} highHand={prizePool.breakdown.highHand} label={label} />;
+  if (snapshot) return <FrozenBreakdown tournament={tournament} pool={snapshot.pool} pots={prizePool.breakdown.highHands} label={label} />;
   return (
     <div className="space-y-4">
       {display.source === "stored" || display.source === "unrecorded" ? (

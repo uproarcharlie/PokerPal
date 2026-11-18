@@ -11,8 +11,11 @@ import { BasicInfoSection } from "./basic-info-section";
 import { BuyInSection, PrizePoolSection } from "./buy-in-section";
 import { FormatPresets } from "./format-presets";
 import { FormSection } from "./form-section";
+import { HighHandsSection } from "./high-hands-section";
 import { LimitsSection } from "./limits-section";
 import { OptionsSection } from "./options-section";
+
+const NO_ENTRANTS: Readonly<Record<string, number>> = {};
 
 interface TournamentFormProps {
   form: UseFormReturn<TournamentFormValues>;
@@ -66,7 +69,7 @@ export function TournamentForm({
         />
         {moneyLocked ? (
           <p className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground" data-testid="money-locked-note">
-            This tournament is closed: its buy-ins, {label}, payouts, high hand, season and points settings stay as they were
+            This tournament is closed: its buy-ins, {label}, payouts, high hands, season and points settings stay as they were
             paid and scored.
           </p>
         ) : null}
@@ -76,8 +79,9 @@ export function TournamentForm({
           <BuyInSection control={form.control} rakeLabel={label} recorded={recorded} />
           <PrizePoolSection control={form.control} rakeLabel={label} />
         </fieldset>
-        <OptionsSection control={form.control} rakeLabel={label} moneyLocked={moneyLocked} highHandEntrants={recorded?.highHandEntrants ?? 0} />
-        {/* Its own part (round 8), never between the high hand's box and its settings (R8REV1-PHONE-04). */}
+        <HighHandsSection control={form.control} rakeLabel={label} moneyLocked={moneyLocked} entrants={recorded?.highHandEntrants ?? NO_ENTRANTS} />
+        <OptionsSection control={form.control} moneyLocked={moneyLocked} />
+        {/* Its own part (round 8). */}
         <FormSection title="Payments">
           <BankTransferField control={form.control} club={selectedClub} />
         </FormSection>

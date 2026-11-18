@@ -811,6 +811,8 @@ describe("computePrizePool: entries and payouts", () => {
       carriedIn: [],
       carriedInCents: 0,
       highHand: { entrants: 6, gross: 6_000, rake: 0, net: 6_000, winners: 2 },
+      // Not switched on (no enableHighHand), so it runs no high hand: the legacy figure above is kept as it always was.
+      highHands: [],
     });
   });
 
@@ -1452,7 +1454,7 @@ describe("paymentDropCents: what marking a paid entry as not paid takes out (rou
 
   it("is the prize pool the places pay with the entry paid, less without it: its money after the AP, as the places round it", () => {
     // $200 in less 10% AP pays $180; $150 less 10% leaves $135, which the places pay as $134.
-    expect(paymentDropCents(game, entries, "bea")).toEqual({ poolCents: paidFrom(18_000) - paidFrom(13_500), highHandCents: 0, manualPoolCents: null });
+    expect(paymentDropCents(game, entries, "bea")).toEqual({ poolCents: paidFrom(18_000) - paidFrom(13_500), highHandCents: 0, highHands: [], manualPoolCents: null });
     expect(paidFrom(18_000) - paidFrom(13_500)).toBe(4_600);
   });
 
@@ -1461,11 +1463,11 @@ describe("paymentDropCents: what marking a paid entry as not paid takes out (rou
   });
 
   it("leaves a prize pool set by hand as it is, and saying so", () => {
-    expect(paymentDropCents({ ...game, manualPrizePool: "500.00" }, entries, "bea")).toEqual({ poolCents: 0, highHandCents: 0, manualPoolCents: 50_000 });
+    expect(paymentDropCents({ ...game, manualPrizePool: "500.00" }, entries, "bea")).toEqual({ poolCents: 0, highHandCents: 0, highHands: [], manualPoolCents: 50_000 });
   });
 
   it("is nothing for an entry whose money is not in the pool: unpaid, or a free entry the club does not pay for", () => {
-    expect(paymentDropCents(game, entries, "eve")).toEqual({ poolCents: 0, highHandCents: 0, manualPoolCents: null });
+    expect(paymentDropCents(game, entries, "eve")).toEqual({ poolCents: 0, highHandCents: 0, highHands: [], manualPoolCents: null });
     expect(paymentDropCents(game, [...entries.slice(0, 4), { id: "fay", buyIns: 1, paymentConfirmed: true, freeEntry: true }], "fay").poolCents).toBe(0);
   });
 

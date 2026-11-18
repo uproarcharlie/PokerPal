@@ -10,7 +10,7 @@ import session from "express-session";
 import request from "supertest";
 import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { Json } from "@shared/api/common";
-import { findForbiddenKeys, findTakingsKeys, PUBLIC_TOURNAMENT_FIELDS, TOURNAMENT_TAKINGS_FIELDS, type BankTransferSetting } from "@shared/api/public";
+import { findForbiddenKeys, findTakingsKeys, PUBLIC_TOURNAMENT_FIELDS, TOURNAMENT_TAKINGS_FIELDS, type BankTransferSetting, type HighHandsSetting } from "@shared/api/public";
 import { MAX_UPCOMING_TOURNAMENTS_PER_CLUB, type TournamentDetailDto, type TournamentListItemDto } from "@shared/api/tournaments";
 import { activityLog, auditLog, tournamentRegistrations, tournaments, type Tournament } from "@shared/schema";
 import { createApp } from "../../server/app";
@@ -57,7 +57,8 @@ const auditFor = (targetId: string) => testDb().select().from(auditLog).where(eq
 const publicView = (row: Tournament, canManage = false) => {
   const json = asJson(row) as Record<string, unknown>;
   const fields = canManage ? [...PUBLIC_TOURNAMENT_FIELDS, ...TOURNAMENT_TAKINGS_FIELDS] : PUBLIC_TOURNAMENT_FIELDS;
-  return { ...Object.fromEntries(fields.map((key) => [key, json[key] ?? null])), showBankTransfer: row.showBankTransfer };
+  // Round 10: a tournament that lists no high hands answers `highHands: null` (its one high hand, if any, is its legacy columns).
+  return { ...Object.fromEntries(fields.map((key) => [key, json[key] ?? null])), showBankTransfer: row.showBankTransfer, highHands: null };
 };
 
 /** The finalize snapshot goes only to someone who runs the club: the public read the prizes from GET /api/public/tournaments/:id/prizes. */
@@ -83,8 +84,8 @@ const newTournament = (clubId: string, extra: Record<string, unknown> = {}) => (
 describe("response types", () => {
   it("serialise to the shared DTOs", () => {
     type ListItem = Json<Awaited<ReturnType<typeof listTournaments>>[number]>;
-    // The server always says whether bank transfer details are shown (round 8; optional in the DTO for older fixtures).
-    type Sent<T> = T & Required<BankTransferSetting>;
+    // The server always says whether bank transfer details are shown (round 8) and its high hands (round 10), optional in the DTO for older fixtures.
+    type Sent<T> = T & Required<BankTransferSetting> & Required<HighHandsSetting>;
     expectTypeOf<Json<TournamentDetail>>().toExtend<TournamentDetailDto>();
     expectTypeOf<Sent<TournamentDetailDto>>().toExtend<Json<TournamentDetail>>();
     expectTypeOf<ListItem>().toExtend<TournamentListItemDto>();

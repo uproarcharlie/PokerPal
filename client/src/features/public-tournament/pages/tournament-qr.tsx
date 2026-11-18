@@ -13,7 +13,7 @@ import { ClubThemeScope } from "@/features/branding/components/public/club-theme
 import { useClub } from "@/features/clubs/hooks";
 import { useTournament } from "@/features/tournaments/hooks";
 import { CenteredCard, TOURNAMENT_PAGE_STATES } from "../components/page-shell";
-import { offersHighHand } from "@shared/domain/player-actions";
+import { highHandLabel, highHandsOf } from "@shared/domain/high-hands";
 
 /** The QR code at full size: drawn at this many pixels and scaled down to fit a phone (PUB-31). */
 const QR_SIZE = 400;
@@ -21,7 +21,7 @@ const QR_SIZE = 400;
 function QrPoster({ tournament }: { tournament: TournamentDetailDto }) {
   const { data: club } = useClub(tournament.clubId);
   const registrationUrl = absoluteUrl(routes.publicRegister(tournament.id));
-  const highHand = offersHighHand(tournament);
+  const highHands = highHandsOf(tournament);
 
   return (
     <CenteredCard wide>
@@ -57,14 +57,15 @@ function QrPoster({ tournament }: { tournament: TournamentDetailDto }) {
               <MoneyText amount={tournament.buyInAmount} forceCents />
             </dd>
           </div>
-          {highHand ? (
-            <div className="rounded-lg bg-muted/50 p-4 text-center">
-              <dt className="mb-1 text-sm text-muted-foreground">High hand entry</dt>
+          {/* One box per high hand (round 10: players enter the ones they want). */}
+          {highHands.map((highHand) => (
+            <div key={highHand.id} className="rounded-lg bg-muted/50 p-4 text-center">
+              <dt className="mb-1 text-sm text-muted-foreground">{highHands.length > 1 ? highHandLabel(highHand.name) : "High hand entry"}</dt>
               <dd className="text-2xl font-bold text-accent-text sm:text-3xl">
-                <MoneyText amount={tournament.highHandAmount} forceCents />
+                <MoneyText amount={highHand.entryFee} forceCents />
               </dd>
             </div>
-          ) : null}
+          ))}
         </dl>
 
         <div className="space-y-3 rounded-lg border border-border bg-muted p-4">

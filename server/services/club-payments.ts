@@ -15,15 +15,15 @@ import {
   type UpdateClubPaymentsInput,
 } from "@shared/api/clubs";
 import { paymentParticulars, paymentReference, type SignUpPaymentDto } from "@shared/api/registrations";
-import { toCents } from "@shared/domain/money";
-import { offersHighHand } from "@shared/domain/player-actions";
+import { highHandsAtDoor } from "@shared/domain/high-hands";
 import { amountDueCents } from "@shared/domain/prize-pool";
-import type { Club, Player, Tournament, TournamentRegistration } from "@shared/schema";
+import type { Club, Player } from "@shared/schema";
 import { db, type Executor } from "../db";
 import { badRequest, notFound } from "../http/errors";
 import { auditTrailOf, type AuditTrailEntry } from "../repositories/audit-log";
 import * as clubsRepo from "../repositories/clubs";
 import { recordAudit } from "./audit";
+import type { RegistrationWithHighHands, TournamentWithHighHands } from "./high-hands";
 
 /** The zone a club's days are told in when it has no valid one of its own. */
 const DEFAULT_TIME_ZONE = "Pacific/Auckland";
@@ -125,9 +125,9 @@ function clubTimeZone(club: Pick<Club, "timezone">): string {
 }
 
 export interface SignUpForPayment {
-  tournament: Tournament;
+  tournament: TournamentWithHighHands;
   club: Club | undefined;
-  registration: TournamentRegistration;
+  registration: RegistrationWithHighHands;
   player: Pick<Player, "name">;
   /** The entry is on the waiting list behind a full field. */
   waitingList: boolean;
@@ -137,8 +137,8 @@ export interface SignUpForPayment {
  * What the player who has just signed up is told about paying by transfer (SignUpPaymentDto):
  * undefined unless the tournament shows bank details after sign-up and its club has them, and for an
  * entry the desk registered as paid already (it owes nothing). The amount is the entry's buy-ins only
- * (the owner, 2026-11-16: the high-hand entry is paid at the door, and is only mentioned), 0 for a free
- * entry. The club's account goes only with a buy-in to transfer now (PaymentInstructionsDto): never to
+ * (the owner, 2026-11-16: the high-hand entry is paid at the door, and is only mentioned: round 10,
+ * each high hand the player chose with its fee, highHandsAtDoor), 0 for a free entry. The club's account goes only with a buy-in to transfer now (PaymentInstructionsDto): never to
  * the waiting list, told not to pay yet, nor with nothing to pay (R8REV0-PRIV-01). The reference is
  * the player's name and the particulars the tournament's short name, each cut to the 12 characters a
  * transfer takes.
@@ -148,10 +148,12 @@ export function paymentInstructionsFor({ tournament, club, registration, player,
   if (registration.paymentConfirmed === true && registration.freeEntry !== true) return undefined;
   const details = bankDetailsOf(club);
   if (!details) return undefined;
-  const buyInsOnly = { ...registration, rebuys: 0, addons: 0, enteringHighHands: false };
+  const buyInsOnly = { ...registration, rebuys: 0, addons: 0, enteringHighHands: false, highHandIds: [] };
+  const atDoor = highHandsAtDoor(tournament, registration);
   const due = {
     amountDueCents: amountDueCents(tournament, buyInsOnly),
-    highHandAtDoorCents: registration.enteringHighHands === true && offersHighHand(tournament) ? toCents(tournament.highHandAmount) : 0,
+    highHandAtDoorCents: atDoor.reduce((sum, highHand) => sum + highHand.feeCents, 0),
+    highHandsAtDoor: atDoor,
   };
   if (waitingList || due.amountDueCents === 0) return { ...due, waitingList };
   return {

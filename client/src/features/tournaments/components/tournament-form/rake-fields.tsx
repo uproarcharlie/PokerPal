@@ -12,7 +12,8 @@ const AMOUNT_OF = Object.fromEntries(RAKE_COMPONENTS.map(({ type, amount }) => [
 /** The boxes of the four AP rates, as every form holding them has them: a type each, and its amount as typed text. */
 export type RakeRateValues = { [K in RakeTypeKey]: RakeType } & { [K in RakeAmountKey]: string };
 
-interface RakeFieldsProps<T extends RakeRateValues> {
+/** A form holding some of the rates' boxes (the tournament form holds no high-hand rate: round 10 puts it on each high hand). */
+interface RakeFieldsProps<T extends Partial<RakeRateValues>> {
   control: Control<T>;
   /** Which rate: the buy-in's, a re-buy's, an add-on's or the high hand's. */
   component: RakeTypeKey;
@@ -32,8 +33,8 @@ interface RakeFieldsProps<T extends RakeRateValues> {
  * One AP rate: how it is taken (none, a percentage or a fixed amount) and how much. The one set of
  * boxes for a rate, in the tournament form and the AP rates sheet alike (P4REV4-CQ-03).
  */
-export function RakeFields<T extends RakeRateValues>({ control, component, label, part, testId, flat = false, onTypeChange }: RakeFieldsProps<T>) {
-  // Every form T holds the rates' fields under these names (RakeRateValues); RHF's paths cannot see that through the generic.
+export function RakeFields<T extends Partial<RakeRateValues>>({ control, component, label, part, testId, flat = false, onTypeChange }: RakeFieldsProps<T>) {
+  // Every form T holds this rate's fields under these names (RakeRateValues); RHF's paths cannot see that through the generic.
   const rates = control as unknown as Control<RakeRateValues>;
   const amountName = AMOUNT_OF[component];
   const type = useWatch({ control: rates, name: component });

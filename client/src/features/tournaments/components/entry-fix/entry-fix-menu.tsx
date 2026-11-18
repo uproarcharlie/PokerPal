@@ -36,7 +36,8 @@ function ItemText({ children, unavailable }: { children: ReactNode; unavailable:
 export interface EntryFixHandlers {
   onNotPaid: () => void;
   onPaidBy: (paidBy: PaymentMethod) => void;
-  onHighHand: (entered: boolean) => void;
+  /** Ticks or unticks one high hand (round 10: by its id). */
+  onHighHand: (highHandId: string, entered: boolean) => void;
   onEditPlayer: () => void;
 }
 
@@ -58,7 +59,7 @@ interface EntryFixMenuProps extends EntryFixHandlers {
  * game's rules do not allow now is greyed out, saying why.
  */
 export function EntryFixMenu({ name, registrationId, triggerTestId, options, busy, freeTournament, onNotPaid, onPaidBy, onHighHand, onEditPlayer }: EntryFixMenuProps) {
-  const { notPaid, paidBy, highHand, editPlayer } = options;
+  const { notPaid, paidBy, highHands, editPlayer } = options;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -100,19 +101,24 @@ export function EntryFixMenu({ name, registrationId, triggerTestId, options, bus
             </DropdownMenuRadioGroup>
           </>
         ) : null}
-        {highHand ? (
+        {highHands.length > 0 ? (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuCheckboxItem
-              className="min-h-11"
-              checked={highHand.entered}
-              disabled={busy || highHand.unavailable !== null}
-              onCheckedChange={(checked) => onHighHand(checked)}
-              data-testid={`fix-high-hand-${registrationId}`}
-            >
-              <Trophy className="mr-2 h-4 w-4 shrink-0" aria-hidden="true" />
-              <ItemText unavailable={highHand.unavailable}>High hand entered</ItemText>
-            </DropdownMenuCheckboxItem>
+            {highHands.length > 1 ? <DropdownMenuLabel className="text-xs font-medium text-muted-foreground">High hands entered</DropdownMenuLabel> : null}
+            {highHands.map((highHand) => (
+              <DropdownMenuCheckboxItem
+                key={highHand.highHandId}
+                className="min-h-11"
+                checked={highHand.entered}
+                disabled={busy || highHand.unavailable !== null}
+                onCheckedChange={(checked) => onHighHand(highHand.highHandId, checked)}
+                // One high hand keeps the round 9 id; one of several is told apart by its own.
+                data-testid={highHands.length > 1 ? `fix-high-hand-${registrationId}-${highHand.highHandId}` : `fix-high-hand-${registrationId}`}
+              >
+                <Trophy className="mr-2 h-4 w-4 shrink-0" aria-hidden="true" />
+                <ItemText unavailable={highHand.unavailable}>{highHand.label}</ItemText>
+              </DropdownMenuCheckboxItem>
+            ))}
           </>
         ) : null}
         <DropdownMenuSeparator />

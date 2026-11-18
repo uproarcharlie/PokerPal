@@ -18,6 +18,7 @@
  * the players still in are paid, sharing exactly what their places pay together.
  */
 import { dealProblems, type Dealable, type DealInput, type DealProblem, type SnapshotDeal } from "./deal";
+import { highHandAwardsOf, highHandStandings, snapshotHighHands, type SnapshotHighHand } from "./high-hands";
 import { centsToDecimalString, formatMoney, toCents, type Cents, type MoneyInput } from "./money";
 import { PAYOUT_ALGORITHM, placeName, type PayoutAlgorithm, type PayoutPlace, type PayoutStructureKey } from "./payouts";
 import { differenceSentence, settleDifference, type CarriedIn, type LegacyDifference, type PrizeDifference } from "./prize-difference";
@@ -89,6 +90,13 @@ export interface PrizePoolSnapshot {
   points?: SnapshotPointsRules;
   /** The deal the players still in made, when they made one (round 5): `paid` holds what it paid them. */
   deal?: SnapshotDeal;
+  /**
+   * Round 10: each high-hand pot when finalized, with what it had awarded, when the tournament ran a
+   * high hand (absent otherwise, and from earlier snapshots). A record only: high hands are paid at
+   * the door as they are won, and stay correctable after the game, so screens show the pots as they now
+   * stand, and the plan hash leaves them out.
+   */
+  highHands?: SnapshotHighHand[];
   /**
    * Positions 1..min(places, entrants), including any zero amounts, and every player in a deal (who may
    * finish below the paid places; their basisPoints are then 0).
@@ -318,6 +326,10 @@ export function buildFinalizePlan(input: FinalizePlanInput): FinalizePlan {
   }
 
   const { structure, difference, carriedIn, freeEntries } = prizePool;
+  const playerOf = new Map(input.registrations.map((registration) => [registration.id, registration.playerId]));
+  const highHands = snapshotHighHands(highHandStandings(prizePool.highHands, highHandAwardsOf(tournament, input.registrations)), (registrationId) =>
+    nameOf(playerOf.get(registrationId) ?? ""),
+  );
   const snapshot: PrizePoolSnapshot = {
     v: FINALIZE_SNAPSHOT_VERSION,
     algorithm: PAYOUT_ALGORITHM,
@@ -345,6 +357,7 @@ export function buildFinalizePlan(input: FinalizePlanInput): FinalizePlan {
     },
     points,
     ...(deal ? { deal } : {}),
+    ...(highHands.length > 0 ? { highHands } : {}),
     paid: rows
       .filter((row, index) => index < structure.basisPoints.length || (deal !== undefined && stillIn.has(row.registrationId)))
       .map((row) => ({

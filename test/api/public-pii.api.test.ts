@@ -34,6 +34,13 @@ interface World {
   live: Tournament;
   /** Finalized through the API: positions, prizes, points, the snapshot. */
   finished: Tournament;
+  /**
+   * Round 10: in progress, listing two high hands with an AP on each, a QR sign-up for one of them, desk
+   * sign-ups in both, an award from each pot, and a TV that shows the pots.
+   */
+  listed: Tournament;
+  /** The QR sign-up's own answer for the listed tournament (its payment instructions name the high hand to pay at the door). */
+  listedSignUp: Record<string, unknown>;
   players: Player[];
   /** Every email, phone and user id in the world, and the club's bank details: none may appear in a public body. */
   secrets: string[];
@@ -56,29 +63,33 @@ const PROBES: Record<string, Probe> = {
   "GET /api/points-systems/:id": ({ pointsSystem }) => [`/api/points-systems/${pointsSystem.id}`],
   "GET /api/points-systems/:pointsSystemId/allocations": ({ pointsSystem }) => [`/api/points-systems/${pointsSystem.id}/allocations`],
   "GET /api/public/tournaments/:id/players": ({ live }) => [`/api/public/tournaments/${live.id}/players?q=PII`],
-  "GET /api/public/tournaments/:id/display": ({ live, finished }) => [
+  "GET /api/public/tournaments/:id/display": ({ live, finished, listed }) => [
     `/api/public/tournaments/${live.id}/display`,
     `/api/public/tournaments/${finished.id}/display`,
+    `/api/public/tournaments/${listed.id}/display`,
   ],
   "GET /api/public/tournaments/:id/seating": ({ live, finished }) => [
     `/api/public/tournaments/${live.id}/seating`,
     `/api/public/tournaments/${finished.id}/seating`,
   ],
-  "GET /api/public/tournaments/:id/prizes": ({ live, finished }) => [
+  "GET /api/public/tournaments/:id/prizes": ({ live, finished, listed }) => [
     `/api/public/tournaments/${live.id}/prizes`,
     `/api/public/tournaments/${finished.id}/prizes`,
+    `/api/public/tournaments/${listed.id}/prizes`,
   ],
   "GET /api/public/seasons/:id/leaderboard": ({ season }) => [`/api/public/seasons/${season.id}/leaderboard`],
   "GET /api/tournaments": ({ club }) => ["/api/tournaments", `/api/tournaments?clubId=${club.id}`],
   "GET /api/tournaments/counts": () => ["/api/tournaments/counts"],
-  "GET /api/tournaments/:id": ({ live, finished }) => [`/api/tournaments/${live.id}`, `/api/tournaments/${finished.id}`],
-  "GET /api/tournaments/:id/registrations": ({ live, finished }) => [
+  "GET /api/tournaments/:id": ({ live, finished, listed }) => [`/api/tournaments/${live.id}`, `/api/tournaments/${finished.id}`, `/api/tournaments/${listed.id}`],
+  "GET /api/tournaments/:id/registrations": ({ live, finished, listed }) => [
     `/api/tournaments/${live.id}/registrations`,
     `/api/tournaments/${finished.id}/registrations`,
+    `/api/tournaments/${listed.id}/registrations`,
   ],
-  "GET /api/tournaments/:tournamentId/activity": ({ live, finished }) => [
+  "GET /api/tournaments/:tournamentId/activity": ({ live, finished, listed }) => [
     `/api/tournaments/${live.id}/activity`,
     `/api/tournaments/${finished.id}/activity`,
+    `/api/tournaments/${listed.id}/activity`,
   ],
 };
 
@@ -151,10 +162,10 @@ async function buildWorld(): Promise<World> {
     )
   ).body as PointsSystem;
   const players = [];
-  for (let index = 0; index < 8; index++) players.push(await personalPlayer(index));
+  for (let index = 0; index < 11; index++) players.push(await personalPlayer(index));
 
   await ok(owner.agent.put(`/api/clubs/${club.id}/payments`).send({ bankDetails: PII_BANK }));
-  const newTournament = async (name: string) =>
+  const newTournament = async (name: string, highHands: Record<string, unknown> = { enableHighHand: true, highHandAmount: "5.00" }) =>
     (
       await ok(
         manager.agent.post("/api/tournaments").send({
@@ -166,8 +177,7 @@ async function buildWorld(): Promise<World> {
           buyInAmount: "50.00",
           rebuyAmount: "50.00",
           addonAmount: "25.00",
-          enableHighHand: true,
-          highHandAmount: "5.00",
+          ...highHands,
           maxPlayers: 20,
           status: "registration",
           showBankTransfer: true,
@@ -222,7 +232,7 @@ async function buildWorld(): Promise<World> {
 
   // The finished tournament: three players, two knocked out, finalized by the owner.
   const finished = await newTournament("PII Finished");
-  for (const player of players.slice(5)) {
+  for (const player of players.slice(5, 8)) {
     await ok(manager.agent.post(`/api/tournaments/${finished.id}/registrations`).send({ playerId: player.id, paymentConfirmed: true }), 201);
   }
   await ok(manager.agent.put(`/api/tournaments/${finished.id}`).send({ status: "in_progress" }));
@@ -233,6 +243,39 @@ async function buildWorld(): Promise<World> {
   const preview = await ok(owner.agent.post(`/api/tournaments/${finished.id}/finalize/preview`).send({}));
   await ok(owner.agent.post(`/api/tournaments/${finished.id}/finalize`).send({ expectedPlanHash: preview.body.planHash }));
 
+  // Round 10: two high hands, each with an AP; a QR sign-up for the second only, two desk sign-ups paid in both, an award from each pot.
+  const listed = await newTournament("PII Listed", {
+    highHands: [
+      { name: "First half", entryFee: "5.00", rakeType: "percentage", rakeAmount: "10.00", note: "Before the break" },
+      { name: "Second half", entryFee: "5.00", rakeType: "fixed", rakeAmount: "1.00" },
+    ],
+  });
+  const [firstHalf, secondHalf] = (listed as unknown as { highHands: Array<{ id: string }> }).highHands;
+  const listedSignUp = (
+    await ok(
+      anonymous
+        .post(`/api/tournaments/${listed.id}/registrations`)
+        .send({ playerId: players[8].id, highHandIds: [secondHalf.id], signUpToken: signUpTokenFor(players[8].id) }),
+      201,
+    )
+  ).body as Record<string, unknown>;
+  const inBoth = [];
+  for (const player of players.slice(9)) {
+    const body = { playerId: player.id, paymentConfirmed: true, highHandIds: [firstHalf.id, secondHalf.id] };
+    inBoth.push((await ok(manager.agent.post(`/api/tournaments/${listed.id}/registrations`).send(body), 201)).body as { id: string });
+  }
+  await ok(manager.agent.put(`/api/tournaments/${listed.id}`).send({ status: "in_progress" }));
+  await ok(manager.agent.post(`/api/tournaments/${listed.id}/high-hands/${firstHalf.id}/awards`).send({ registrationId: inBoth[0].id }), 201);
+  await ok(manager.agent.post(`/api/tournaments/${listed.id}/high-hands/${secondHalf.id}/awards`).send({ registrationId: inBoth[1].id }), 201);
+  await ok(
+    manager.agent.put(`/api/tournaments/${listed.id}/clock`).send({
+      structure: presetStructure("central_stars_one_life_line"),
+      displaySettings: { showPrizePool: "always", showHighHands: true },
+      baseHash: null,
+    }),
+    201,
+  );
+
   const accounts = await testDb().select({ id: users.id, email: users.email, phone: users.phone }).from(users);
   const secrets = [
     ...accounts.flatMap((account) => [account.id, account.email, account.phone]),
@@ -240,7 +283,7 @@ async function buildWorld(): Promise<World> {
     ...Object.values(PII_BANK),
   ].filter((value): value is string => typeof value === "string" && value !== "");
 
-  return { staff, club, season, pointsSystem, live, finished, players, secrets };
+  return { staff, club, season, pointsSystem, live, finished, listed, listedSignUp, players, secrets };
 }
 
 beforeAll(async () => {
@@ -328,6 +371,47 @@ describe("public reads", () => {
     // The public prize pool is the same for everyone, the TD looking at the public page included.
     expect(findTakingsKeys(prizes.body)).toEqual([]);
     expect(prizes.body).toEqual((await (await agentFor("anonymous", world.staff)).get(`/api/public/tournaments/${world.live.id}/prizes`)).body);
+  });
+});
+
+describe("a tournament's listed high hands (round 10)", () => {
+  it("reach the public page and the TV by name and pot, with no AP, for everyone", async () => {
+    const anonymous = await agentFor("anonymous", world.staff);
+
+    const [prizes, display, detail] = await Promise.all([
+      anonymous.get(`/api/public/tournaments/${world.listed.id}/prizes`),
+      anonymous.get(`/api/public/tournaments/${world.listed.id}/display`),
+      anonymous.get(`/api/tournaments/${world.listed.id}`),
+    ]);
+
+    // First half: $10 in less 10%; Second half: $10 in less a flat $1 (the QR sign-up has not paid, so is in no pot yet).
+    expect(prizes.body.highHands.map(({ name, potCents, awards }: { name: string; potCents: number; awards: unknown[] }) => ({ name, potCents, awards: awards.length }))).toEqual([
+      { name: "First half", potCents: 900, awards: 1 },
+      { name: "Second half", potCents: 900, awards: 1 },
+    ]);
+    expect(display.body.money.highHands.map(({ name, potCents }: { name: string; potCents: number }) => ({ name, potCents }))).toEqual([
+      { name: "First half", potCents: 900 },
+      { name: "Second half", potCents: 900 },
+    ]);
+    expect(detail.body.highHands).toHaveLength(2);
+    for (const body of [prizes.body, display.body, detail.body]) expect(findTakingsKeys(body)).toEqual([]);
+  });
+
+  it("tell the QR sign-up the high hand it chose, to pay at the door, and nothing of its AP", () => {
+    expect(world.listedSignUp.paymentInstructions).toMatchObject({ amountDueCents: 5_000, highHandAtDoorCents: 500, highHandsAtDoor: [{ name: "Second half", feeCents: 500 }] });
+    expect(findTakingsKeys(world.listedSignUp)).toEqual([]);
+    expect(findForbiddenKeys(world.listedSignUp).filter((path) => !path.startsWith("paymentInstructions"))).toEqual([]);
+  });
+
+  it("show the club's own staff each high hand's AP", async () => {
+    const owner = await agentFor("owner", world.staff);
+
+    const detail = await owner.get(`/api/tournaments/${world.listed.id}`);
+
+    expect(detail.body.highHands).toEqual([
+      expect.objectContaining({ name: "First half", rakeType: "percentage", rakeAmount: "10.00" }),
+      expect.objectContaining({ name: "Second half", rakeType: "fixed", rakeAmount: "1.00" }),
+    ]);
   });
 });
 

@@ -11,6 +11,7 @@ import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { CENTRAL_STARS_THEME, themeVariables } from "@shared/domain/theme";
 import { apiError, mockSignedOut, renderWithApp } from "@test/helpers/web";
 import { screenWidth } from "@test/helpers/f1-tournaments";
+import { hostPhone, listedTournament, publicHalves, win } from "@test/helpers/r10-high-hands";
 import { clockDto, liveDisplayDto } from "@test/helpers/clock-dto";
 import { publicSeatingDto } from "@test/helpers/seating-dto";
 import { PODIUM } from "@/components/shared/podium";
@@ -522,6 +523,56 @@ describe("PublicTournamentView high hand (PUB-13)", () => {
 
     expect(await screen.findByText("Prize pool will be revealed when locked")).toBeInTheDocument();
     expect(screen.queryByTestId("high-hand-pot")).not.toBeInTheDocument();
+  });
+});
+
+describe("PublicTournamentView: several high hands (round 10, on a phone)", () => {
+  const staff = () => listedTournament({ status: "in_progress", prizePoolLocked: true });
+  // Tama is in both and won the first half; Ana is in the first half only.
+  const entries = () => [
+    registrationDto("r1", "Tama Rangi", { enteringHighHands: true, highHandWinner: true, highHandAmount: "9.00", highHandIds: ["hh1", "hh2"], highHandWins: [win("hh1", 900)] }),
+    registrationDto("r2", "Ana", { enteringHighHands: true, highHandIds: ["hh1"] }),
+  ];
+
+  it("lists each high hand with its fee, note, pot and winners, and never its AP", async () => {
+    hostPhone();
+    mockTournamentPages({ ...staff(), highHands: publicHalves() }, entries(), clubDto(), prizesDto(staff(), entries()));
+    renderView();
+
+    const first = await screen.findByTestId("public-high-hand-hh1");
+    expect(first).toHaveTextContent("First half high hand");
+    expect(first).toHaveTextContent("Enter for $5");
+    expect(first).toHaveTextContent("Before the break");
+    // $10 in, less the club's 10%: the pot is what its winners share.
+    expect(await within(first).findByTestId("high-hand-pot-hh1")).toHaveTextContent("Pot: $9");
+    expect(first).toHaveTextContent("Won by Tama Rangi ($9)");
+    expect(within(screen.getByTestId("public-high-hand-hh2")).getByTestId("high-hand-pot-hh2")).toHaveTextContent("Pot: $5");
+    const list = screen.getByRole("list", { name: "High hands" });
+    expect(list).not.toHaveTextContent(/AP|10%|\$1(\.00)?\b/);
+    expect(screen.getByText("First half high hand (optional)")).toBeInTheDocument();
+  });
+
+  it("keeps the pots hidden while the prize pool is, but still lists the high hands to enter", async () => {
+    hostPhone();
+    const open = { ...staff(), prizePoolLocked: false };
+    mockTournamentPages({ ...open, highHands: publicHalves() }, entries(), clubDto(), prizesDto(open, entries()));
+    renderView();
+
+    expect(await screen.findByTestId("public-high-hand-hh2")).toHaveTextContent("Second half high hand");
+    expect(screen.queryByTestId("high-hand-pot-hh1")).not.toBeInTheDocument();
+  });
+
+  it("names each winner's high hand in the standings", async () => {
+    hostPhone();
+    mockTournamentPages({ ...staff(), highHands: publicHalves() }, entries(), clubDto(), prizesDto(staff(), entries()));
+    const user = userEvent.setup();
+    renderView();
+
+    await user.click(await screen.findByRole("tab", { name: "Standings" }));
+    const winners = await screen.findByRole("list", { name: "High hand winners" });
+    expect(winners).toHaveTextContent("Tama Rangi");
+    expect(winners).toHaveTextContent("First half high hand");
+    expect(winners).toHaveTextContent("$9");
   });
 });
 

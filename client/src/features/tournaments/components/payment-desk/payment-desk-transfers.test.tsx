@@ -15,6 +15,7 @@ import { mockSignedIn, renderWithApp } from "@test/helpers/web";
 import { freeEntryStatus, registrationDto, screenWidth, tournamentDto } from "@test/helpers/f1-tournaments";
 import type { ConfirmedRegistrationDto, PaymentConfirmedDto, PendingRegistrationDto } from "@shared/api/registrations";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
+import { TWO_HALVES } from "@test/helpers/r10-high-hands";
 import { PaymentDeskCards } from "./payment-desk-cards";
 
 const staffPlayer = (id: string, name: string) => ({ id, name, email: null, phone: null, imageUrl: null, createdAt: null, canEdit: true }) as const;
@@ -225,5 +226,38 @@ describe("the payment desk with bank transfers (round 8)", () => {
     expect(within(list).getByRole("button", { name: "Accept Tama Rangi" })).toBeInTheDocument();
     expect(within(list).queryByRole("button", { name: /bank transfer/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("searchbox", { name: "Find a transfer" })).not.toBeInTheDocument();
+  });
+});
+
+describe("the payment desk with two high hands at $5 each (round 10, 390 px)", () => {
+  // Alexandra entered only the second half ($55 owed), Tama both ($60), Ari neither ($50).
+  const HALVES = { buyInAmount: "50.00", enableHighHand: true, highHandAmount: "10.00", highHands: TWO_HALVES } as const;
+  const rows = () => [
+    pending("r1", "Alexandra Fitzgerald", { enteringHighHands: true, highHandIds: ["hh2"], amountOwed: 55 }),
+    pending("r2", "Tama Rangi", { enteringHighHands: true, highHandIds: ["hh1", "hh2"], amountOwed: 60 }),
+    pending("r3", "Ari Neither", { amountOwed: 50 }),
+  ];
+
+  it("shows each player's high hands and what of their amount the door collects: $5 for the second half alone", async () => {
+    mockDesk({ pendingRows: rows() });
+    renderDesk(HALVES);
+    const list = await pendingList();
+
+    expect(within(list).getByTestId("high-hands-r1")).toHaveTextContent("Second half");
+    expect(within(list).getByTestId("high-hands-r1")).not.toHaveTextContent("First half");
+    expect(within(list).getByTestId("door-part-r1")).toHaveTextContent("At the door $5.00 (Second half high hand)");
+    expect(within(list).getByTestId("door-part-r2")).toHaveTextContent("At the door $10.00 (First half high hand, Second half high hand)");
+    expect(within(list).getByTestId("high-hands-r3")).toHaveTextContent("No");
+    expect(within(list).queryByTestId("door-part-r3")).not.toBeInTheDocument();
+  });
+
+  it("asks the TD to collect the high hand chosen before a transfer confirms it, naming it", async () => {
+    mockDesk({ pendingRows: rows() });
+    const user = renderDesk(HALVES);
+    const list = await pendingList();
+
+    await user.click(within(list).getByRole("button", { name: "Confirm bank transfer for Alexandra Fitzgerald" }));
+    const ask = await screen.findByRole("alertdialog", { name: "Collect $5.00 at the door" });
+    expect(ask).toHaveTextContent("The Second half high hand is paid at the door: confirm once you have it.");
   });
 });

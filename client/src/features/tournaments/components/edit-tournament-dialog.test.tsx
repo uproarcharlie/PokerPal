@@ -7,6 +7,7 @@ import { apiError, mockSignedIn, renderWithApp } from "@test/helpers/web";
 import { clubDto, noBankDetails, recordBodies, registrationDto, tournamentDto } from "@test/helpers/f1-tournaments";
 import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
+import { hostPhone, listedTournament } from "@test/helpers/r10-high-hands";
 import { EditTournamentDialog } from "./edit-tournament-dialog";
 
 function mockSave(answer?: (body: unknown) => Response, registrations: PublicRegistration[] = []) {
@@ -104,7 +105,7 @@ describe("EditTournamentDialog (CA-14)", () => {
     expect(screen.getByTestId("money-locked-note")).toHaveTextContent("stay as they were paid and scored");
     expect(screen.getByTestId("buyin-amount")).toBeDisabled();
     expect(screen.getByTestId("rake-type")).toBeDisabled();
-    expect(screen.getByTestId("enable-high-hand")).toBeDisabled();
+    expect(screen.getByTestId("add-high-hand")).toBeDisabled();
     await user.clear(screen.getByTestId("tournament-name"));
     await user.type(screen.getByTestId("tournament-name"), "Friday Final");
     await user.click(screen.getByTestId("save-tournament"));
@@ -141,14 +142,13 @@ describe("EditTournamentDialog (CA-14)", () => {
       expect(screen.getByTestId("enable-addons")).toBeEnabled();
     });
 
-    it("keeps the high hand on while players are in it: their entry fees are in its pot", async () => {
+    it("keeps the high hand on the list while players are in it: their entry fees are in its pot", async () => {
       mockSave(undefined, [registrationDto("r1", "Ann", 1, { enteringHighHands: true }), registrationDto("r2", "Bo", 1, { enteringHighHands: false })]);
       renderEdit(tournamentDto({ status: "in_progress", enableHighHand: true, highHandAmount: "5.00" }));
 
-      await waitFor(() => expect(screen.getByTestId("enable-high-hand")).toBeDisabled());
-      expect(screen.getByTestId("enable-high-hand")).toBeChecked();
-      expect(screen.getByTestId("enable-high-hand")).toHaveAccessibleDescription(
-        "1 player has entered the high hand, so it stays on. Take them out of it first to turn it off.",
+      await waitFor(() => expect(screen.getByTestId("remove-high-hand-0")).toBeDisabled());
+      expect(screen.getByTestId("remove-high-hand-0")).toHaveAccessibleDescription(
+        "1 player is in the High hand: take them out of it first (Fix on their entry).",
       );
     });
 
@@ -232,5 +232,123 @@ describe("EditTournamentDialog (CA-14)", () => {
       expect(saved).toHaveLength(1);
       expect(onOpenChange).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("EditTournamentDialog: the high hands (round 10, on a host's phone)", () => {
+  const legacy = () => tournamentDto({ status: "registration", enableHighHand: true, highHandAmount: "10.00" });
+
+  it("opens a game's one high hand of before as the first card, and resends nothing while it is left alone", async () => {
+    hostPhone();
+    const saved = mockSave();
+    const { user } = renderEdit(legacy());
+
+    expect(screen.getByTestId("high-hand-name-0")).toHaveValue("High hand");
+    expect(screen.getByTestId("high-hand-fee-0")).toHaveValue("10.00");
+    await user.clear(screen.getByTestId("tournament-name"));
+    await user.type(screen.getByTestId("tournament-name"), "Friday Halves");
+    await user.click(screen.getByTestId("save-tournament"));
+
+    await waitFor(() => expect(saved).toEqual([{ name: "Friday Halves" }]));
+  });
+
+  it("turns it into two high hands at $5 each, keeping the first by its id with its players, and sends the list alone", async () => {
+    hostPhone();
+    const saved = mockSave();
+    const { user } = renderEdit(legacy());
+
+    await user.click(screen.getByRole("button", { name: "Two high hands at $5 each" }));
+    expect(screen.getByTestId("high-hand-name-0")).toHaveValue("First half");
+    expect(screen.getByTestId("high-hand-name-1")).toHaveValue("Second half");
+    expect(screen.getByTestId("all-high-hands-total")).toHaveTextContent("All high hands$10.00");
+    await user.click(screen.getByTestId("save-tournament"));
+
+    await waitFor(() =>
+      expect(saved).toEqual([
+        {
+          highHands: [
+            { id: "legacy", name: "First half", entryFee: "5.00", winners: 1, rakeType: "none", note: "Before the break" },
+            { name: "Second half", entryFee: "5.00", winners: 1, rakeType: "none", note: "After the break" },
+          ],
+        },
+      ]),
+    );
+  });
+
+  it("sets each high hand's prizes, AP and order, and checks each card's fee", async () => {
+    hostPhone();
+    const saved = mockSave();
+    const { user } = renderEdit(listedTournament({ status: "registration" }));
+
+    await user.click(within(screen.getByTestId("high-hand-card-0")).getByRole("radio", { name: "2 winners" }));
+    await user.clear(screen.getByTestId("high-hand-fee-1"));
+    await user.click(screen.getByTestId("save-tournament"));
+    expect(await screen.findByTestId("high-hand-fee-1")).toHaveAccessibleDescription(expect.stringContaining("Enter an amount"));
+
+    await user.type(screen.getByTestId("high-hand-fee-1"), "6");
+    await user.selectOptions(screen.getByTestId("high-hand-rake-type-1"), "Fixed amount ($)");
+    await user.type(screen.getByTestId("high-hand-rake-amount-1"), "2");
+    await user.click(screen.getByRole("button", { name: "Move the Second half high hand up" }));
+    await user.click(screen.getByTestId("save-tournament"));
+
+    await waitFor(() =>
+      expect(saved).toEqual([
+        {
+          highHands: [
+            { id: "hh2", name: "Second half", entryFee: "6.00", winners: 1, rakeType: "fixed", rakeAmount: "2.00", note: "After the break" },
+            { id: "hh1", name: "First half", entryFee: "5.00", winners: 2, rakeType: "percentage", rakeAmount: "10.00", note: "Before the break" },
+          ],
+        },
+      ]),
+    );
+  });
+
+  it("puts the server's refusal about one high hand's awards on its card, and stays open", async () => {
+    hostPhone();
+    mockSave(() =>
+      apiError(409, "HIGH_HAND_AWARDED", "First half high hand: every prize is awarded, so its pot cannot change", { highHandId: "hh1", name: "First half", awardedCents: 900, potCents: 900 }),
+    );
+    const { user, onOpenChange } = renderEdit(listedTournament({ status: "in_progress" }));
+
+    await user.clear(screen.getByTestId("high-hand-fee-0"));
+    await user.type(screen.getByTestId("high-hand-fee-0"), "6");
+    await user.click(screen.getByTestId("save-tournament"));
+
+    expect(await screen.findByTestId("high-hand-problem-0")).toHaveTextContent("every prize is awarded");
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("asks before a new fee re-prices players already in a high hand, naming it", async () => {
+    hostPhone();
+    const message = "This re-prices what is already recorded: 2 entries in the First half high hand from $5 to $6.";
+    const saved = mockSave((body) =>
+      (body as { repriceEntries?: boolean }).repriceEntries
+        ? HttpResponse.json(listedTournament())
+        : apiError(409, "ENTRIES_REPRICED", message, { changes: [{ highHandId: "hh1", name: "First half", count: 2, fromCents: 500, toCents: 600 }] }),
+    );
+    const { user } = renderEdit(listedTournament({ status: "in_progress" }));
+
+    await user.clear(screen.getByTestId("high-hand-fee-0"));
+    await user.type(screen.getByTestId("high-hand-fee-0"), "6");
+    await user.click(screen.getByTestId("save-tournament"));
+
+    const ask = await screen.findByTestId("confirm-reprice");
+    expect(within(ask).getByTestId("repricing-lines")).toHaveTextContent("2 entries in the First half high hand from $5.00 to $6.00");
+    await user.click(within(ask).getByRole("button", { name: "Re-price and save" }));
+    await waitFor(() => expect(saved).toHaveLength(2));
+    expect(saved[1]).toMatchObject({ repriceEntries: true, highHands: [{ id: "hh1", entryFee: "6.00" }, { id: "hh2" }] });
+  });
+
+  it("says a page loaded before the high hands were listed is out of date, and offers to reload", async () => {
+    hostPhone();
+    mockSave(() => apiError(409, "HIGH_HAND_LISTED", "This game lists its high hands now: reload the page."));
+    const { user } = renderEdit(legacy());
+
+    await user.clear(screen.getByTestId("high-hand-fee-0"));
+    await user.type(screen.getByTestId("high-hand-fee-0"), "12");
+    await user.click(screen.getByTestId("save-tournament"));
+
+    expect(await screen.findByText("This page is out of date")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
   });
 });

@@ -9,6 +9,7 @@ import { clubManagersRoutes } from "./club-managers";
 import { clubsRoutes } from "./clubs";
 import { dashboardRoutes } from "./dashboard";
 import { finalizeRoutes } from "./finalize";
+import { highHandsRoutes } from "./high-hands";
 import { imagesRoutes } from "./images";
 import { leaderboardRoutes } from "./leaderboard";
 import { pendingActionsRoutes } from "./pending-actions";
@@ -48,6 +49,7 @@ const ROUTE_MODULES: ReadonlyArray<(deps: RouteDeps) => Router> = [
   publicRoutes,
   tournamentsRoutes,
   prizePoolRoutes,
+  highHandsRoutes,
   finalizeRoutes,
   seatingRoutes,
   clockRoutes,

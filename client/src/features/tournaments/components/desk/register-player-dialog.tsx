@@ -8,6 +8,7 @@ import { FormSlideout } from "@/components/ui/form-slideout";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { RequiredNote } from "@/components/shared/required-note";
+import { HighHandChoices } from "@/features/public-tournament/components/high-hand-choices";
 import { MIN_SEARCH_LENGTH, PlayerSearch, type PlayerSearchWording } from "@/features/public-tournament/components/player-search";
 import { waitingListPlaceOf } from "@/features/public-tournament/waiting-list";
 import { returnSeatAction, returnSeatText, useReturnSeat } from "@/features/seating/waiting-seat";
@@ -15,7 +16,8 @@ import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/api/http";
 import type { PublicPlayer } from "@shared/api/public";
 import { freeEntrySchema, staffRegistrationSchema, type RegistrationCreatedDto, type StaffRegistrationInput } from "@shared/api/registrations";
-import type { Cents } from "@shared/domain/money";
+import type { HighHandSettings } from "@shared/domain/high-hands";
+import { formatMoney, toCents, type Cents } from "@shared/domain/money";
 import { formResolver, showServerFieldErrors, typedNumber } from "@/lib/forms";
 import { useRegisterPlayer } from "../../staff-hooks";
 import { freeEntryOf } from "../free-entry/free-entry-badge";
@@ -32,14 +34,23 @@ const counts = z.object({
   buyIns: typedNumber(shape.buyIns),
   rebuys: typedNumber(shape.rebuys),
   addons: typedNumber(shape.addons),
+  highHandIds: z.array(z.string()),
 });
 /** With "Free entry" on (round 7, item 6), also why, and whether the club pays the buy-in in. */
 const registerSchema = z.discriminatedUnion("free", [counts.extend({ free: z.literal(false) }), counts.merge(freeEntrySchema).extend({ free: z.literal(true) })]);
 
-/** The request body the boxes describe. */
-function registrationOf(values: z.output<typeof registerSchema>): StaffRegistrationInput {
-  const { playerId, buyIns, rebuys, addons } = values;
-  return { playerId, buyIns, rebuys, addons, ...(values.free ? { freeEntry: { reason: values.reason, note: values.note, funded: values.funded } } : {}) };
+/** The request body the boxes describe; the high hands ticked only in a game that runs any (`offersHighHands`). */
+function registrationOf(values: z.output<typeof registerSchema>, offersHighHands: boolean): StaffRegistrationInput {
+  const { playerId, buyIns, rebuys, addons, highHandIds } = values;
+  return {
+    playerId,
+    buyIns,
+    rebuys,
+    addons,
+    // Round 10: the high hands ticked, and the legacy flag for a server that does not read the list yet.
+    ...(offersHighHands ? { enteringHighHands: highHandIds.length > 0, highHandIds } : {}),
+    ...(values.free ? { freeEntry: { reason: values.reason, note: values.note, funded: values.funded } } : {}),
+  };
 }
 
 interface RegisterValues extends FreeEntryValues {
@@ -47,6 +58,8 @@ interface RegisterValues extends FreeEntryValues {
   buyIns: string;
   rebuys: string;
   addons: string;
+  /** The high hands they enter (round 10), paid at the door. */
+  highHandIds: string[];
   /** Let in free (round 7): the free-entry boxes are shown and sent. */
   free: boolean;
 }
@@ -66,6 +79,8 @@ interface RegisterPlayerDialogProps {
   buyInCents: Cents;
   /** The club's name for its take ("AP"), for what a funded free entry leaves out. */
   rakeLabel: string;
+  /** The tournament's high hands (highHandsOf), to tick the ones the player enters; none without one. */
+  highHands: readonly HighHandSettings[];
   /** Opens the seating, for the toast of a player left waiting because every table is full ("open a table"). */
   onOpenSeating?: () => void;
   returnFocusTo?: RefObject<HTMLElement | null>;
@@ -86,7 +101,7 @@ interface RegisterPlayerSheetProps extends Omit<RegisterPlayerDialogProps, "open
   onClose: () => void;
 }
 
-function RegisterPlayerSheet({ tournamentId, buyInCents, rakeLabel, onOpenSeating, returnFocusTo, onClose }: RegisterPlayerSheetProps) {
+function RegisterPlayerSheet({ tournamentId, buyInCents, rakeLabel, highHands, onOpenSeating, returnFocusTo, onClose }: RegisterPlayerSheetProps) {
   const { toast } = useToast();
   const register = useRegisterPlayer(tournamentId);
   const returnSeat = useReturnSeat(tournamentId);
@@ -94,9 +109,10 @@ function RegisterPlayerSheet({ tournamentId, buyInCents, rakeLabel, onOpenSeatin
   // Adding someone who has not played before, instead of searching (round 7, item 9).
   const [addingNew, setAddingNew] = useState(false);
   const playerLabelId = useId();
+  const highHandsLabelId = useId();
   const form = useForm<RegisterValues>({
     resolver: formResolver(registerSchema),
-    defaultValues: { playerId: "", buyIns: "1", rebuys: "0", addons: "0", free: false, ...NO_FREE_ENTRY_VALUES },
+    defaultValues: { playerId: "", buyIns: "1", rebuys: "0", addons: "0", highHandIds: [], free: false, ...NO_FREE_ENTRY_VALUES },
   });
   const free = useWatch({ control: form.control, name: "free" });
   const choosePlayer = (chosen: PublicPlayer | null) => {
@@ -111,7 +127,7 @@ function RegisterPlayerSheet({ tournamentId, buyInCents, rakeLabel, onOpenSeatin
   const submit = form.handleSubmit(async (values) => {
     let registration: RegistrationCreatedDto;
     try {
-      registration = await register.mutateAsync(registrationOf(registerSchema.parse(values)));
+      registration = await register.mutateAsync(registrationOf(registerSchema.parse(values), highHands.length > 0));
     } catch (error) {
       if (!showServerFieldErrors(form.setError, error, { fields: ["buyIns", "rebuys", "addons", "playerId"] })) {
         toast({ title: "Could not register the player", description: errorMessage(error), variant: "destructive" });
@@ -216,6 +232,38 @@ function RegisterPlayerSheet({ tournamentId, buyInCents, rakeLabel, onOpenSeatin
               />
             ))}
           </div>
+
+          {highHands.length > 0 ? (
+            <FormField
+              control={form.control}
+              name="highHandIds"
+              render={({ field }) =>
+                highHands.length === 1 ? (
+                  <FormItem className="flex items-start justify-between gap-4 rounded-lg border border-border p-3">
+                    <div className="space-y-1">
+                      <FormLabel className="text-sm font-medium">High hand</FormLabel>
+                      <p className="text-xs text-muted-foreground">{formatMoney(toCents(highHands[0].entryFee), { forceCents: true })}, paid at the door</p>
+                    </div>
+                    <FormControl>
+                      <Switch
+                        checked={field.value.includes(highHands[0].id)}
+                        onCheckedChange={(checked) => field.onChange(checked ? [highHands[0].id] : [])}
+                        className="mt-1"
+                        data-testid="register-high-hand"
+                      />
+                    </FormControl>
+                  </FormItem>
+                ) : (
+                  <FormItem>
+                    <p id={highHandsLabelId} className="text-sm font-medium">
+                      High hands <span className="font-normal text-muted-foreground">(paid at the door)</span>
+                    </p>
+                    <HighHandChoices highHands={highHands} value={field.value} onChange={field.onChange} labelledBy={highHandsLabelId} compact />
+                  </FormItem>
+                )
+              }
+            />
+          ) : null}
 
           {/* Round 7: nothing to let them off in a game with no buy-in. */}
           {buyInCents > 0 ? (

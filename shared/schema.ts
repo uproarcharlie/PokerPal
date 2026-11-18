@@ -239,6 +239,91 @@ export const tournamentRegistrations = pgTable("tournament_registrations", {
   eliminatedByIdx: index("idx_tournament_registrations_eliminated_by").on(table.eliminatedBy),
 }));
 
+/**
+ * The high hands a tournament lists (migrations/0019; round 10, shared/domain/high-hands), in order:
+ * each its own pot, with its entry fee, AP rule (rakeType none | percentage of the pot | fixed one flat
+ * amount; rakeAmount the percentage or the amount) and number of prizes. A high hand taken off the list
+ * keeps its row (removedAt), so a tournament with any row lists its high hands; one with none keeps
+ * its one high hand, if any, in its legacy columns (enableHighHand, highHandAmount, …), read as one
+ * high hand. (id, tournamentId) is unique so an entry or an award references both.
+ */
+export const tournamentHighHands = pgTable("tournament_high_hands", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tournamentId: varchar("tournament_id").notNull(),
+  position: integer("position").notNull(),
+  name: text("name").notNull(),
+  entryFee: decimal("entry_fee", { precision: 10, scale: 2 }).notNull(),
+  rakeType: text("rake_type").notNull().default("none"), // percentage, fixed, none
+  rakeAmount: decimal("rake_amount", { precision: 10, scale: 2 }).notNull().default("0"),
+  winners: integer("winners").notNull().default(1),
+  note: text("note"),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  removedAt: timestamp("removed_at", { withTimezone: true, mode: "date" }), // null: on the list
+}, (table) => ({
+  tournamentFk: foreignKey({ name: "fk_tournament_high_hands_tournament", columns: [table.tournamentId], foreignColumns: [tournaments.id] }).onDelete("cascade"),
+  idTournamentUq: unique("uq_tournament_high_hands_id_tournament").on(table.id, table.tournamentId),
+  positionCk: check("ck_tournament_high_hands_position", sql`position >= 1`),
+  winnersCk: check("ck_tournament_high_hands_winners", sql`winners BETWEEN 1 AND 20`),
+  rakeTypeCk: check("ck_tournament_high_hands_rake_type", sql`rake_type IN ('none', 'percentage', 'fixed')`),
+  amountsCk: check("ck_tournament_high_hands_amounts", sql`entry_fee >= 0 AND rake_amount >= 0`),
+  tournamentIdx: index("idx_tournament_high_hands_tournament").on(table.tournamentId, table.position),
+}));
+
+/** Which listed high hands each registration entered (migrations/0019): one row per pair. */
+export const registrationHighHands = pgTable("registration_high_hands", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  registrationId: varchar("registration_id").notNull(),
+  highHandId: varchar("high_hand_id").notNull(),
+  tournamentId: varchar("tournament_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+}, (table) => ({
+  pairUq: unique("uq_registration_high_hands").on(table.registrationId, table.highHandId),
+  registrationFk: foreignKey({
+    name: "fk_registration_high_hands_registration",
+    columns: [table.registrationId],
+    foreignColumns: [tournamentRegistrations.id],
+  }).onDelete("cascade"),
+  highHandFk: foreignKey({
+    name: "fk_registration_high_hands_high_hand",
+    columns: [table.highHandId, table.tournamentId],
+    foreignColumns: [tournamentHighHands.id, tournamentHighHands.tournamentId],
+  }).onDelete("cascade"),
+  tournamentIdx: index("idx_registration_high_hands_tournament").on(table.tournamentId),
+  highHandIdx: index("idx_registration_high_hands_high_hand").on(table.highHandId, table.tournamentId),
+}));
+
+/**
+ * Each prize awarded from a listed high hand (migrations/0019), in cents, once per high hand and
+ * registration. splitWithRegistrationId: for a tie, the earlier winner whose prize this one shares.
+ * awardedBy: users.id as audit text (no FK), never sent to a client.
+ */
+export const highHandAwards = pgTable("high_hand_awards", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tournamentId: varchar("tournament_id").notNull(),
+  highHandId: varchar("high_hand_id").notNull(),
+  registrationId: varchar("registration_id").notNull(),
+  amountCents: integer("amount_cents").notNull(),
+  splitWithRegistrationId: varchar("split_with_registration_id"),
+  awardedAt: timestamp("awarded_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  awardedBy: varchar("awarded_by"),
+}, (table) => ({
+  registrationFk: foreignKey({
+    name: "fk_high_hand_awards_registration",
+    columns: [table.registrationId],
+    foreignColumns: [tournamentRegistrations.id],
+  }).onDelete("cascade"),
+  highHandFk: foreignKey({
+    name: "fk_high_hand_awards_high_hand",
+    columns: [table.highHandId, table.tournamentId],
+    foreignColumns: [tournamentHighHands.id, tournamentHighHands.tournamentId],
+  }).onDelete("cascade"),
+  winnerUq: unique("uq_high_hand_awards_winner").on(table.highHandId, table.registrationId),
+  amountCk: check("ck_high_hand_awards_amount", sql`amount_cents >= 0`),
+  tournamentIdx: index("idx_high_hand_awards_tournament").on(table.tournamentId),
+  registrationIdx: index("idx_high_hand_awards_registration").on(table.registrationId),
+}));
+
 // Points systems
 export const pointsSystems = pgTable("points_systems", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -599,6 +684,15 @@ export type TournamentClock = typeof tournamentClocks.$inferSelect;
 export type InsertTournamentClock = typeof tournamentClocks.$inferInsert;
 
 export type PrizeCarryOver = typeof prizeCarryOvers.$inferSelect;
+
+export type TournamentHighHand = typeof tournamentHighHands.$inferSelect;
+export type InsertTournamentHighHand = typeof tournamentHighHands.$inferInsert;
+
+export type RegistrationHighHand = typeof registrationHighHands.$inferSelect;
+export type InsertRegistrationHighHand = typeof registrationHighHands.$inferInsert;
+
+export type HighHandAwardRow = typeof highHandAwards.$inferSelect;
+export type InsertHighHandAward = typeof highHandAwards.$inferInsert;
 
 export type AuditLogEntry = typeof auditLog.$inferSelect;
 export type InsertAuditLogEntry = typeof auditLog.$inferInsert;

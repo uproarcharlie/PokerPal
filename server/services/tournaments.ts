@@ -15,6 +15,7 @@ import {
 } from "@shared/api/tournaments";
 import { formatMoney, isAmountSet, toCents } from "@shared/domain/money";
 import { computePrizePool, rakeLabel, recordedEntryCounts } from "@shared/domain/prize-pool";
+import type { HighHandRepricing } from "@shared/domain/high-hands";
 import { isActiveStatus } from "@shared/domain/tournaments";
 import { waitingListCount } from "@shared/domain/waiting-list";
 import { RAKE_RATE_KEYS, type RakeAmountKey, type RakeRates, type RakeTypeKey } from "@shared/domain/rake-rates";
@@ -26,24 +27,30 @@ import { actingUserId, clubScope, viewerFor } from "../http/authz";
 import { badRequest, conflict, notFound } from "../http/errors";
 import { insertActivity } from "../repositories/activity";
 import { getClub } from "../repositories/clubs";
+import * as highHandsRepo from "../repositories/high-hands";
 import * as pointsRepo from "../repositories/points";
 import * as seasonsRepo from "../repositories/seasons";
 import * as tournamentsRepo from "../repositories/tournaments";
 import { recordAudit } from "./audit";
 import { stopClockForCancel } from "./clock";
 import { assertCanShowBankTransfer } from "./club-payments";
+import { applyHighHandsChange, describeHighHandRepricing } from "./high-hand-config";
+import { highHandRowsByTournament, loadHighHandStore, withHighHands } from "./high-hands";
 import { assertOwnedImage, noteDeletedImages, noteReplacedImage } from "./images/upload";
 import {
   applyPrizePoolAdjustment,
   applyRakeRates,
   assertApWithinGross,
   assertRatesWithinPrices,
+  highHandListed,
   loadPrizePoolContext,
   mergedRatesOrThrow,
+  withTournament,
 } from "./prize-pool";
 import {
   assertHighHandAwardsFit,
   closedMessage,
+  entriesRepricedConflict,
   isClosed,
   statusChangeDescription,
   toPublicTournament,
@@ -96,8 +103,10 @@ export async function listTournaments(req: Request, query: TournamentsQuery) {
     req.user ? clubScope(req.user) : null,
   ]);
   const runs = (clubId: string) => scope !== null && (scope.all || scope.clubIds.includes(clubId));
+  // Every tournament's listed high hands in one query (perf-19).
+  const highHands = highHandRowsByTournament(await highHandsRepo.highHandRowsOfTournaments(db, rows.map(({ tournament }) => tournament.id)));
   return rows.map(({ tournament, registeredCount, confirmedPlayerCount, inFieldByRightCount }) => ({
-    ...toPublicTournament(tournament, runs(tournament.clubId)),
+    ...toPublicTournament(withHighHands(tournament, { rows: highHands.get(tournament.id) ?? [] }), runs(tournament.clubId)),
     confirmedPlayerCount: runs(tournament.clubId) ? confirmedPlayerCount : null,
     registeredCount,
     waitingListCount: waitingListCount(registeredCount, inFieldByRightCount, tournament.maxPlayers),
@@ -107,7 +116,13 @@ export async function listTournaments(req: Request, query: TournamentsQuery) {
 export async function getTournamentDetail(req: Request, id: string): Promise<TournamentDetail> {
   const row = await tournamentsRepo.getTournament(db, id);
   if (!row) throw notFound("Tournament not found");
-  return toTournamentDetail(row, await viewerFor(req, row.clubId));
+  return detailFor(req, row);
+}
+
+/** The tournament as the caller may see it, with its high hands as stored now (read after the write that changed them committed). */
+async function detailFor(req: Request, row: Tournament): Promise<TournamentDetail> {
+  const [store, viewer] = await Promise.all([loadHighHandStore(db, row.id), viewerFor(req, row.clubId)]);
+  return toTournamentDetail(withHighHands(row, store), viewer);
 }
 
 /** The season and points settings: a tournament with no season is a one-off game (round 7). */
@@ -190,7 +205,9 @@ const NO_RATES: RakeRates = {
  */
 export async function createTournament(env: AppEnv, req: Request, input: CreateTournamentInput): Promise<TournamentDetail> {
   assertOwnedImage(env, input.imageUrl, undefined, INVALID_MESSAGE);
-  const { rates, others } = splitRates(input);
+  assertNotBothHighHandForms(input);
+  const { highHands, ...columns } = input;
+  const { rates, others } = splitRates(columns);
   const merged = mergedRatesOrThrow(NO_RATES, rates);
   assertRatesWithinPrices({ ...input, ...merged });
   const points = pointsSettings(NO_POINTS, input);
@@ -205,9 +222,12 @@ export async function createTournament(env: AppEnv, req: Request, input: CreateT
         `A club can have at most ${MAX_UPCOMING_TOURNAMENTS_PER_CLUB} upcoming tournaments: finish, cancel or delete some first`,
       );
     }
-    return tournamentsRepo.createTournament(tx, { ...others, ...points, ...merged, rakeType: merged.rakeType ?? "none" });
+    const created = await tournamentsRepo.createTournament(tx, { ...others, ...points, ...merged, rakeType: merged.rakeType ?? "none" });
+    // Round 10: listed from the start; a new tournament has no entries to re-price.
+    if (!highHands || highHands.length === 0) return created;
+    return (await applyHighHandsChange(tx, req, created, { highHands, reason: null })).tournament;
   });
-  return toTournamentDetail(row, await viewerFor(req, row.clubId));
+  return detailFor(req, row);
 }
 
 /**
@@ -278,6 +298,18 @@ const ENTRY_AMOUNTS = ["buyInAmount", "rebuyAmount", "addonAmount"] as const;
 const HIGH_HAND_FIELDS = ["enableHighHand", "highHandAmount", "highHandRakeType", "highHandRakeAmount", "highHandPayouts"] as const;
 
 /**
+ * 400 VALIDATION on the first legacy high-hand field sent with `highHands` (round 10): the list says it
+ * all, and the legacy columns are then its summary.
+ */
+function assertNotBothHighHandForms(input: Pick<UpdateTournamentInput, "highHands" | (typeof HIGH_HAND_FIELDS)[number]>): void {
+  if (input.highHands === undefined) return;
+  const field = HIGH_HAND_FIELDS.find((key) => input[key] !== undefined);
+  if (!field) return;
+  const message = "Set the high hands as a list (highHands) or with the older fields, not both";
+  throw badRequest(message, "VALIDATION", [{ code: "custom", path: [field], message }]);
+}
+
+/**
  * 409 HIGH_HAND_ENTRIES while any entry is in the high hand: the desk charges those entries and the
  * pot counts them whether or not the high hand is on, so turning it off would leave money collected
  * that nobody could award or see (P2REV1-MONEY-05).
@@ -307,11 +339,19 @@ const entriesOf = (part: PricedPart, count: number) => `${count} ${count === 1 ?
  * (P3REV0-PARITY-EDIT-REPRICE). Removing a price (null or $0) while its entries are recorded is
  * refused here, confirmed or not (REBUYS_RECORDED, ADDONS_RECORDED, HIGH_HAND_ENTRIES: those entries
  * would silently become $0). Returns every other change to a price with recorded entries: each needs
- * the TD's confirmation (assertRepricingConfirmed).
+ * the TD's confirmation (assertRepricingConfirmed). For a tournament that lists its high hands (round
+ * 10: `listsHighHands`), highHandAmount is their summary, and each high hand's fee is re-priced with
+ * the list (./high-hand-config).
  */
-function repricedEntries(before: Tournament, after: Tournament, counts: Readonly<Record<PricedPart["count"], number>>): Repricing[] {
+function repricedEntries(
+  before: Tournament,
+  after: Tournament,
+  counts: Readonly<Record<PricedPart["count"], number>>,
+  { listsHighHands }: { listsHighHands: boolean },
+): Repricing[] {
   const changes: Repricing[] = [];
   for (const part of PRICED_PARTS) {
+    if (listsHighHands && part.price === "highHandAmount") continue;
     const count = counts[part.count];
     const from = toCents(before[part.price]);
     const to = toCents(after[part.price]);
@@ -331,22 +371,17 @@ function repricedEntries(before: Tournament, after: Tournament, counts: Readonly
 
 /**
  * 409 ENTRIES_REPRICED (details.changes) for a re-pricing the TD has not yet confirmed with
- * `repriceEntries: true`, saying what it re-prices. Asked only once every refusal has passed, so the
- * TD is never asked to confirm a change that would then be refused anyway (HIGH_HAND_AWARDED,
- * AP_EXCEEDS_GROSS, …).
+ * `repriceEntries: true`, saying what it re-prices: the form's prices and (round 10) the high hands'
+ * fees, in one 409. Asked only once every refusal has passed, so the TD is never asked to confirm a
+ * change that would then be refused anyway (HIGH_HAND_AWARDED, AP_EXCEEDS_GROSS, …).
  */
-function assertRepricingConfirmed(changes: readonly Repricing[], confirmed: boolean): void {
-  if (changes.length === 0 || confirmed) return;
+function assertRepricingConfirmed(changes: readonly Repricing[], highHands: readonly HighHandRepricing[], confirmed: boolean): void {
+  if ((changes.length === 0 && highHands.length === 0) || confirmed) return;
   const list = changes.map((change) => {
     const part = PRICED_PARTS.find((candidate) => candidate.price === change.field) as PricedPart;
     return `${entriesOf(part, change.count)} from ${formatMoney(change.fromCents)} to ${formatMoney(change.toCents)}`;
   });
-  const sentence = list.length === 1 ? list[0] : `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`;
-  throw conflict(
-    "ENTRIES_REPRICED",
-    `This re-prices what is already recorded: ${sentence}. The prize pool and what players owe change with it.`,
-    { changes },
-  );
+  throw entriesRepricedConflict([...list, ...highHands.map(describeHighHandRepricing)], [...changes, ...highHands]);
 }
 
 /**
@@ -362,13 +397,18 @@ function assertRepricingConfirmed(changes: readonly Repricing[], confirmed: bool
  * the club has them (round 8). Status changes and locks are logged as before.
  */
 export async function updateTournament(env: AppEnv, req: Request, id: string, input: UpdateTournamentInput): Promise<TournamentDetail> {
+  assertNotBothHighHandForms(input);
   let previousImageUrl: string | null = null;
   const row = await db.transaction(async (tx) => {
     const current = await tournamentsRepo.lockTournamentForUpdate(tx, id);
     if (!current) throw notFound("Tournament not found");
     previousImageUrl = current.imageUrl;
-    const { clubId, status, prizePoolLocked, manualPrizePool, repriceEntries = false, keepRakeOverride = false, ...allConfig } = input;
+    const { clubId, status, prizePoolLocked, manualPrizePool, repriceEntries = false, keepRakeOverride = false, highHands, ...allConfig } = input;
     const { rates, others: config } = splitRates(allConfig);
+    // Round 10: a tournament that lists its high hands keeps its legacy high-hand columns as their summary (a page loaded before resends them unchanged).
+    const listedBefore = (await highHandsRepo.highHandRowsOf(tx, id)).length > 0;
+    const storedHighHand = (key: (typeof HIGH_HAND_FIELDS)[number]) => (key === "highHandRakeType" ? (current[key] ?? "none") : current[key]);
+    if (listedBefore && HIGH_HAND_FIELDS.some((key) => input[key] !== undefined && !sameValue(input[key], storedHighHand(key)))) throw highHandListed();
 
     if (clubId !== undefined && clubId !== current.clubId) {
       throw badRequest("A tournament cannot move to another club", "CANNOT_MOVE");
@@ -416,6 +456,10 @@ export async function updateTournament(env: AppEnv, req: Request, id: string, in
     if (Object.values(changes).some((value) => value !== undefined)) {
       updated = (await tournamentsRepo.setTournamentColumns(tx, id, changes)) ?? current;
     }
+    // Round 10: the list of high hands, by PUT …/high-hands's rules; its re-pricing is confirmed with the form's, last.
+    const highHandChange = highHands !== undefined ? await applyHighHandsChange(tx, req, updated, { highHands, reason: null }) : undefined;
+    if (highHandChange) updated = highHandChange.tournament;
+    const highHandRepricings = highHandChange?.repricings ?? [];
 
     if (status !== undefined && status !== current.status) {
       await insertActivity(tx, {
@@ -443,16 +487,17 @@ export async function updateTournament(env: AppEnv, req: Request, id: string, in
         assertNoHighHandEntrants(context.registrations);
       }
       // Every recorded entry, paid or not: a new price re-prices what the desk will ask each player for.
-      const repriced = repricedEntries(current, updated, recordedEntryCounts(current, context.registrations));
+      const repriced = repricedEntries(current, updated, recordedEntryCounts(current, context.registrations), {
+        listsHighHands: context.tournament.highHands !== null,
+      });
       if (ratesSent) {
         const change = { changes: rates, keepOverride: keepRakeOverride, clearOverrideWhenUnchanged: false, reason: null };
-        updated = await applyRakeRates(tx, req, { ...context, tournament: updated }, change);
+        updated = await applyRakeRates(tx, req, withTournament(context, updated), change);
       }
       // Clearing a manual pool that is not set is not a change, and must not clear an AP override.
       if (manualPrizePool !== undefined && !(manualPrizePool === null && current.manualPrizePool === null)) {
         updated = await applyPrizePoolAdjustment(tx, req, {
-          ...context,
-          tournament: updated,
+          ...withTournament(context, updated),
           adjustment: manualPrizePool === null ? { mode: "calculated" } : { mode: "manual_pool", amount: manualPrizePool },
         });
       }
@@ -463,15 +508,20 @@ export async function updateTournament(env: AppEnv, req: Request, id: string, in
         const { gross } = computePrizePool(updated, context.registrations);
         assertApWithinGross(rakeLabel(context.club), toCents(updated.rakeOverride), gross.total);
       }
-      // The high-hand awards already made must still fit a changed high-hand pot (MONEY-P2REV-05).
-      assertHighHandAwardsFit({ tournament: current, registrations: context.registrations }, { tournament: updated, registrations: context.registrations });
-      assertRepricingConfirmed(repriced, repriceEntries);
+      // The high-hand awards already made must still fit a changed high-hand pot (MONEY-P2REV-05); a new list was checked as it was set.
+      if (!highHandChange) {
+        const { tournament: before } = withTournament(context, current);
+        assertHighHandAwardsFit({ tournament: before, registrations: context.registrations }, { tournament: withTournament(context, updated).tournament, registrations: context.registrations });
+      }
+      assertRepricingConfirmed(repriced, highHandRepricings, repriceEntries);
+    } else {
+      assertRepricingConfirmed([], highHandRepricings, repriceEntries);
     }
     return updated;
   });
   // After the commit: an image is an orphan only once the change that replaced it is stored.
   noteReplacedImage(previousImageUrl, row.imageUrl, `tournament ${id}`);
-  return toTournamentDetail(row, await viewerFor(req, row.clubId));
+  return detailFor(req, row);
 }
 
 /**

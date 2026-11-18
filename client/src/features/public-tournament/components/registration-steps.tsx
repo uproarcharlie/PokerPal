@@ -4,11 +4,12 @@ import { MoneyText } from "@/components/shared/money-text";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { RadioGroup } from "@/components/ui/radio-group";
+import { highHandsOf, type HighHandSettings } from "@shared/domain/high-hands";
 import { amountDue } from "../registration";
 import type { PlayerType, RegistrationFlow } from "../use-registration-flow";
 import { ChoiceTile } from "./choice-tile";
+import { HighHandChoices } from "./high-hand-choices";
 import { PlayerSearch } from "./player-search";
-import { offersHighHand } from "@shared/domain/player-actions";
 
 const QUESTION = "text-base font-semibold text-foreground";
 
@@ -67,8 +68,50 @@ export function ExistingPlayerStep({ flow, tournamentId }: { flow: RegistrationF
   );
 }
 
-/** Step 3: the high hands (when the tournament has one), what is owed at the desk, and the sign-up itself. */
+/** One high hand: in it or not, as before round 10. */
+function OneHighHand({ flow, highHand }: { flow: RegistrationFlow; highHand: HighHandSettings }) {
+  const entering = flow.highHandIds.includes(highHand.id);
+  return (
+    <div className="space-y-4">
+      <p id="high-hands-question" className={QUESTION}>
+        High Hands Entry
+      </p>
+      <p className="text-sm text-muted-foreground">
+        Enter the high hands competition for an additional <MoneyText amount={highHand.entryFee} forceCents />
+      </p>
+      <RadioGroup
+        aria-labelledby="high-hands-question"
+        value={entering ? "yes" : "no"}
+        onValueChange={(value) => flow.setHighHandIds(value === "yes" ? [highHand.id] : [])}
+      >
+        <ChoiceTile value="yes" selected={entering} data-testid="high-hands-yes">
+          <Trophy className="h-5 w-5" aria-hidden="true" />
+          Yes, I&apos;m in!
+        </ChoiceTile>
+        <ChoiceTile value="no" selected={!entering} data-testid="high-hands-no">
+          No thanks
+        </ChoiceTile>
+      </RadioGroup>
+    </div>
+  );
+}
+
+/** Several high hands (round 10): the player ticks the ones they want, each its own pot. */
+function SeveralHighHands({ flow, highHands }: { flow: RegistrationFlow; highHands: readonly HighHandSettings[] }) {
+  return (
+    <div className="space-y-4">
+      <p id="high-hands-question" className={QUESTION}>
+        High Hands Entry
+      </p>
+      <p className="text-sm text-muted-foreground">Tick the high hands you want to enter: each is its own pot, paid at the door.</p>
+      <HighHandChoices highHands={highHands} value={flow.highHandIds} onChange={flow.setHighHandIds} labelledBy="high-hands-question" />
+    </div>
+  );
+}
+
+/** Step 3: the high hands (when the tournament has any), what is owed at the desk, and the sign-up itself. */
 export function ConfirmStep({ flow, tournament }: { flow: RegistrationFlow; tournament: TournamentDetailDto }) {
+  const highHands = highHandsOf(tournament);
   return (
     <div className="space-y-4">
       {flow.player ? (
@@ -77,28 +120,10 @@ export function ConfirmStep({ flow, tournament }: { flow: RegistrationFlow; tour
         </p>
       ) : null}
 
-      {offersHighHand(tournament) ? (
-        <div className="space-y-4">
-          <p id="high-hands-question" className={QUESTION}>
-            High Hands Entry
-          </p>
-          <p className="text-sm text-muted-foreground">
-            Enter the high hands competition for an additional <MoneyText amount={tournament.highHandAmount} forceCents />
-          </p>
-          <RadioGroup
-            aria-labelledby="high-hands-question"
-            value={flow.enteringHighHands ? "yes" : "no"}
-            onValueChange={(value) => flow.setEnteringHighHands(value === "yes")}
-          >
-            <ChoiceTile value="yes" selected={flow.enteringHighHands} data-testid="high-hands-yes">
-              <Trophy className="h-5 w-5" aria-hidden="true" />
-              Yes, I&apos;m in!
-            </ChoiceTile>
-            <ChoiceTile value="no" selected={!flow.enteringHighHands} data-testid="high-hands-no">
-              No thanks
-            </ChoiceTile>
-          </RadioGroup>
-        </div>
+      {highHands.length === 1 ? (
+        <OneHighHand flow={flow} highHand={highHands[0]} />
+      ) : highHands.length > 1 ? (
+        <SeveralHighHands flow={flow} highHands={highHands} />
       ) : (
         <p className="rounded-lg bg-muted p-4 text-center text-sm text-muted-foreground">
           High hands competition is not available for this tournament
@@ -107,7 +132,7 @@ export function ConfirmStep({ flow, tournament }: { flow: RegistrationFlow; tour
 
       <div className="rounded-lg bg-muted p-4">
         <p className="mb-2 text-sm font-medium text-foreground">Total Amount</p>
-        <p className="text-3xl font-bold text-foreground">{amountDue(tournament, flow.enteringHighHands)}</p>
+        <p className="text-3xl font-bold text-foreground">{amountDue(tournament, flow.highHandIds)}</p>
       </div>
 
       {flow.registrationError ? (

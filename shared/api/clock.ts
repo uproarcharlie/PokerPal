@@ -105,6 +105,8 @@ export const clockDisplaySettingsSchema = z.object({
   showTables: z.boolean().default(false),
   /** "Re-buys close in 1:16:30", for a tournament that sells re-buys or add-ons for a while. */
   showRebuyWindow: z.boolean().default(false),
+  /** Round 10: each high hand's pot by name ("First half high hand $85"), amounts only, never the AP. */
+  showHighHands: z.boolean().default(false),
   /** The TV's sounds (round 5, item 20): how loud (0–1), and each one on or off. */
   soundVolume: z.number().min(0).max(1).default(DEFAULT_SOUND_VOLUME),
   /** The alarm at one minute left. */

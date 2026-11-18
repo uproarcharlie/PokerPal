@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { findForbiddenKeys, findTakingsKeys } from "@shared/api/public";
 import { createClub, createPlayer, createRegistration, createSeason, createTournament, type NewRegistration, type NewTournament } from "../factories";
 import { createClock } from "../factories/clock";
+import { createHighHand, enterHighHand } from "../factories/high-hands";
 import { anon, resetDb, signIn, UNKNOWN_ID } from "../helpers";
 
 beforeEach(resetDb);
@@ -68,6 +69,7 @@ describe("GET /api/public/tournaments/:id/prizes", () => {
       undistributedCents: 0,
       carriedIn: [],
       highHandPotCents: null,
+      highHands: [],
       deal: null,
     });
     expect(findTakingsKeys(response.body)).toEqual([]);
@@ -117,6 +119,23 @@ describe("GET /api/public/tournaments/:id/prizes", () => {
 
     // $150 less $15 AP is $135, paid out as $67 + $40 + $27.
     expect(body).toMatchObject({ poolCents: 13_400, highHandPotCents: 3_000 });
+  });
+
+  it("gives older pages the listed pots added up as shown: an empty pot's flat AP neither lowers the figure nor shows (R10REV0-PRIV-01)", async () => {
+    const { tournament, registrations } = await world({ ...game, enableHighHand: true, highHandAmount: "10.00" }, entries(2, { enteringHighHands: true }));
+    const first = await createHighHand({ tournamentId: tournament.id, position: 1, name: "First half" });
+    await createHighHand({ tournamentId: tournament.id, position: 2, name: "Second half", rakeType: "fixed", rakeAmount: "4.00" });
+    await enterHighHand(first, registrations);
+
+    const { body } = await prizesOf(tournament.id);
+
+    expect(body.highHands.map((pot: { name: string; potCents: number }) => [pot.name, pot.potCents])).toEqual([
+      ["First half", 1_000],
+      ["Second half", 0],
+    ]);
+    // Not $6: the $4 AP of the empty Second half is the club's business.
+    expect(body.highHandPotCents).toBe(1_000);
+    expect(findTakingsKeys(body)).toEqual([]);
   });
 
   it("counts what the club pays in for a free entry, in full, and nothing for one it does not, saying nothing of either (round 7)", async () => {

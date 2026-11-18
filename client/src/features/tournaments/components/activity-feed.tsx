@@ -98,6 +98,7 @@ const EVENT_STYLES: Readonly<Record<ActivityEventType, EventStyle>> = {
   table_opened: { Icon: Table2, tone: "primary", label: "Table Opened" },
   seat_waiting: { Icon: Armchair, tone: "accent", label: "Waiting" },
   entry_corrected: { Icon: Wrench, tone: "muted", label: "Correction" },
+  high_hands_changed: { Icon: Trophy, tone: "muted", label: "High Hands" },
 };
 
 /** Rows written before Phase 2 may hold an event type the app no longer writes. */

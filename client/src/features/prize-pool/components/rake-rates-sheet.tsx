@@ -13,12 +13,14 @@ import { formResolver, showServerFieldErrors } from "@/lib/forms";
 import { poolPlayersOf, tournamentMoney } from "@/lib/prize-pool";
 import { useRegistrations } from "@/features/tournaments/hooks";
 import { RakeFields, type RakeRateValues } from "@/features/tournaments/components/tournament-form/rake-fields";
-import { RATE_MESSAGES, rakeTypeOf, rateAmountText } from "@/features/tournaments/tournament-form";
+import { rakeTypeOf, rateAmountText } from "@/features/tournaments/rate-text";
+import { RATE_MESSAGES } from "@/features/tournaments/tournament-form";
 import { moneySchema, type RakeType } from "@shared/api/common";
 import { rakeRatesSchema } from "@shared/api/prize-pool";
 import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { isAmountSet, toCents } from "@shared/domain/money";
+import { listsHighHands } from "@shared/domain/high-hands";
 import { offersAddons, offersHighHand, offersRebuys } from "@shared/domain/player-actions";
 import { mergeRakeRates, RAKE_COMPONENT_NAMES, RAKE_COMPONENTS, RAKE_RATE_KEYS, rateOverPrice, rateOverPriceMessage } from "@shared/domain/rake-rates";
 import { previewRates } from "../preview";
@@ -34,7 +36,8 @@ function componentsOf(tournament: TournamentDetailDto): Component[] {
   return RAKE_COMPONENTS.filter(({ type }) => {
     if (type === "rebuyRakeType") return offersRebuys(tournament);
     if (type === "addonRakeType") return offersAddons(tournament);
-    if (type === "highHandRakeType") return offersHighHand(tournament);
+    // A game that lists its high hands sets each one's AP with the list (round 10: Edit high hands).
+    if (type === "highHandRakeType") return offersHighHand(tournament) && !listsHighHands(tournament);
     return true;
   });
 }

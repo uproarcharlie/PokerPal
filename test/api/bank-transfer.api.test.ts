@@ -78,9 +78,13 @@ const instructions = (overrides: Partial<PaymentInstructionsDto> = {}): PaymentI
   particulars: "Wed Night",
   reference: "Tama Rangi",
   highHandAtDoorCents: 0,
+  highHandsAtDoor: [],
   waitingList: false,
   ...overrides,
 });
+
+/** Round 10: the legacy high hand at the door, as each sign-up's answer names it ("High hand ($5) — pay at the door"). */
+const LEGACY_AT_DOOR = [{ highHandId: "legacy", name: "High hand", feeCents: 500 }];
 
 describe("GET and PUT /api/clubs/:id/payments (the club's bank details)", () => {
   it("has none for a new club, and never lets the answer be cached", async () => {
@@ -367,7 +371,7 @@ describe("the sign-up's payment instructions", () => {
 
     const { body } = await qrSignUp(tournament.id, "Tama Rangi", { enteringHighHands: true });
 
-    expect(body.paymentInstructions).toEqual(instructions({ amountDueCents: 5_000, highHandAtDoorCents: 500 }));
+    expect(body.paymentInstructions).toEqual(instructions({ amountDueCents: 5_000, highHandAtDoorCents: 500, highHandsAtDoor: LEGACY_AT_DOOR }));
   });
 
   it("cut the reference to the 12 characters a transfer takes, and suggest the game's day for a long name, in the club's time zone", async () => {
@@ -389,10 +393,10 @@ describe("the sign-up's payment instructions", () => {
     const atDesk = await td.post(`/api/tournaments/${tournament.id}/registrations`).send({ playerId: (await createPlayer({ name: "Dee Waiting" })).id });
 
     expect(body.waitingListPosition).toBe(1);
-    expect(body.paymentInstructions).toEqual({ amountDueCents: 5_000, highHandAtDoorCents: 500, waitingList: true } satisfies NothingToTransferDto);
+    expect(body.paymentInstructions).toEqual({ amountDueCents: 5_000, highHandAtDoorCents: 500, highHandsAtDoor: LEGACY_AT_DOOR, waitingList: true } satisfies NothingToTransferDto);
     expect(atDesk.status).toBe(201);
     expect(atDesk.body.waitingListPosition).toBe(2);
-    expect(atDesk.body.paymentInstructions).toEqual({ amountDueCents: 5_000, highHandAtDoorCents: 0, waitingList: true });
+    expect(atDesk.body.paymentInstructions).toEqual({ amountDueCents: 5_000, highHandAtDoorCents: 0, highHandsAtDoor: [], waitingList: true });
     for (const answer of [response, atDesk]) {
       expect(answer.body.paymentInstructions).not.toHaveProperty("accountNumber");
       expect(findForbiddenKeys(answer.body).filter((path) => path.startsWith("paymentInstructions"))).toEqual(["paymentInstructions"]);
@@ -407,7 +411,7 @@ describe("the sign-up's payment instructions", () => {
     const { response, body } = await qrSignUp(tournament.id, "Fay Freeroll", { enteringHighHands: true });
 
     expect(response.status).toBe(201);
-    expect(body.paymentInstructions).toEqual({ amountDueCents: 0, highHandAtDoorCents: 500, waitingList: false } satisfies NothingToTransferDto);
+    expect(body.paymentInstructions).toEqual({ amountDueCents: 0, highHandAtDoorCents: 500, highHandsAtDoor: LEGACY_AT_DOOR, waitingList: false } satisfies NothingToTransferDto);
     expect(JSON.stringify(body)).not.toContain(BANK_DETAILS.accountNumber);
   });
 
@@ -424,7 +428,12 @@ describe("the sign-up's payment instructions", () => {
     expect(desk.status).toBe(201);
     expect(desk.body.paymentInstructions).toEqual(instructions({ reference: "Desk Dan" }));
     expect(freeEntry.status).toBe(201);
-    expect(freeEntry.body.paymentInstructions).toEqual({ amountDueCents: 0, highHandAtDoorCents: 500, waitingList: false } satisfies NothingToTransferDto);
+    expect(freeEntry.body.paymentInstructions).toEqual({
+      amountDueCents: 0,
+      highHandAtDoorCents: 500,
+      highHandsAtDoor: LEGACY_AT_DOOR,
+      waitingList: false,
+    } satisfies NothingToTransferDto);
     expect(paidAtDesk.status).toBe(201);
     expect(paidAtDesk.body).not.toHaveProperty("paymentInstructions");
   });

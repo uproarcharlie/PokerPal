@@ -21,6 +21,7 @@ import {
   type WithViewer,
 } from "./common";
 import type { PrizePoolSnapshot } from "./finalize";
+import { highHandsListSchema } from "./high-hands";
 import type { PublicTournament } from "./public";
 
 export type { ActivityEventType, TournamentStatus } from "../domain/tournaments";
@@ -79,6 +80,16 @@ const configFields = {
   highHandRakeType: rakeTypeSchema.optional(),
   highHandRakeAmount: optionalMoneySchema,
   highHandPayouts: integerSchema(1, HIGH_HAND_PRIZES_MAX).optional(),
+  /**
+   * Round 10: the tournament's high hands as a list, in order (shared/api/high-hands highHandsListSchema),
+   * applied exactly as PUT /api/tournaments/:id/high-hands applies it (its refusals, the repricing
+   * confirmation through this request's `repriceEntries`, its activity and audit), in this request's
+   * transaction. Sent, the legacy fields above (enableHighHand, highHandAmount, highHandRakeType,
+   * highHandRakeAmount, highHandPayouts) must be left out: 400 VALIDATION on the first one sent. A
+   * tournament that lists its high hands refuses a change to those legacy fields (409 HIGH_HAND_LISTED;
+   * a value resent unchanged is accepted, as a page loaded before round 10 resends them).
+   */
+  highHands: highHandsListSchema.optional(),
   enableLateRegistration: z.boolean().optional(),
   trackPoints: z.boolean().optional(),
   minPlayers: nullableIntegerSchema(0, 1000),

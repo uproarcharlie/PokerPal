@@ -6,9 +6,11 @@
  * (data-integrity-10).
  */
 import { z } from "zod";
+import { HIGH_HAND_LIMITS } from "../domain/high-hands";
 import { idSchema, integerSchema, moneySchema, optionalText } from "./common";
+import type { HighHandAtDoorDto } from "./high-hands";
 import type { ClubPlayer } from "./players";
-import type { PublicRegistration, PublicRegistrationRow, WaitingListPlace } from "./public";
+import type { PublicRegistration, PublicRegistrationRow, RegistrationHighHands, WaitingListPlace } from "./public";
 import type { Cents } from "../domain/money";
 import type { AutoSeatResultDto } from "./seating";
 
@@ -22,14 +24,27 @@ import type { AutoSeatResultDto } from "./seating";
  * Refused with 400 PHOTO_REQUIRED (a club that requires a photo, and a player without one who is not
  * one of its regulars and was not added on its QR page: R5REV-SEC-01), 409 ALREADY_REGISTERED,
  * PRIZE_POOL_LOCKED, TOURNAMENT_CLOSED (completed or cancelled), 404 PLAYER_NOT_FOUND, 400
- * HIGH_HAND_NOT_AVAILABLE. A sign-up has not paid, so its high-hand entry is not in the pot (round 6:
- * paid players only) until the TD confirms the payment (which is never refused for the pot: see
+ * HIGH_HAND_NOT_AVAILABLE. A sign-up has not paid, so its high-hand entries are not in the pots (round 6:
+ * paid players only) until the TD confirms the payment (which is never refused for a pot: see
  * PaymentConfirmedDto). Open while the game is in progress (enableLateRegistration is not enforced
  * until the Phase 4 clock).
+ *
+ * Round 10: `highHandIds` are the high hands the player enters (each a tournament's high hand id, or
+ * "legacy" for its legacy one: shared/api/high-hands), in any order, duplicates ignored; an id the
+ * tournament does not run is 400 HIGH_HAND_NOT_AVAILABLE (details { highHandId }). Sent, it wins over
+ * `enteringHighHands`, which (from a page loaded before round 10) means every high hand the tournament
+ * runs, or none (shared/domain/high-hands chosenHighHandIds). What the player owes for them is paid at
+ * the door (paymentInstructions.highHandsAtDoor).
  */
+export const highHandIdsSchema = z
+  .array(idSchema)
+  .max(HIGH_HAND_LIMITS.maxHighHands * 2, "Too many high hands")
+  .transform((ids) => Array.from(new Set(ids)));
+
 export const publicRegistrationSchema = z.object({
   playerId: idSchema,
   enteringHighHands: z.boolean().optional(),
+  highHandIds: highHandIdsSchema.optional(),
   signUpToken: z.string().max(200).optional(),
 });
 export type PublicRegistrationInput = z.infer<typeof publicRegistrationSchema>;
@@ -146,6 +161,26 @@ export type StaffRegistrationInput = z.infer<typeof staffRegistrationSchema>;
  *   The entry keeps its seat and its place in the field, and nobody on the waiting list is accepted.
  * - Round 9 (the desk's Fix menu): a payment taken back and a high-hand entry changed are each a
  *   staff-only activity entry ("entry_corrected") and an audit row ("registration.correct").
+ * - Round 10, `highHandIds`: the whole set of high hands the entry is in (the Fix menu's "High hands
+ *   entered" ticks), as POST takes it, and `enteringHighHands` alone means all or none
+ *   (chosenHighHandIds). The rules of enteringHighHands above apply to each high hand joined or left:
+ *   joining one while the pool is locked, 409 PRIZE_POOL_LOCKED; an id it does not run, 400
+ *   HIGH_HAND_NOT_AVAILABLE; each pot's awards must still fit it, 409 HIGH_HAND_OVER_POOL /
+ *   HIGH_HAND_AWARDED (details { highHandId, name, awardedCents, potCents }); and leaving one the entry
+ *   has won, 409 HIGH_HAND_WINNER (details { highHandId }: take the award back first). Allowed after
+ *   the game, as today. One "entry_corrected" entry ("Tama Rangi is now in the First half and Second
+ *   half high hands") and one "registration.correct" row (change "high_hand", with highHandIds before
+ *   and after) per change.
+ * - Round 10, `joinHighHandIds` / `leaveHighHandIds` (R10REV1-PHONE-01): one Fix tick as a change, not
+ *   a set: the high hands the entry is in as the server holds it (under the lock), with those joined
+ *   and those left, so a second quick tick from a list not yet reloaded never undoes the first. Joining
+ *   one it is in, or leaving one it is not, changes nothing. Otherwise exactly as `highHandIds` (the
+ *   same refusals, feed line and audit row; "legacy" for the legacy high hand). Sent with highHandIds or
+ *   enteringHighHands, or one id in both lists: 400 VALIDATION.
+ * - Round 10, for a tournament that lists its high hands: highHandWinner, highHandAmount and
+ *   highHandSplitWith are 409 HIGH_HAND_LISTED (a page loaded before round 10: awards are made one high
+ *   hand at a time, POST /api/tournaments/:id/high-hands/:highHandId/awards); a value resent unchanged
+ *   is ignored, like every field.
  */
 export const updateRegistrationSchema = z
   .object({
@@ -156,12 +191,26 @@ export const updateRegistrationSchema = z
     addons: integerSchema(0, 1000).optional(),
     knockouts: integerSchema(0, 1000).optional(),
     enteringHighHands: z.boolean().optional(),
+    highHandIds: highHandIdsSchema.optional(),
+    joinHighHandIds: highHandIdsSchema.optional(),
+    leaveHighHandIds: highHandIdsSchema.optional(),
     paymentConfirmed: z.boolean().optional(),
     highHandWinner: z.boolean().optional(),
     highHandAmount: z.preprocess((value) => (value === "" ? null : value), moneySchema.nullable()).optional(),
     highHandSplitWith: idSchema.optional(),
   })
-  .refine((input) => Object.values(input).some((value) => value !== undefined), "Nothing to update");
+  .superRefine((input, ctx) => {
+    if (!Object.values(input).some((value) => value !== undefined)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Nothing to update" });
+    if (input.joinHighHandIds === undefined && input.leaveHighHandIds === undefined) return;
+    for (const field of ["highHandIds", "enteringHighHands"] as const) {
+      if (input[field] === undefined) continue;
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: "Send the high hands to join or leave, or the whole choice, not both" });
+    }
+    const leaving = new Set(input.leaveHighHandIds ?? []);
+    if ((input.joinHighHandIds ?? []).some((id) => leaving.has(id))) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["leaveHighHandIds"], message: "A high hand cannot be joined and left at once" });
+    }
+  });
 export type UpdateRegistrationInput = z.infer<typeof updateRegistrationSchema>;
 
 const delta = integerSchema(-20, 20);
@@ -315,6 +364,12 @@ export interface PaymentInstructionsDto {
   reference: string;
   /** The high-hand entry the player ticked, paid at the door ("High hand ($5) — pay at the door"); 0 when none. */
   highHandAtDoorCents: Cents;
+  /**
+   * Round 10: each high hand the player chose, with its fee, in order ("First half high hand ($5) — pay at
+   * the door"); they add up to highHandAtDoorCents. Every answer since round 10 has it; optional only
+   * because one made before (a saved sign-up, a test's fixture) has none: show highHandAtDoorCents then.
+   */
+  highHandsAtDoor?: HighHandAtDoorDto[];
   /** Never on the waiting list: a waiting-list sign-up is told NothingToTransferDto. */
   waitingList: false;
 }
@@ -330,6 +385,8 @@ export interface NothingToTransferDto {
   amountDueCents: Cents;
   /** The high-hand entry the player ticked, paid at the door; 0 when none. */
   highHandAtDoorCents: Cents;
+  /** Round 10: as PaymentInstructionsDto.highHandsAtDoor. */
+  highHandsAtDoor?: HighHandAtDoorDto[];
   waitingList: boolean;
 }
 
@@ -354,6 +411,12 @@ export type PaymentConfirmedDto = ManagedRegistration & {
    * left over, and always after the game, when the high hand is paid out.
    */
   highHandUnawardedCents: Cents;
+  /**
+   * Round 10: that money pot by pot, for each pot of the entry's that has some ("First half: $5 not
+   * awarded yet"); highHandUnawardedCents is their sum. Every answer since round 10 has it; optional only
+   * because one made before has none.
+   */
+  highHandsUnawarded?: Array<{ highHandId: string; name: string; cents: Cents }>;
 };
 
 /**
@@ -363,12 +426,17 @@ export type PaymentConfirmedDto = ManagedRegistration & {
 export type FreeEntryChangedDto = PaymentConfirmedDto;
 
 /** A registration for staff screens: the player's contact details only when `player.canEdit` (ClubPlayer). */
-export type StaffRegistrationDto = PublicRegistrationRow & PaymentStatus & FreeEntryStatus & WaitingListPlace & { player: ClubPlayer | null };
+export type StaffRegistrationDto = PublicRegistrationRow &
+  PaymentStatus &
+  FreeEntryStatus &
+  WaitingListPlace &
+  RegistrationHighHands & { player: ClubPlayer | null };
 
 /**
  * GET /api/tournaments/:id/pending-registrations (staff). amountOwed is dollars, as today, but now
- * buyIns × buy-in + re-buys × re-buy + add-ons × add-on + the high-hand entry (money-18). A free entry
- * is never pending: it is accepted.
+ * buyIns × buy-in + re-buys × re-buy + add-ons × add-on + the high-hand entry (money-18): round 10, the
+ * fees of the high hands the entry chose (shared/domain/prize-pool amountDueCents; the high hands are
+ * paid at the door, highHandsAtDoor names them). A free entry is never pending: it is accepted.
  */
 export type PendingRegistrationDto = StaffRegistrationDto & { amountOwed: number };
 

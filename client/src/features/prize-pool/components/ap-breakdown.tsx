@@ -6,7 +6,8 @@ import { clubTake } from "@/lib/prize-pool";
 import type { PrizePoolDto } from "@shared/api/prize-pool";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import type { Cents } from "@shared/domain/money";
-import { offersAddons, offersHighHand, offersRebuys } from "@shared/domain/player-actions";
+import { highHandLabel, highHandsOf, type HighHandPot } from "@shared/domain/high-hands";
+import { offersAddons, offersRebuys } from "@shared/domain/player-actions";
 import { differenceLines, type DifferenceLine } from "@shared/domain/prize-difference";
 import type { NetSource } from "@shared/domain/prize-pool";
 import { rateText } from "@shared/domain/rake-rates";
@@ -91,22 +92,35 @@ function OverrideLine({ overrideCents, calculatedCents, label, grows }: { overri
 
 interface HighHandGroupProps {
   tournament: TournamentDetailDto;
-  /** The server's high-hand figures (shared/domain), the ones finalize records and the pool card shows. */
-  highHand: PrizePoolDto["breakdown"]["highHand"];
+  /** The server's pots (shared/domain highHandPots), the ones finalize records and the pool card shows: one per high hand. */
+  pots: readonly HighHandPot[];
   label: string;
 }
 
-/** The high hand's own AP, a separate pot never part of the AP above; nothing for a tournament without one. */
-function HighHandGroup({ tournament, highHand, label }: HighHandGroupProps) {
-  if (!offersHighHand(tournament)) return null;
+/**
+ * Each high hand's own AP, a separate pot never part of the AP above (round 10: one line per high
+ * hand, with its rule); nothing for a tournament without one.
+ */
+function HighHandGroup({ tournament, pots, label }: HighHandGroupProps) {
+  if (pots.length === 0) return null;
+  const settings = new Map(highHandsOf(tournament).map((highHand) => [highHand.id, highHand]));
+  const named = pots.length > 1;
   return (
-    <Group title="High hand (a separate pot)">
-      <PoolLine
-        label={`${label}: ${rateText(tournament.highHandRakeType, tournament.highHandRakeAmount, true)}`}
-        note={highHand.entrants === 0 ? `Nobody is in the high hand yet. Never part of the ${label} above` : `Never part of the ${label} above`}
-        value={formatMoney(highHand.rake)}
-        testId="ap-rake-high-hand"
-      />
+    <Group title={named ? "High hands (separate pots)" : "High hand (a separate pot)"}>
+      {pots.map((pot) => {
+        const rule = settings.get(pot.highHandId);
+        const rate = rateText(rule?.rakeType, rule?.rakeAmount, true);
+        const nobody = named ? `Nobody is in the ${highHandLabel(pot.name)} yet` : "Nobody is in the high hand yet";
+        return (
+          <PoolLine
+            key={pot.highHandId}
+            label={named ? `${highHandLabel(pot.name)} ${label}: ${rate}` : `${label}: ${rate}`}
+            note={pot.entrants === 0 ? `${nobody}. Never part of the ${label} above` : `Never part of the ${label} above`}
+            value={formatMoney(pot.rake)}
+            testId={named ? `ap-rake-high-hand-${pot.highHandId}` : "ap-rake-high-hand"}
+          />
+        );
+      })}
     </Group>
   );
 }
@@ -159,7 +173,7 @@ export function LiveBreakdown({ tournament, prizePool, label, timeZone }: LiveBr
         </p>
       ) : null}
 
-      <HighHandGroup tournament={tournament} highHand={breakdown.highHand} label={label} />
+      <HighHandGroup tournament={tournament} pots={breakdown.highHands} label={label} />
     </div>
   );
 }
@@ -167,8 +181,8 @@ export function LiveBreakdown({ tournament, prizePool, label, timeZone }: LiveBr
 interface FrozenBreakdownProps {
   tournament: TournamentDetailDto;
   pool: FrozenPool;
-  /** The high hand's figures: finalize freezes none of them, and a completed game's entries no longer change. */
-  highHand: PrizePoolDto["breakdown"]["highHand"];
+  /** The pots as they stand: high hands are settled as they are won, and a completed game's entries no longer change. */
+  pots: readonly HighHandPot[];
   label: string;
 }
 
@@ -177,7 +191,7 @@ interface FrozenBreakdownProps {
  * hand's own AP, still shown once the game is over, so the club's take does not look smaller after
  * finalize than during the game (P4REV2R2-MONEY-03).
  */
-export function FrozenBreakdown({ tournament, pool, highHand, label }: FrozenBreakdownProps) {
+export function FrozenBreakdown({ tournament, pool, pots, label }: FrozenBreakdownProps) {
   const fixedPool = pool.manualPrizePoolCents !== null ? `The prize pool was fixed by hand at ${formatMoney(pool.manualPrizePoolCents)}` : undefined;
   // Snapshots from before round 5 record no difference: their take line says it as it always has.
   const lines = differenceLines(pool, label).filter((line) => TAKE_LINES[line.kind]);
@@ -191,7 +205,7 @@ export function FrozenBreakdown({ tournament, pool, highHand, label }: FrozenBre
         <DifferenceTakeLines lines={lines} />
         <TakeLine impliedCents={pool.impliedRakeCents} source={pool.netSource} label={label} note={fixedPool} inAll={lines.length > 0} />
       </Group>
-      <HighHandGroup tournament={tournament} highHand={highHand} label={label} />
+      <HighHandGroup tournament={tournament} pots={pots} label={label} />
     </div>
   );
 }

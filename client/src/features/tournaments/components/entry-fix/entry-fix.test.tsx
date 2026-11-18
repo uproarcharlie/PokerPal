@@ -13,6 +13,7 @@ import { server } from "@test/msw/server";
 import { apiError, mockSignedIn, renderWithApp } from "@test/helpers/web";
 import { freeEntryStatus, recordBodies, registrationDto, screenWidth, tournamentDto } from "@test/helpers/f1-tournaments";
 import { mockSeating, seatingDto } from "@test/helpers/seating-dto";
+import { TWO_HALVES, win } from "@test/helpers/r10-high-hands";
 import type { StaffPlayer } from "@shared/api/players";
 import type { ConfirmedRegistrationDto, ManagedRegistration, PaymentConfirmedDto, PendingRegistrationDto } from "@shared/api/registrations";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
@@ -191,6 +192,33 @@ describe("the Fix menu on the payment desk's paid list, 390 px (round 9)", () =>
     expect(edit).toHaveTextContent("Visiting from another club");
     // How they paid is the club's bookkeeping: still open after the game.
     expect(within(menu).getByRole("menuitemradio", { name: "Bank transfer" })).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("ticks each high hand on its own in a game with several (round 10): the whole set is sent", async () => {
+    const twoHalves = { ...tama, enteringHighHands: true, highHandIds: ["hh1"] };
+    const { updates } = mockDesk({ confirmed: [ann, bea, twoHalves] });
+    const user = renderDesk({ enableHighHand: true, highHandAmount: "10.00", highHands: TWO_HALVES });
+
+    const menu = await openFix(user, "r3");
+    expect(within(menu).getByRole("menuitemcheckbox", { name: "First half high hand" })).toHaveAttribute("aria-checked", "true");
+    const second = within(menu).getByRole("menuitemcheckbox", { name: "Second half high hand" });
+    expect(second).toHaveAttribute("aria-checked", "false");
+    await user.click(second);
+
+    await waitFor(() => expect(updates).toEqual([{ highHandIds: ["hh1", "hh2"] }]));
+    expect(await screen.findByText("Tama is now in the Second half high hand.")).toBeInTheDocument();
+  });
+
+  it("greys out leaving a high hand the player has won until the award is taken back (round 10)", async () => {
+    const winner = { ...tama, enteringHighHands: true, highHandIds: ["hh1", "hh2"], highHandWins: [win("hh1", 900)] };
+    mockDesk({ confirmed: [ann, bea, winner] });
+    const user = renderDesk({ enableHighHand: true, highHandAmount: "10.00", highHands: TWO_HALVES });
+
+    const menu = await openFix(user, "r3");
+    const first = within(menu).getByTestId("fix-high-hand-r3-hh1");
+    expect(first).toHaveAttribute("aria-disabled", "true");
+    expect(first).toHaveTextContent("Take Tama's First half high hand award back first");
+    expect(within(menu).getByTestId("fix-high-hand-r3-hh2")).not.toHaveAttribute("aria-disabled");
   });
 
   it("edits a paid player's details in the staff's sheet, naming the tournament", async () => {

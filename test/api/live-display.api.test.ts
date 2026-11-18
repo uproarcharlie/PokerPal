@@ -99,7 +99,7 @@ describe("GET /api/public/tournaments/:id/display", () => {
       season: { id: season?.id, name: "Winter League" },
       clock: null,
       stats: { entrants: 2, remaining: 2, buyIns: 2, rebuys: 0, addons: 0, earlyBirds: 0, activeTables: 0, totalChips: null, averageStack: null },
-      money: { show: false, estimated: true, netCents: null, payouts: null, carriedIn: null },
+      money: { show: false, estimated: true, netCents: null, payouts: null, carriedIn: null, highHands: null },
       qr: { target: "season", path: `/season/${season?.id}` },
       viewer: { canControl: false, clockKeyIssuedAt: null, clockKeyExpiresAt: null },
     });
@@ -194,16 +194,16 @@ describe("GET /api/public/tournaments/:id/display", () => {
       const open = await world({ tournament: pool, entries: entries(8) });
       const locked = await world({ tournament: { ...pool, prizePoolLocked: true }, entries: entries(8) });
 
-      expect((await displayOf(open.tournament)).body.money).toEqual({ show: false, estimated: true, netCents: null, payouts: null, carriedIn: null });
-      expect((await displayOf(locked.tournament)).body.money).toEqual({ show: true, estimated: false, netCents: 36_000, payouts, carriedIn: [] });
+      expect((await displayOf(open.tournament)).body.money).toEqual({ show: false, estimated: true, netCents: null, payouts: null, carriedIn: null, highHands: null });
+      expect((await displayOf(locked.tournament)).body.money).toEqual({ show: true, estimated: false, netCents: 36_000, payouts, carriedIn: [], highHands: null });
     });
 
     it("shows an estimate when told to always, never when told never, and the payouts as switched", async () => {
       const always = await world({ tournament: pool, entries: entries(8), clock: { displaySettings: { showPrizePool: "always", showPayouts: false } } });
       const never = await world({ tournament: { ...pool, prizePoolLocked: true }, entries: entries(8), clock: { displaySettings: { showPrizePool: "never" } } });
 
-      expect((await displayOf(always.tournament)).body.money).toEqual({ show: true, estimated: true, netCents: 36_000, payouts: null, carriedIn: [] });
-      expect((await displayOf(never.tournament)).body.money).toEqual({ show: false, estimated: false, netCents: null, payouts: null, carriedIn: null });
+      expect((await displayOf(always.tournament)).body.money).toEqual({ show: true, estimated: true, netCents: 36_000, payouts: null, carriedIn: [], highHands: null });
+      expect((await displayOf(never.tournament)).body.money).toEqual({ show: false, estimated: false, netCents: null, payouts: null, carriedIn: null, highHands: null });
     });
 
     it("never shows the room a pool below zero, from a fixed rate stored above its entry's price before that was refused (P4REV2R2-MONEY-01)", async () => {
@@ -226,6 +226,7 @@ describe("GET /api/public/tournaments/:id/display", () => {
           { position: 3, amountCents: 7_600 },
         ],
         carriedIn: [],
+        highHands: null,
       });
     });
 
@@ -261,7 +262,7 @@ describe("GET /api/public/tournaments/:id/display", () => {
         for (const agent of [undefined, owner.agent]) {
           const { body } = await displayOf(tournament, agent);
           expect(body.money.netCents).toBe(netCents);
-          expect(Object.keys(body.money).sort()).toEqual(["carriedIn", "estimated", "netCents", "payouts", "show"]);
+          expect(Object.keys(body.money).sort()).toEqual(["carriedIn", "estimated", "highHands", "netCents", "payouts", "show"]);
           expect(findTakingsKeys(body)).toEqual([]);
         }
       }
@@ -323,7 +324,7 @@ describe("GET /api/public/tournaments/:id/display", () => {
           { position: 2, amountCents: 5_000 },
         ],
       });
-      expect((await displayOf(cancelled.tournament)).body.money).toEqual({ show: false, estimated: true, netCents: null, payouts: null, carriedIn: null });
+      expect((await displayOf(cancelled.tournament)).body.money).toEqual({ show: false, estimated: true, netCents: null, payouts: null, carriedIn: null, highHands: null });
     });
 
     it("names the club's take \"Rake\" for a club that has not named it, for the TD's clock panel, and never beside the money", async () => {

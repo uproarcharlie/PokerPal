@@ -21,6 +21,8 @@ import {
   tournamentFormSchema,
 } from "../tournament-form";
 import { formErrorMap } from "@/lib/forms";
+import { repricingLines } from "../high-hands-form";
+import { RepricingDescription, useOutOfDateToast } from "./high-hands/high-hand-refusals";
 import { TournamentForm } from "./tournament-form/tournament-form";
 import { configFromValues, useTournamentForm } from "./tournament-form/use-tournament-form";
 
@@ -63,9 +65,10 @@ function EditTournamentSheet({ tournament, club, timeZone, onOpenChange, returnF
   // A part with entries recorded stays on, and its price is never cleared; the server is the guard while
   // these are loading or failed.
   const registrations = useRegistrations(tournament.id);
-  const recorded = registrations.data ? recordedEntries(registrations.data) : undefined;
+  const recorded = registrations.data ? recordedEntries(tournament, registrations.data) : undefined;
   // New prices for entries already taken, waiting for the TD to confirm what they re-price.
-  const [repricing, setRepricing] = useState<{ changes: UpdateTournamentInput; message: string } | null>(null);
+  const [repricing, setRepricing] = useState<{ changes: UpdateTournamentInput; message: string; lines: string[] } | null>(null);
+  const outOfDate = useOutOfDateToast();
 
   const saved = () => {
     toast({ title: "Tournament updated", description: `${tournament.name} has been saved.` });
@@ -92,7 +95,9 @@ function EditTournamentSheet({ tournament, club, timeZone, onOpenChange, returnF
       await update.mutateAsync(changes);
     } catch (error) {
       if (hasErrorCode(error, "ENTRIES_REPRICED")) {
-        setRepricing({ changes, message: errorMessage(error) });
+        setRepricing({ changes, message: errorMessage(error), lines: repricingLines(error) });
+      } else if (outOfDate(error)) {
+        return;
       } else if (!showServerError(error)) {
         toast({ title: "Could not save the tournament", description: errorMessage(error, "Failed to update the tournament"), variant: "destructive" });
       }
@@ -136,7 +141,7 @@ function EditTournamentSheet({ tournament, club, timeZone, onOpenChange, returnF
           if (!open) setRepricing(null);
         }}
         title="Re-price recorded entries?"
-        description={repricing?.message}
+        description={repricing ? <RepricingDescription message={repricing.message} lines={repricing.lines} /> : undefined}
         confirmLabel="Re-price and save"
         pendingLabel="Saving…"
         contentTestId="confirm-reprice"

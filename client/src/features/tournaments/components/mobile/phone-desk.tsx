@@ -9,7 +9,8 @@ import { plural } from "@/lib/format";
 import type { TournamentMoney } from "@/lib/prize-pool";
 import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
-import { toCents, type Cents } from "@shared/domain/money";
+import type { HighHandAward } from "@shared/domain/high-hands";
+import { toCents } from "@shared/domain/money";
 import { isClosedStatus } from "@shared/domain/tournaments";
 import { isFreeTournament, unpaidEntries } from "@shared/domain/prize-pool";
 import { acceptRefusal } from "@shared/domain/waiting-list";
@@ -35,7 +36,7 @@ interface PhoneDeskProps {
   money: TournamentMoney;
   rakeLabel: string;
   timeZone: string;
-  highHandAwardsCents: readonly Cents[];
+  highHandAwards: readonly HighHandAward[];
   waitingRequests: WaitingCount;
   tab: PhoneTab;
   onTabChange: (tab: PhoneTab) => void;
@@ -77,7 +78,7 @@ export function PhoneDesk({
   money,
   rakeLabel,
   timeZone,
-  highHandAwardsCents,
+  highHandAwards,
   waitingRequests,
   tab,
   onTabChange,
@@ -145,7 +146,7 @@ export function PhoneDesk({
                 money={money}
                 rakeLabel={rakeLabel}
                 timeZone={timeZone}
-                highHandAwardsCents={highHandAwardsCents}
+                highHandAwards={highHandAwards}
                 // The Take payment sheet, so the TD stays on the desk (its tabs, clock and quick actions).
                 onTakePayments={desk ? () => dialogs.show("payments") : undefined}
               />

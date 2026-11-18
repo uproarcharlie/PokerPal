@@ -11,6 +11,7 @@ import type {
   RebuyBeforeEliminationDetails,
 } from "@shared/api/pending-actions";
 import type { FinalizeInput, FinalizePreviewDto, FinalizePreviewInput, FinalizeResultDto } from "@shared/api/finalize";
+import type { HighHandAwardCorrectionInput, HighHandAwardInput, HighHandAwardResultDto, HighHandAwardsDto } from "@shared/api/high-hands";
 import type {
   AdjustCountsInput,
   ConfirmedRegistrationDto,
@@ -117,6 +118,25 @@ export const confirmPendingAction = (actionId: string, input: ConfirmPendingActi
 /** Takes a request off the list without applying it. */
 export const dismissPendingAction = (actionId: string) =>
   apiSend<{ success: true }>("DELETE", `/api/pending-actions/${segment(actionId)}`);
+
+const awardsPath = (tournamentId: string, highHandId: string) => `${tournamentPath(tournamentId)}/high-hands/${segment(highHandId)}/awards`;
+
+/**
+ * Round 10: awards one high hand ("Award First half high hand"; "legacy" for a tournament's one high
+ * hand of before round 10), the server working out the prize from that pot under its lock; with
+ * `splitWith`, a tie sharing an earlier winner's prize. 400 HIGH_HAND_NOT_ENTERED, 409
+ * HIGH_HAND_ALREADY_WON / HIGH_HAND_AWARDED.
+ */
+export const awardHighHand = (tournamentId: string, highHandId: string, input: HighHandAwardInput) =>
+  apiSend<HighHandAwardResultDto>("POST", awardsPath(tournamentId, highHandId), input);
+
+/** A winner's prize set again (money paid into the pot after the last award), held to the pot: 409 HIGH_HAND_OVER_POOL / HIGH_HAND_AWARDED. */
+export const correctHighHandAward = (tournamentId: string, highHandId: string, registrationId: string, input: HighHandAwardCorrectionInput) =>
+  apiSend<HighHandAwardResultDto>("PATCH", `${awardsPath(tournamentId, highHandId)}/${segment(registrationId)}`, input);
+
+/** An award taken back (a mistake): a tie's other winner keeps what they have. */
+export const takeBackHighHandAward = (tournamentId: string, highHandId: string, registrationId: string) =>
+  apiSend<HighHandAwardsDto>("DELETE", `${awardsPath(tournamentId, highHandId)}/${segment(registrationId)}`);
 
 export const finalizeTournament = (id: string, input: FinalizeInput) =>
   apiSend<FinalizeResultDto>("POST", `${tournamentPath(id)}/finalize`, input);

@@ -4,8 +4,8 @@ import { LoadingRows, QueryState } from "@/components/shared/query-state";
 import { tournamentMoney, withPublicPrizes, type TournamentMoney } from "@/lib/prize-pool";
 import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
-import { toCents } from "@shared/domain/money";
-import { nextHighHandAward, recordedEntryCounts, unawardedHighHandCents } from "@shared/domain/prize-pool";
+import { highHandAwardsOf, highHandStandings } from "@shared/domain/high-hands";
+import { recordedEntryCounts } from "@shared/domain/prize-pool";
 import { isClosedStatus } from "@shared/domain/tournaments";
 import { usePublicPrizes } from "@/features/public-tournament/hooks";
 import { lineupOf } from "@/features/public-tournament/waiting-list";
@@ -71,9 +71,9 @@ function DeskFigures({ tournament, registrations, rakeLabel, timeZone, waitingRe
   const canManage = tournament.viewer.canManage;
   // The field, and the waiting list behind a full one (round 5, item 15): counted apart.
   const lineup = lineupOf(registrations, tournament.maxPlayers);
-  // What the next high-hand winner is awarded, or null once every prize is: the server works it out the same way (MONEY-36).
-  const highHandAwards = registrations.filter((registration) => registration.highHandWinner).map((registration) => toCents(registration.highHandAmount));
-  const figures = { tournament, registrations, money, rakeLabel, timeZone, highHandAwardsCents: highHandAwards, waitingRequests, clockOpenRequest };
+  // Every high-hand prize awarded, pot by pot: what each pot's next winner is awarded is worked out from them, as the server does (MONEY-36).
+  const highHandAwards = highHandAwardsOf(tournament, registrations);
+  const figures = { tournament, registrations, money, rakeLabel, timeZone, highHandAwards, waitingRequests, clockOpenRequest };
 
   return (
     <div className="space-y-6">
@@ -96,10 +96,9 @@ function DeskFigures({ tournament, registrations, rakeLabel, timeZone, waitingRe
       )}
 
       <AwardHighHandDialog
-        tournamentId={tournament.id}
+        tournament={tournament}
         registrations={registrations}
-        nextAwardCents={nextHighHandAward(money.breakdown.highHand, highHandAwards)}
-        unawardedCents={unawardedHighHandCents(money.breakdown.highHand, highHandAwards)}
+        standings={highHandStandings(money.breakdown.highHands, highHandAwards)}
         potCheck={potCheck}
         onCheckPot={onCheckPot}
         {...dialogs.propsFor("highHand")}

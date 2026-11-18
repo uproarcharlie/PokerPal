@@ -25,7 +25,7 @@ export function StandingsPanel({ tournament, registrations, season }: StandingsP
   const { field, waiting } = lineupOf(registrations, tournament.maxPlayers);
   const tonight = (
     <div className="space-y-6">
-      {offersHighHand(tournament) ? <HighHandWinners registrations={registrations} /> : null}
+      {offersHighHand(tournament) ? <HighHandWinners tournament={tournament} registrations={registrations} /> : null}
       <StandingsTable registrations={field} completed={tournament.status === "completed"} trackPoints={showsPoints(tournament, registrations)} />
       {isClosedStatus(tournament.status) ? null : <WaitingListCard waiting={waiting} />}
     </div>

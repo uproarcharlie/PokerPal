@@ -1,7 +1,8 @@
-import { formatMoney, type Cents } from "@/lib/format";
+import { formatMoney } from "@/lib/format";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { describeDeal, type SnapshotDeal } from "@shared/domain/deal";
-import { nextHighHandAward, unawardedHighHandCents, type PayoutDisplay, type PrizePoolBreakdown } from "@shared/domain/prize-pool";
+import type { HighHandStanding } from "@shared/domain/high-hands";
+import type { PayoutDisplay } from "@shared/domain/prize-pool";
 import { frozenSummary } from "@/features/prize-pool/components/pool-summary";
 import { DifferenceRows, LeftoverNote, PoolCard, PoolLine } from "./pool-lines";
 import { undistributedNote } from "@/lib/prize-pool";
@@ -65,34 +66,32 @@ export function PaidPool({ pool, display, rakeLabel, deal }: PaidPoolProps) {
 }
 
 /**
- * The high-hand prizes: how many, what has been awarded, and what the next winner gets, worked out
- * exactly as the server awards it (nextHighHandAward: what is left over the winners still to come, the
- * last taking the remainder), so the figure the TD reads out is the one paid (P2REV1-07). Money paid in
- * after the last prize was awarded (a payment confirmed late) is said, with where to give it out
- * (R6REV0-MONEY-01).
+ * One pot's high-hand prizes: how many, what has been awarded, and what the next winner gets, worked
+ * out exactly as the server awards it (highHandStandings: what is left over the winners still to come,
+ * the last taking the remainder), so the figure the TD reads out is the one paid (P2REV1-07). Money paid
+ * in after the last prize was awarded (a payment confirmed late) is said, with where to give it out
+ * (R6REV0-MONEY-01). `testIdSuffix` tells the pots of a game with several high hands apart.
  */
-export function HighHandAwards({ highHand, awardedCents }: { highHand: PrizePoolBreakdown["highHand"]; awardedCents: readonly Cents[] }) {
-  const next = nextHighHandAward(highHand, awardedCents);
-  const awarded = awardedCents.reduce((sum, cents) => sum + cents, 0);
-  const unawarded = unawardedHighHandCents(highHand, awardedCents);
+export function HighHandAwards({ standing, testIdSuffix = "" }: { standing: HighHandStanding; testIdSuffix?: string }) {
+  const { pot, awards, awardedCents, nextAwardCents, unawardedCents } = standing;
   return (
     <>
-      <PoolLine label="Number of Winners" value={highHand.winners} />
-      {awardedCents.length > 0 ? (
-        <PoolLine label={`Awarded So Far (${awardedCents.length} of ${highHand.winners})`} value={formatMoney(awarded)} testId="high-hand-awarded" />
+      <PoolLine label="Number of Winners" value={pot.winners} />
+      {awards.length > 0 ? (
+        <PoolLine label={`Awarded So Far (${awards.length} of ${pot.winners})`} value={formatMoney(awardedCents)} testId={`high-hand-awarded${testIdSuffix}`} />
       ) : null}
       <PoolLine
         label="Next Winner Gets"
-        value={next === null ? "All prizes awarded" : formatMoney(next)}
-        testId="high-hand-next-award"
+        value={nextAwardCents === null ? "All prizes awarded" : formatMoney(nextAwardCents)}
+        testId={`high-hand-next-award${testIdSuffix}`}
         tone="accent"
       />
-      {unawarded > 0 ? (
+      {unawardedCents > 0 ? (
         <PoolLine
           label="Not Awarded Yet"
           note="Paid in after the last award: add it to a winner's prize from Award High Hand."
-          value={formatMoney(unawarded)}
-          testId="high-hand-unawarded"
+          value={formatMoney(unawardedCents)}
+          testId={`high-hand-unawarded${testIdSuffix}`}
           tone="total"
         />
       ) : null}

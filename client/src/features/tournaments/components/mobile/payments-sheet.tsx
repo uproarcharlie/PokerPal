@@ -74,6 +74,7 @@ function SheetLists({ tournament, timeZone, freeTournament, full, transfers }: P
         earlyBirds={earlyBirds}
         full={full}
         transfers={transfers}
+        tournament={tournament}
       />
       <section aria-labelledby={paidHeadingId} className="mt-8 space-y-3" data-testid="payments-sheet-paid">
         <h3 id={paidHeadingId} ref={paidHeading} tabIndex={-1} className="text-base font-semibold text-foreground focus:outline-none">
@@ -88,6 +89,7 @@ function SheetLists({ tournament, timeZone, freeTournament, full, transfers }: P
           freeEntries={freeEntries}
           freeTournament={freeTournament}
           transfers={transfers}
+          tournament={tournament}
           fixes={fixes}
         />
       </section>

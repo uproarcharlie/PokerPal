@@ -9,13 +9,14 @@
  */
 import type { PublicPlayer } from "@shared/api/public";
 import type { PaymentInstructionsDto, RegistrationCreatedDto } from "@shared/api/registrations";
+import { LEGACY_HIGH_HAND_ID } from "@shared/domain/high-hands";
 import { waitingListPlaceOf } from "./waiting-list";
 
-/** What the confirmation is shown from again: who signed up, the sign-up's answer, and the high hand they ticked. */
+/** What the confirmation is shown from again: who signed up, the sign-up's answer, and the high hands they ticked (round 10). */
 export interface SavedSignUp {
   player: PublicPlayer;
   registration: RegistrationCreatedDto;
-  enteringHighHands: boolean;
+  highHandIds: string[];
 }
 
 /**
@@ -30,7 +31,17 @@ export function transferToMake(registration: RegistrationCreatedDto | null | und
 }
 
 /** Bumped when SavedSignUp changes, so a page never shows what an older one kept. */
-const VERSION = 1;
+const VERSION = 2;
+
+/**
+ * Round 10 kept the high hands ticked by their ids. A sign-up kept before (version 1) ticked the one
+ * high hand every tournament then had, or none.
+ */
+function highHandIdsOf(value: Record<string, unknown>): string[] | null {
+  if (value.version === 1) return typeof value.enteringHighHands === "boolean" ? (value.enteringHighHands ? [LEGACY_HIGH_HAND_ID] : []) : null;
+  const ids = value.highHandIds;
+  return value.version === VERSION && Array.isArray(ids) && ids.every(isText) ? (ids as string[]) : null;
+}
 
 const storageKey = (tournamentId: string) => `pokerpal.signUp.${tournamentId}`;
 
@@ -39,9 +50,9 @@ const isText = (value: unknown): value is string => typeof value === "string";
 const isTextOrNull = (value: unknown) => value === null || isText(value);
 const isCents = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value >= 0;
 
-/** Whether what storage holds is a whole sign-up with a transfer to make, as this version keeps it. */
-function isSaved(value: unknown): value is SavedSignUp & { version: number } {
-  if (!isRecord(value) || value.version !== VERSION || typeof value.enteringHighHands !== "boolean") return false;
+/** Whether what storage holds is a whole sign-up with a transfer to make, as this version (or the one before) keeps it. */
+function isSaved(value: unknown): value is Omit<SavedSignUp, "highHandIds"> & Record<string, unknown> {
+  if (!isRecord(value) || highHandIdsOf(value) === null) return false;
   const { player, registration } = value;
   if (!isRecord(player) || !isText(player.id) || !isText(player.name) || !isTextOrNull(player.imageUrl ?? null)) return false;
   if (!isRecord(registration) || !isText(registration.id) || !isRecord(registration.seating) || !isText(registration.seating.status)) return false;
@@ -59,8 +70,7 @@ export function readSavedSignUp(tournamentId: string): SavedSignUp | null {
   try {
     const stored: unknown = JSON.parse(window.sessionStorage.getItem(storageKey(tournamentId)) ?? "null");
     if (!isSaved(stored) || transferToMake(stored.registration) === null) return null;
-    const { version: _version, ...signUp } = stored;
-    return signUp;
+    return { player: stored.player, registration: stored.registration, highHandIds: highHandIdsOf(stored) ?? [] };
   } catch {
     return null;
   }

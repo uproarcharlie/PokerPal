@@ -59,7 +59,7 @@ function Registration({ tournament }: { tournament: TournamentDetailDto }) {
             club={club}
             player={flow.player}
             registration={flow.registration}
-            enteringHighHands={flow.enteringHighHands}
+            highHandIds={flow.highHandIds}
             onRegisterAnother={flow.startOver}
           />
         </div>

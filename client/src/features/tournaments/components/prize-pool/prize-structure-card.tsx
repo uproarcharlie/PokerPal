@@ -13,6 +13,7 @@ import { frozenSummary, liveSummary, PoolSummary } from "@/features/prize-pool/c
 import { usePrizePool } from "@/features/prize-pool/hooks";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { describeDeal } from "@shared/domain/deal";
+import { highHandLabel, type HighHandSettings } from "@shared/domain/high-hands";
 import { DEFAULT_RAKE_LABEL, paidPercentage, type PayoutDisplay, type PayoutDisplayRow } from "@shared/domain/prize-pool";
 
 interface PrizeStructureCardProps {
@@ -22,8 +23,8 @@ interface PrizeStructureCardProps {
    * runs (round 6): the places listed are then one per paid player, and the staff are told why.
    */
   entrants: number;
-  /** The high-hand entry fee, when the tournament has a high hand. */
-  highHandAmount: string | null;
+  /** The tournament's high hands (highHandsOf), each with its entry fee; none without one. */
+  highHands: readonly HighHandSettings[];
   /**
    * The tournament the payouts are for: its staff get "Edit payouts" while it is open, the card tells
    * them what the prizes leave of the money available (the club's fee) or what the club adds, and once
@@ -79,7 +80,7 @@ function ShareNote({ payout, dealt }: { payout: PayoutDisplayRow; dealt: Readonl
 }
 
 /** The places paid: the top three as cards, every place in a table, and what is left unpaid. */
-export function PrizeStructureCard({ display, entrants, highHandAmount, tournament }: PrizeStructureCardProps) {
+export function PrizeStructureCard({ display, entrants, highHands, tournament }: PrizeStructureCardProps) {
   const rows = display.rows;
   const paidShare = paidPercentage(rows);
   const summary = useSummary(display, tournament, entrants);
@@ -185,13 +186,31 @@ export function PrizeStructureCard({ display, entrants, highHandAmount, tourname
               </Alert>
             ) : null}
 
-            {highHandAmount ? (
+            {highHands.length === 1 ? (
               <div className="mt-4 flex items-center justify-between border-t border-border pt-4">
                 <div>
                   <p className="text-sm font-medium text-foreground">High Hand Bonus</p>
                   <p className="text-xs text-muted-foreground">Entry fee for the high-hand pot</p>
                 </div>
-                <MoneyText amount={highHandAmount} className="text-xl font-bold text-accent-text" />
+                <MoneyText amount={highHands[0].entryFee} className="text-xl font-bold text-accent-text" />
+              </div>
+            ) : highHands.length > 1 ? (
+              <div className="mt-4 space-y-2 border-t border-border pt-4" data-testid="high-hand-fees">
+                <div>
+                  <p className="text-sm font-medium text-foreground">High Hand Bonuses</p>
+                  <p className="text-xs text-muted-foreground">Each its own pot: players enter the ones they want</p>
+                </div>
+                <ul role="list" className="space-y-1">
+                  {highHands.map((highHand) => (
+                    <li key={highHand.id} className="flex items-baseline justify-between gap-3">
+                      <span className="min-w-0 text-sm text-foreground">
+                        {highHandLabel(highHand.name)}
+                        {highHand.note ? <span className="block text-xs text-muted-foreground">{highHand.note}</span> : null}
+                      </span>
+                      <MoneyText amount={highHand.entryFee} className="text-lg font-bold text-accent-text" />
+                    </li>
+                  ))}
+                </ul>
               </div>
             ) : null}
           </>

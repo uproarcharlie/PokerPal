@@ -66,7 +66,7 @@ function mockDesk(): Sent {
 
 function renderSheet() {
   const user = userEvent.setup();
-  renderWithApp(<RegisterPlayerDialog open onOpenChange={() => {}} tournamentId="t1" buyInCents={5000 as Cents} rakeLabel="AP" />);
+  renderWithApp(<RegisterPlayerDialog open onOpenChange={() => {}} tournamentId="t1" buyInCents={5000 as Cents} rakeLabel="AP" highHands={[]} />);
   return user;
 }
 

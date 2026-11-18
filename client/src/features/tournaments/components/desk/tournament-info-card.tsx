@@ -4,7 +4,8 @@ import { MoneyText } from "@/components/shared/money-text";
 import { SmartImage } from "@/components/image/smart-image";
 import { formatDateTime } from "@/lib/format";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
-import { offersAddons, offersHighHand, offersRebuys } from "@shared/domain/player-actions";
+import { highHandLabel, highHandsOf } from "@shared/domain/high-hands";
+import { offersAddons, offersRebuys } from "@shared/domain/player-actions";
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -47,11 +48,11 @@ export function TournamentInfoCard({ tournament, timeZone }: { tournament: Tourn
             </Fact>
           ) : null}
           <Fact label="Max Players">{tournament.maxPlayers}</Fact>
-          {offersHighHand(tournament) ? (
-            <Fact label="High Hand Entry Fee">
-              <MoneyText amount={tournament.highHandAmount} forceCents />
+          {highHandsOf(tournament).map((highHand, _index, highHands) => (
+            <Fact key={highHand.id} label={highHands.length > 1 ? `${highHandLabel(highHand.name)} Entry Fee` : "High Hand Entry Fee"}>
+              <MoneyText amount={highHand.entryFee} forceCents />
             </Fact>
-          ) : null}
+          ))}
         </dl>
         {tournament.description ? (
           <div className="border-t border-border pt-3 text-sm">

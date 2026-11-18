@@ -19,6 +19,7 @@ import { getPlayer } from "../repositories/players";
 import * as pendingActionsRepo from "../repositories/pending-actions";
 import { lockPlayerRegistration, lockTournamentForRegistrationWrite } from "../repositories/registrations";
 import { getTournament } from "../repositories/tournaments";
+import { loadHighHandStore, withEntryHighHands } from "./high-hands";
 import { toPublicPlayer } from "./players";
 import { recordAudit } from "./audit";
 import { applyCountChange, creditKnockout, eliminate, toManagedRegistration } from "./registrations";
@@ -159,6 +160,9 @@ export async function confirmPendingAction(actionId: string, input: ConfirmPendi
     const registration = await lockPlayerRegistration(tx, tournament.id, action.playerId);
     if (!registration) throw notRegistered();
     const player = await getPlayer(tx, action.playerId);
+    // Every answer's registrations carry their high hands (round 10), which confirming a request never changes.
+    const store = await loadHighHandStore(tx, tournament.id);
+    const managed = (row: TournamentRegistration, of: Awaited<ReturnType<typeof getPlayer>>) => toManagedRegistration(withEntryHighHands(store, row), of);
 
     switch (action.actionType) {
       case "rebuy":
@@ -174,7 +178,7 @@ export async function confirmPendingAction(actionId: string, input: ConfirmPendi
         });
         return {
           success: true as const,
-          registration: toManagedRegistration(updated, player),
+          registration: managed(updated, player),
           reentered: registration.isEliminated === true && updated.isEliminated === false,
           target: null,
         };
@@ -185,9 +189,9 @@ export async function confirmPendingAction(actionId: string, input: ConfirmPendi
           assertOpen(tournament);
           return {
             success: true as const,
-            registration: toManagedRegistration(registration, player),
+            registration: managed(registration, player),
             reentered: false,
-            target: toManagedRegistration(recorded, await getPlayer(tx, recorded.playerId)),
+            target: managed(recorded, await getPlayer(tx, recorded.playerId)),
           };
         }
         const locked = { tournament, registration: await lockClaimableTarget(tx, tournament, action.targetPlayerId) };
@@ -196,9 +200,9 @@ export async function confirmPendingAction(actionId: string, input: ConfirmPendi
           : await eliminate(tx, locked, action.playerId, { claimed: true, at: action.timestamp });
         return {
           success: true as const,
-          registration: toManagedRegistration(eliminator ?? registration, player),
+          registration: managed(eliminator ?? registration, player),
           reentered: false,
-          target: toManagedRegistration(eliminated, await getPlayer(tx, eliminated.playerId)),
+          target: managed(eliminated, await getPlayer(tx, eliminated.playerId)),
         };
       }
       default:

@@ -1,6 +1,6 @@
 /**
  * The QR sign-up's three steps (new or returning player; their picture and details, or a name search;
- * the high hands and the total), as state and handlers the page and its steps share. A new player's
+ * the high hands they enter, round 10: each one ticked on its own, and the total), as state and handlers the page and its steps share. A new player's
  * step 2 comes in two parts: their picture first (a selfie, a photo or an avatar, or skipped), then their
  * name and, if they like, their mobile number (round 7, item 9). The new player's form lives here, not
  * in its step, so Back finds what was typed. The players with that name at the club are offered first
@@ -76,7 +76,8 @@ export function useRegistrationFlow(tournamentId: string, { closed = false }: Re
   const [checkingName, setCheckingName] = useState(false);
   // "That's me": the club's player with the name typed, signed up as themselves (no new player made).
   const [claimed, setClaimed] = useState<PublicPlayer | null>(null);
-  const [enteringHighHands, setEnteringHighHands] = useState(false);
+  // The high hands the player enters (round 10: each by its id, "legacy" for a tournament's one high hand of before).
+  const [highHandIds, setHighHandIds] = useState<string[]>([]);
   const [photoUploading, setPhotoUploading] = useState(false);
   // The last sign-up refusal said above the form; one put on a field (a phone number already taken) is
   // not. Set in the same step as the field's error, so the two never both show, even for a moment.
@@ -220,11 +221,13 @@ export function useRegistrationFlow(tournamentId: string, { closed = false }: Re
     const token = playerType === "new" && !claimed && signedUp ? { signUpToken: signedUp.signUpToken } : {};
     let created: RegistrationCreatedDto;
     try {
-      created = await register.mutateAsync({ playerId: chosen.id, enteringHighHands, ...token });
+      // The high hands ticked (round 10), with the flag a sign-up has always sent: none ticked is the flag alone.
+      const highHands = highHandIds.length > 0 ? { enteringHighHands: true, highHandIds } : { enteringHighHands: false };
+      created = await register.mutateAsync({ playerId: chosen.id, ...highHands, ...token });
     } catch {
       return; // said on the step, from the mutation's error
     }
-    saveSignUp(tournamentId, { player: chosen, registration: created, enteringHighHands });
+    saveSignUp(tournamentId, { player: chosen, registration: created, highHandIds });
     toast({ title: "Registration Successful!", description: howToPayNote(created) });
   };
 
@@ -243,7 +246,7 @@ export function useRegistrationFlow(tournamentId: string, { closed = false }: Re
     setSignedUp(null);
     setSameName(null);
     setClaimed(null);
-    setEnteringHighHands(false);
+    setHighHandIds([]);
     register.reset();
     createPlayer.reset();
     setSignUpFailure(null);
@@ -274,8 +277,8 @@ export function useRegistrationFlow(tournamentId: string, { closed = false }: Re
     chooseExistingPlayer: setExistingPlayer,
     continueWithExisting,
     player: signedUpBefore?.player ?? player,
-    enteringHighHands: signedUpBefore?.enteringHighHands ?? enteringHighHands,
-    setEnteringHighHands,
+    highHandIds: signedUpBefore?.highHandIds ?? highHandIds,
+    setHighHandIds,
     completeRegistration,
     registering: register.isPending,
     registrationError: register.error ? registrationProblem(register.error) : null,

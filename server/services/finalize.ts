@@ -50,18 +50,16 @@ import { db, type Executor } from "../db";
 import { actingUserId } from "../http/authz";
 import { badRequest, conflict, notFound } from "../http/errors";
 import { insertActivity } from "../repositories/activity";
-import { getClub } from "../repositories/clubs";
 import { carryOverOfSource, lockCarryOverOfSource } from "../repositories/carry-overs";
 import { writeFinalResults } from "../repositories/finalize";
 import { deletePendingActionsOfTournament, listPendingActionsWithPlayers } from "../repositories/pending-actions";
-import { playerNames } from "../repositories/players";
 import { pointsRules } from "../repositories/points";
-import { registrationsOf, updateTournamentRegistration } from "../repositories/registrations";
+import { updateTournamentRegistration } from "../repositories/registrations";
 import { getTournament, lockTournamentForUpdate, setTournamentColumns } from "../repositories/tournaments";
 import { recordAudit } from "./audit";
 import { heldCarryOver, withdrawCarryOver } from "./carry-overs";
 import { finishClock } from "./clock";
-import { displayWithNames, toPrizePoolDto, type PrizePoolContext } from "./prize-pool";
+import { displayWithNames, loadPrizePoolContext, toPrizePoolDto, type PrizePoolContext } from "./prize-pool";
 
 interface PlanContext extends PrizePoolContext {
   pointsSystem: PointsSystem | null;
@@ -80,9 +78,8 @@ interface PlanContext extends PrizePoolContext {
  */
 async function loadPlanContext(ex: Executor, tournament: Tournament, { lock }: { lock: boolean }): Promise<PlanContext> {
   const carryOver = lock ? await lockCarryOverOfSource(ex, tournament.id) : await carryOverOfSource(ex, tournament.id);
-  const registrations = await registrationsOf(ex, tournament.id, { lock });
-  const club = await getClub(ex, tournament.clubId);
-  const names = await playerNames(ex, registrations.map((r) => r.playerId));
+  // With the high hands (round 10), so the snapshot records each pot.
+  const money = await loadPrizePoolContext(ex, tournament, { lock });
   const rules = tournament.trackPoints ? await pointsRules(ex, tournament.pointsSystemId) : { pointsSystem: null, allocations: [] };
   const pendingRequests = (await listPendingActionsWithPlayers(ex, tournament.id)).map(({ action, player, targetPlayer }) => ({
     id: action.id,
@@ -90,7 +87,7 @@ async function loadPlanContext(ex: Executor, tournament: Tournament, { lock }: {
     playerName: player?.name ?? "Unknown player",
     targetPlayerName: targetPlayer?.name ?? null,
   }));
-  return { tournament, registrations, club, playerNames: names, ...rules, pendingRequests, carryOver, carriedOver: await heldCarryOver(ex, carryOver) };
+  return { ...money, ...rules, pendingRequests, carryOver, carriedOver: await heldCarryOver(ex, carryOver) };
 }
 
 /** What the TD chose in the preview or finalize request: the finishing order, a deal, and whether unpaid players are left out. */

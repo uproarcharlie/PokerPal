@@ -23,6 +23,7 @@ import type {
   TournamentRegistration,
 } from "../schema";
 import { limitSchema, type Json, type WithViewer } from "./common";
+import type { HighHandDto, HighHandWinDto } from "./high-hands";
 
 /**
  * The club's bank details (round 8: its columns, and the names its staff's payments endpoint and a
@@ -57,8 +58,9 @@ export const FORBIDDEN_PUBLIC_KEYS = [
   "prizePoolAdjustedBy",
   "finalizedBy",
   "byUserId",
-  // Who gave a free entry (round 7): a user id, kept on the server for the audit log.
+  // Who gave a free entry (round 7) or awarded a high hand (round 10): user ids, kept on the server for the audit log.
   "freeEntryBy",
+  "awardedBy",
   // The club's bank details (round 8): BANK_DETAIL_KEYS.
   ...BANK_DETAIL_KEYS,
 ] as const;
@@ -215,7 +217,10 @@ export type TournamentTakings = Json<Pick<Tournament, (typeof TOURNAMENT_TAKINGS
  * A tournament as the API answers it: the public fields, and the takings only for a viewer who runs its
  * club (absent for everyone else, so a public page can never show them by mistake).
  */
-export type PublicTournament = Json<Pick<Tournament, (typeof PUBLIC_TOURNAMENT_FIELDS)[number]>> & Partial<TournamentTakings> & BankTransferSetting;
+export type PublicTournament = Json<Pick<Tournament, (typeof PUBLIC_TOURNAMENT_FIELDS)[number]>> &
+  Partial<TournamentTakings> &
+  BankTransferSetting &
+  HighHandsSetting;
 
 /**
  * Round 8: whether the tournament tells whoever signs up how to pay by bank transfer (only while its
@@ -225,6 +230,20 @@ export type PublicTournament = Json<Pick<Tournament, (typeof PUBLIC_TOURNAMENT_F
  */
 export interface BankTransferSetting {
   showBankTransfer?: boolean;
+}
+
+/**
+ * Round 10: the high hands the tournament lists (tournament_high_hands, removed ones left out), in
+ * order, or null for a tournament that lists none: its one high hand, if any, is then its legacy columns
+ * (enableHighHand, highHandAmount, highHandPayouts, and for staff highHandRakeType/Amount). Read either
+ * with shared/domain/high-hands highHandsOf, which gives the legacy one as a high hand with the id
+ * "legacy". Each high hand's AP rule (`rakeType`, `rakeAmount`) only for a viewer who runs the club.
+ * For a tournament that lists its high hands, `enableHighHand` and `highHandAmount` are their summary:
+ * whether it runs any, and what entering every one costs. Every tournament answer has it; optional only
+ * because one made before round 10 (a cached answer, a test's fixture) has none, which reads as null.
+ */
+export interface HighHandsSetting {
+  highHands?: HighHandDto[] | null;
 }
 
 /**
@@ -313,8 +332,22 @@ export interface WaitingListPlace {
   waitingListPosition?: number | null;
 }
 
+/**
+ * Round 10: the high hands an entry is in, and the prizes it has won from them, for a tournament that
+ * lists its high hands (registration_high_hands, high_hand_awards); both empty for any other, whose
+ * entries say it with enteringHighHands, highHandWinner and highHandAmount (read either with
+ * shared/domain/high-hands highHandIdsOf and highHandWinsOf). Public, as those columns are: who entered
+ * and won what is part of the game. For a tournament that lists its high hands, those columns are their
+ * summary: in any, won any, and what was won in all. Every registration answer has both; optional only
+ * because one made before round 10 has none, which reads as empty.
+ */
+export interface RegistrationHighHands {
+  highHandIds?: string[];
+  highHandWins?: HighHandWinDto[];
+}
+
 /** GET /api/tournaments/:id/registrations */
-export type PublicRegistration = PublicRegistrationRow & WaitingListPlace & { player: PublicPlayer | null };
+export type PublicRegistration = PublicRegistrationRow & WaitingListPlace & RegistrationHighHands & { player: PublicPlayer | null };
 
 export const PUBLIC_POINTS_SYSTEM_FIELDS = [
   "id",

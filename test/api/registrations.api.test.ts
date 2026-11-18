@@ -72,10 +72,13 @@ const publicPlayer = (player: Player) => ({ id: player.id, name: player.name, im
  */
 /** A registration as the API answers it, in the field (round 5: `waitingListPosition` null). */
 const withPlayer = (registration: object, player: Player) => ({ ...staffColumns(registration), player: publicPlayer(player), waitingListPosition: null });
-/** Who gave a free entry, and when, never leave the server (round 7): the audit log has them. */
+/**
+ * Who gave a free entry, and when, never leave the server (round 7): the audit log has them. Every
+ * answer says which listed high hands the entry is in and won (round 10): none, for a legacy tournament.
+ */
 const staffColumns = (registration: object) => {
   const { freeEntryBy: _by, freeEntryAt: _at, ...row } = asJson(registration) as Record<string, unknown>;
-  return row;
+  return { ...row, highHandIds: [], highHandWins: [] };
 };
 /** Whether (and how, round 8) it has paid, and whether it came in free (round 7), are staff bookkeeping. */
 const asPublic = ({
@@ -122,6 +125,8 @@ describe("POST /api/tournaments/:id/registrations", () => {
       highHandWinner: false,
       highHandAmount: null,
       earlyBird: false,
+      highHandIds: [],
+      highHandWins: [],
       player: publicPlayer(player),
       // Round 5: in the field (no waiting list), and what auto-seat did; before any table is in play, setup seats everyone.
       waitingListPosition: null,
@@ -994,7 +999,7 @@ describe("PATCH /api/registrations/:id/confirm-payment", () => {
 
     expect(response.status).toBe(200);
     // Round 5: no table is in play, so auto-seat had nothing to do.
-    expect(response.body).toEqual({ ...withPlayer(registration, player), paymentConfirmed: true, seating: null, highHandUnawardedCents: 0 });
+    expect(response.body).toEqual({ ...withPlayer(registration, player), paymentConfirmed: true, seating: null, highHandUnawardedCents: 0, highHandsUnawarded: [] });
     expect(await activityFor(tournament.id)).toEqual([logEntry("payment_confirmed", "Payment confirmed for Alice", player)]);
   });
 

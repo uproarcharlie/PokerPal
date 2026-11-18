@@ -30,7 +30,7 @@ import { notFound } from "../http/errors";
 import { insertActivity } from "../repositories/activity";
 import { lockTournamentForUpdate, setTournamentColumns } from "../repositories/tournaments";
 import { recordAudit } from "./audit";
-import { loadPrizePoolContext, moneyResponse, type MoneyResponse } from "./prize-pool";
+import { loadPrizePoolContext, moneyResponse, withTournament, type MoneyResponse } from "./prize-pool";
 import { assertOpen } from "./tournament-views";
 
 interface PayoutsChange {
@@ -108,6 +108,6 @@ export async function changePayouts(req: Request, id: string, input: PayoutsUpda
       netCents: after.net,
     };
     await recordAudit(req, { action: "tournament.payouts", targetType: "tournament", targetId: id, data: audit }, tx);
-    return await moneyResponse(req, { ...context, tournament: updated });
+    return await moneyResponse(req, withTournament(context, updated));
   });
 }

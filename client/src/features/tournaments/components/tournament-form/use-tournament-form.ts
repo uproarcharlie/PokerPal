@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useForm, type Path } from "react-hook-form";
 import type { ErrorCode } from "@shared/api/errors";
 import { showServerFieldErrors, formResolver } from "@/lib/forms";
+import { highHandProblem, isHighHandField } from "../../high-hands-form";
 import {
   inClubZone,
   NEW_TOURNAMENT_VALUES,
@@ -11,7 +12,10 @@ import {
   type TournamentFormValues,
 } from "../../tournament-form";
 
-const FIELDS = Object.keys(NEW_TOURNAMENT_VALUES) as Path<TournamentFormValues>[];
+const FIELDS = Object.keys(NEW_TOURNAMENT_VALUES) as string[];
+
+/** A box of the form: a setting, or one of a high hand's ("highHands.1.entryFee"). */
+const isFormField = (name: string) => FIELDS.includes(name) || isHighHandField(name);
 
 /** Refusals about one field that the server names by code rather than by path. */
 const FIELD_CODES: Partial<Record<ErrorCode, Path<TournamentFormValues>>> = {
@@ -20,7 +24,6 @@ const FIELD_CODES: Partial<Record<ErrorCode, Path<TournamentFormValues>>> = {
   // A part switched off while entries are recorded at its price (P3REV0-PARITY-EDIT-REPRICE).
   REBUYS_RECORDED: "enableRebuys",
   ADDONS_RECORDED: "enableAddons",
-  HIGH_HAND_ENTRIES: "enableHighHand",
 };
 
 /** What the points switch says for a game with no season (round 7). */
@@ -51,7 +54,8 @@ export function configFromValues(values: TournamentFormValues, timeZone: string)
 /**
  * The tournament form's state: checked by the shared schema, the values left as typed (the submit
  * builds the request body from them), whether an image is still uploading (Save waits for it), and a
- * way to put a server refusal on its field.
+ * way to put a server refusal on its field: a high hand's (its awards no longer fit its pot, players
+ * are in it: `details.highHandId`) on that high hand's card.
  */
 export function useTournamentForm(defaultValues: TournamentFormValues) {
   const form = useForm<TournamentFormValues>({
@@ -59,6 +63,13 @@ export function useTournamentForm(defaultValues: TournamentFormValues) {
     defaultValues,
   });
   const [uploading, setUploading] = useState(false);
-  const showServerError = (error: unknown) => showServerFieldErrors(form.setError, error, { fields: FIELDS, codes: FIELD_CODES });
+  const showServerError = (error: unknown) => {
+    const problem = highHandProblem(error, form.getValues("highHands"));
+    if (problem) {
+      form.setError(`highHands.${problem.index}`, { type: "server", message: problem.message });
+      return true;
+    }
+    return showServerFieldErrors(form.setError, error, { fields: isFormField, codes: FIELD_CODES });
+  };
   return { form, uploading, setUploading, showServerError };
 }

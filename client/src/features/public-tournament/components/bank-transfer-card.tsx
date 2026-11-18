@@ -1,6 +1,7 @@
 import { useId, type ReactNode } from "react";
 import { Landmark } from "lucide-react";
 import type { PaymentInstructionsDto } from "@shared/api/registrations";
+import { DEFAULT_HIGH_HAND_NAME, highHandLabel, LEGACY_HIGH_HAND_ID } from "@shared/domain/high-hands";
 import { formatMoney } from "@/lib/format";
 import { CopyValueButton } from "./copy-value-button";
 
@@ -20,12 +21,17 @@ function Detail({ label, children, copy }: { label: string; children: ReactNode;
 /**
  * "Pay by bank transfer" (round 8, item 3): what the player puts into their banking app to pay the
  * buy-in ahead, each part they type with a Copy button, and that paying at the door still works. The
- * high-hand entry is paid at the door (the owner, 2026-11-16), so it is only mentioned. Shown only to
- * the person who has just signed up (the sign-up's own answer carries the details), with a buy-in to pay.
+ * high hands are paid at the door (the owner, 2026-11-16), so each one ticked is only mentioned, with
+ * its fee (round 10). Shown only to the person who has just signed up (the sign-up's own answer carries
+ * the details), with a buy-in to pay.
  */
 export function BankTransferCard({ transfer }: { transfer: PaymentInstructionsDto }) {
   const heading = useId();
   const amount = formatMoney(transfer.amountDueCents, { forceCents: true });
+  // Each high hand ticked; an answer from before round 10 (a sign-up kept in the tab) says the total.
+  const atDoor =
+    transfer.highHandsAtDoor ??
+    (transfer.highHandAtDoorCents > 0 ? [{ highHandId: LEGACY_HIGH_HAND_ID, name: DEFAULT_HIGH_HAND_NAME, feeCents: transfer.highHandAtDoorCents }] : []);
   return (
     <section aria-labelledby={heading} className="space-y-3 rounded-lg border border-border bg-card p-3 text-left sm:p-4" data-testid="bank-transfer">
       <h2 id={heading} className="flex items-center gap-2 text-lg font-semibold text-foreground">
@@ -63,10 +69,14 @@ export function BankTransferCard({ transfer }: { transfer: PaymentInstructionsDt
           {transfer.instructions}
         </p>
       ) : null}
-      {transfer.highHandAtDoorCents > 0 ? (
-        <p className="rounded-md bg-muted px-3 py-2 text-sm font-medium text-foreground" data-testid="bank-transfer-high-hand">
-          High hand ({formatMoney(transfer.highHandAtDoorCents, { forceCents: true })}) — pay at the door
-        </p>
+      {atDoor.length > 0 ? (
+        <ul role="list" className="space-y-1">
+          {atDoor.map((highHand) => (
+            <li key={highHand.highHandId} className="rounded-md bg-muted px-3 py-2 text-sm font-medium text-foreground" data-testid="bank-transfer-high-hand">
+              {highHandLabel(highHand.name)} ({formatMoney(highHand.feeCents, { forceCents: true })}) — pay at the door
+            </li>
+          ))}
+        </ul>
       ) : null}
       <div className="space-y-1 text-sm text-muted-foreground">
         <p>Or pay at the door.</p>

@@ -239,7 +239,13 @@ describe("POST /api/pending-actions/:id/confirm", () => {
     expect(response.body).toEqual({
       success: true,
       // Who gave a free entry, and when, never leave the server (round 7).
-      registration: { ...(asJson({ ...aliceRegistration, rebuys: 1, freeEntryBy: undefined, freeEntryAt: undefined }) as object), player: publicPlayer(alice) },
+      registration: {
+        ...(asJson({ ...aliceRegistration, rebuys: 1, freeEntryBy: undefined, freeEntryAt: undefined }) as object),
+        // Round 10: every registration answer says which listed high hands it entered and won (none: a legacy tournament).
+        highHandIds: [],
+        highHandWins: [],
+        player: publicPlayer(alice),
+      },
       reentered: false,
       target: null,
     });

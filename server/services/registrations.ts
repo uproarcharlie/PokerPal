@@ -40,6 +40,17 @@ import {
 import type { AuditData } from "@shared/api/admin";
 import { pickFields, PUBLIC_REGISTRATION_FIELDS } from "@shared/api/public";
 import type { ActivityEventType } from "@shared/api/tournaments";
+import {
+  chosenHighHandIds,
+  highHandAwardsOf,
+  highHandChoiceChange,
+  highHandIdsOf,
+  highHandsOf,
+  highHandsPhrase,
+  highHandStandings,
+  listsHighHands,
+  readHighHandChoice,
+} from "@shared/domain/high-hands";
 import { centsToDecimalString, centsToDollars, formatMoney, toCents, type Cents } from "@shared/domain/money";
 import { lateTopUpText, offersHighHand, PRIZE_POOL_LOCKED_MESSAGE, topUpRefusal, type TopUpCounts } from "@shared/domain/player-actions";
 import { registrationRemovalProblem } from "@shared/domain/standings";
@@ -51,13 +62,13 @@ import {
   highHandAwardsProblem,
   nextHighHandAward,
   splitHighHandAward,
-  unawardedHighHandCents,
 } from "@shared/domain/prize-pool";
 import type { InsertTournamentRegistration, PendingAction, Player, Tournament, TournamentRegistration } from "@shared/schema";
 import { db, type Transaction } from "../db";
 import { actingUserId, viewerFor, type ClubScope } from "../http/authz";
 import { badRequest, conflict, HttpError, notFound } from "../http/errors";
 import { insertActivity } from "../repositories/activity";
+import { deleteEntrants, insertEntrants } from "../repositories/high-hands";
 import { clockElapsedMsNow } from "../repositories/clock";
 import { getClub } from "../repositories/clubs";
 import { deletePendingActionsForPlayer } from "../repositories/pending-actions";
@@ -66,6 +77,17 @@ import * as registrationsRepo from "../repositories/registrations";
 import { getTournament, setTournamentColumns } from "../repositories/tournaments";
 import { recordAudit } from "./audit";
 import { paymentInstructionsFor } from "./club-payments";
+import {
+  loadEntryHighHands,
+  loadHighHandStore,
+  loadMoneyState,
+  registrationsWithHighHands,
+  withEntryHighHands,
+  withHighHands,
+  type RegistrationWithHighHands,
+  type TournamentWithHighHands,
+} from "./high-hands";
+import { highHandListed } from "./prize-pool";
 import { clubRequiresSignUpPhoto, contactAccess, photoRequired, toClubPlayer, toPublicPlayer } from "./players";
 import { assertApStillWithinGross } from "./prize-pool";
 import { autoSeatNewRegistration, autoSeatOnPayment, releaseSeatOnElimination, restoreSeatAfterReturn } from "./seating";
@@ -74,11 +96,15 @@ import { requireTournament } from "./tournaments";
 
 /**
  * The registration as anyone sees it (PublicRegistration). With `waitingList` (each waiting-list
- * entry's place, waitingListOf) it says its place on the list, or null when it is in the field.
+ * entry's place, waitingListOf) it says its place on the list, or null when it is in the field. The
+ * high hands it entered and won (round 10; both empty for a legacy tournament) are public, as its
+ * legacy high-hand columns are: `registration` carries them (./high-hands), so no answer leaves them out.
  */
-export function toPublicRegistration(registration: TournamentRegistration, player: Player | null | undefined, waitingList?: ReadonlyMap<string, number>) {
+export function toPublicRegistration(registration: RegistrationWithHighHands, player: Player | null | undefined, waitingList?: ReadonlyMap<string, number>) {
   return {
     ...pickFields(registration, PUBLIC_REGISTRATION_FIELDS),
+    highHandIds: registration.highHandIds,
+    highHandWins: registration.highHandWins,
     player: player ? toPublicPlayer(player) : null,
     ...(waitingList ? { waitingListPosition: waitingList.get(registration.id) ?? null } : {}),
   };
@@ -108,7 +134,7 @@ const paidByOf = (registration: TournamentRegistration): PaidBy | null => (isPai
 const paymentStatus = (registration: TournamentRegistration) => ({ paymentConfirmed: registration.paymentConfirmed, paidBy: paidByOf(registration) });
 
 /** The registration as the club's staff see it (ManagedRegistration): the public row, plus whether (and how) it has paid or has a free entry. */
-export function toManagedRegistration(registration: TournamentRegistration, player: Player | null | undefined, waitingList?: ReadonlyMap<string, number>) {
+export function toManagedRegistration(registration: RegistrationWithHighHands, player: Player | null | undefined, waitingList?: ReadonlyMap<string, number>) {
   return { ...toPublicRegistration(registration, player, waitingList), ...paymentStatus(registration), ...freeEntryStatus(registration) };
 }
 
@@ -138,6 +164,46 @@ async function assertRoomToAccept(tx: Transaction, tournament: Tournament, befor
 const playerName = (player: Player | null | undefined) => player?.name || "Unknown player";
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
+const highHandNotAvailable = (details?: { highHandId: string }) =>
+  badRequest(
+    details ? "That high hand is not available for this tournament" : "High hands entry is not available for this tournament",
+    "HIGH_HAND_NOT_AVAILABLE",
+    details,
+  );
+
+/**
+ * The high hands `highHandIds` names (round 10), in the tournament's order: 400 HIGH_HAND_NOT_AVAILABLE
+ * (details { highHandId }) for one the tournament does not run. Undefined when not sent.
+ */
+function sentHighHandIds(tournament: TournamentWithHighHands, highHandIds: readonly string[] | undefined): string[] | undefined {
+  if (highHandIds === undefined) return undefined;
+  const { ids, unknown } = readHighHandChoice(tournament, highHandIds);
+  if (unknown.length > 0) throw highHandNotAvailable({ highHandId: unknown[0] });
+  return ids;
+}
+
+/**
+ * The set one Fix tick asks for (R10REV1-PHONE-01): the high hands the entry is in as the server holds
+ * it, locked, with `join` added and `leave` taken out, so a second quick tick from a list the phone has
+ * not reloaded yet changes only its own high hand. 400 HIGH_HAND_NOT_AVAILABLE for an id the
+ * tournament does not run; undefined when neither is sent.
+ */
+function tickedHighHandIds(
+  tournament: TournamentWithHighHands,
+  entry: RegistrationWithHighHands,
+  join: readonly string[] | undefined,
+  leave: readonly string[] | undefined,
+): string[] | undefined {
+  if (join === undefined && leave === undefined) return undefined;
+  const joining = sentHighHandIds(tournament, join ?? []) ?? [];
+  const leaving = new Set(sentHighHandIds(tournament, leave ?? []));
+  return [...highHandIdsOf(tournament, entry), ...joining].filter((id) => !leaving.has(id));
+}
+
+/** "the First half high hand", "the First half and Second half high hands". */
+const highHandsNamed = (tournament: TournamentWithHighHands, highHandIds: readonly string[]): string =>
+  highHandsPhrase(highHandsOf(tournament).filter((highHand) => highHandIds.includes(highHand.id)).map((highHand) => highHand.name));
+
 // ---------------------------------------------------------------------------------------------------
 // Reads
 
@@ -151,8 +217,10 @@ export async function listRegistrations(req: Request, tournamentId: string) {
   const canManage = tournament !== undefined && req.user !== undefined && (await viewerFor(req, tournament.clubId)).canManage;
   const rows = await registrationsRepo.listRegistrationsWithPlayers(db, tournamentId);
   const waitingList = tournament ? waitingListOf(tournament, rows.map(({ registration }) => registration)) : new Map<string, number>();
-  return rows.map(({ registration, player }) =>
-    canManage ? toManagedRegistration(registration, player, waitingList) : toPublicRegistration(registration, player, waitingList),
+  const store = await loadHighHandStore(db, tournamentId);
+  const registrations = registrationsWithHighHands(store, rows.map(({ registration }) => registration));
+  return rows.map(({ player }, index) =>
+    canManage ? toManagedRegistration(registrations[index], player, waitingList) : toPublicRegistration(registrations[index], player, waitingList),
   );
 }
 
@@ -161,17 +229,23 @@ export async function listRegistrations(req: Request, tournamentId: string) {
  * in dollars. Players as ClubPlayer: contact details only for those whose home club the viewer runs.
  */
 export async function listPaymentRegistrations(scope: ClubScope, tournamentId: string, paid: boolean) {
-  const tournament = await requireTournament(tournamentId);
-  const [rows, everyone] = await Promise.all([
+  const [rows, everyone, store] = await Promise.all([
     registrationsRepo.listRegistrationsWithPlayers(db, tournamentId, { paymentConfirmed: paid }),
     registrationsRepo.registrationsOf(db, tournamentId),
+    loadHighHandStore(db, tournamentId),
   ]);
+  const tournament = withHighHands(await requireTournament(tournamentId), store);
   const waitingList = waitingListOf(tournament, everyone);
   const canEdit = await contactAccess(db, scope, rows.flatMap(({ player }) => (player ? [player.id] : [])));
-  return rows.map(({ registration, player }) => {
+  const registrations = registrationsWithHighHands(store, rows.map(({ registration }) => registration));
+  return rows.map(({ player }, index) => {
+    const registration = registrations[index];
+    // The fees of the high hands it chose (round 10, paid at the door) are part of what it owes, as the pots count them.
     const amount = centsToDollars(amountDueCents(tournament, registration));
     const row = {
       ...pickFields(registration, PUBLIC_REGISTRATION_FIELDS),
+      highHandIds: registration.highHandIds,
+      highHandWins: registration.highHandWins,
       ...paymentStatus(registration),
       ...freeEntryStatus(registration),
       waitingListPosition: waitingList.get(registration.id) ?? null,
@@ -519,10 +593,12 @@ export async function registerPlayer(req: Request, tournamentId: string, input: 
     if (tournament.prizePoolLocked) {
       throw conflict("PRIZE_POOL_LOCKED", "Prize pool is locked. No new registrations allowed.");
     }
+    const store = await loadHighHandStore(tx, tournament.id);
+    const money = withHighHands(tournament, store);
     // Switched on with no price (or $0) is no high hand, as every screen shows it (P3REV3-CQ-03).
-    if (input.enteringHighHands && !offersHighHand(tournament)) {
-      throw badRequest("High hands entry is not available for this tournament", "HIGH_HAND_NOT_AVAILABLE");
-    }
+    if (input.highHandIds === undefined && input.enteringHighHands && !offersHighHand(money)) throw highHandNotAvailable();
+    // Round 10: the high hands chosen (`highHandIds`, else the legacy flag: all or none); the legacy high hand is "legacy".
+    const highHandIds = sentHighHandIds(money, input.highHandIds) ?? chosenHighHandIds(money, input) ?? [];
     assertTopUpsAllowed(tournament, { rebuys: 0, addons: 0 }, { rebuys: input.rebuys ?? 0, addons: input.addons ?? 0 });
 
     const player = await getPlayer(tx, input.playerId);
@@ -539,19 +615,23 @@ export async function registerPlayer(req: Request, tournamentId: string, input: 
     }
     const opening = { rebuys: input.rebuys ?? 0, addons: input.addons ?? 0, paymentConfirmed: free !== undefined || (input.paymentConfirmed ?? false) };
     await assertRoomToAccept(tx, tournament, {}, opening);
-    const before = input.enteringHighHands ? await registrationsRepo.registrationsOf(tx, tournament.id) : undefined;
+    const before = highHandIds.length > 0 ? registrationsWithHighHands(store, await registrationsRepo.registrationsOf(tx, tournament.id)) : undefined;
 
-    const registration = await registrationsRepo.createTournamentRegistration(tx, {
+    const created = await registrationsRepo.createTournamentRegistration(tx, {
       tournamentId: tournament.id,
       playerId: player.id,
       buyIns: input.buyIns ?? 1,
-      enteringHighHands: input.enteringHighHands ?? false,
+      // In the legacy high hand, or (round 10) in any listed one: the summary of the rows below.
+      enteringHighHands: highHandIds.length > 0,
       ...opening,
       ...(paidBy ? { paidBy } : {}),
       ...(free ? freeEntryColumns(req, free) : {}),
     });
+    const listed = listsHighHands(money);
+    if (listed) await insertEntrants(tx, tournament.id, highHandIds.map((highHandId) => ({ registrationId: created.id, highHandId })));
+    const registration: RegistrationWithHighHands = { ...created, highHandIds: listed ? highHandIds : [], highHandWins: [] };
     if (before) {
-      assertHighHandAwardsFit({ tournament, registrations: before }, { tournament, registrations: [...before, registration] });
+      assertHighHandAwardsFit({ tournament: money, registrations: before }, { tournament: money, registrations: [...before, registration] });
     }
     await claimHomeClubFromFirstRegistration(tx, player.id);
     const waitingList = await currentWaitingList(tx, tournament);
@@ -568,12 +648,13 @@ export async function registerPlayer(req: Request, tournamentId: string, input: 
     const seating = await autoSeatNewRegistration(tx, tournament, registration.id);
     const dto = caller.staff ? toManagedRegistration(registration, player, waitingList) : toPublicRegistration(registration, player, waitingList);
     const club = tournament.showBankTransfer ? await getClub(tx, tournament.clubId) : undefined;
-    const paymentInstructions = paymentInstructionsFor({ tournament, club, registration, player, waitingList: place !== undefined });
+    const paymentInstructions = paymentInstructionsFor({ tournament: money, club, registration, player, waitingList: place !== undefined });
     return { ...dto, seating, ...(paymentInstructions ? { paymentInstructions } : {}) };
   });
 }
 
-type RegistrationField = Exclude<keyof UpdateRegistrationInput, "eliminatedBy" | "highHandSplitWith">;
+// highHandIds and the ticks joining or leaving one (round 10) are a set held in registration_high_hands, not a column: never a stored-field change.
+type RegistrationField = Exclude<keyof UpdateRegistrationInput, "eliminatedBy" | "highHandSplitWith" | "highHandIds" | "joinHighHandIds" | "leaveHighHandIds">;
 
 /** What a completed or cancelled tournament still lets staff change (payments are often reconciled after the game). */
 const EDITABLE_WHEN_CLOSED: ReadonlySet<RegistrationField> = new Set<RegistrationField>([
@@ -710,123 +791,188 @@ function closedRefusal(tournament: Tournament): HttpError {
   return conflict("TOURNAMENT_CLOSED", `${closedMessage(tournament)}: only payment and high-hand details can change${fix}`);
 }
 
+/** Where a PUT moves an entry of a tournament that lists its high hands (round 10): the high hands it was and will be in. */
+interface ListedHighHandChoice {
+  before: string[];
+  after: string[];
+  joined: string[];
+  left: string[];
+  /** Left with a prize won in it: refused (HIGH_HAND_WINNER). */
+  leftWon: string[];
+}
+
+/**
+ * What a PUT says about the high hands (round 10). For a tournament that keeps its legacy high hand,
+ * `highHandIds` (or the ticks joining or leaving one, applied to what the entry is in) stands for the
+ * legacy flag ("legacy" in it or not) and the PUT goes on as before. For one that lists its high hands,
+ * the legacy award fields changed are 409 HIGH_HAND_LISTED (a page loaded before round 10: resent
+ * unchanged, they are ignored), the legacy flag is their summary (alone, it means every high hand or
+ * none), and the choice is returned when it moves the entry.
+ */
+function readHighHandFields(
+  tournament: TournamentWithHighHands,
+  entry: RegistrationWithHighHands,
+  sent: UpdateRegistrationInput,
+): { input: UpdateRegistrationInput; choice: ListedHighHandChoice | null } {
+  const { highHandIds: sentIds, joinHighHandIds, leaveHighHandIds, ...input } = sent;
+  const ids = sentHighHandIds(tournament, sentIds) ?? tickedHighHandIds(tournament, entry, joinHighHandIds, leaveHighHandIds);
+  if (!listsHighHands(tournament)) {
+    return { input: ids === undefined ? input : { ...input, enteringHighHands: ids.length > 0 }, choice: null };
+  }
+  const { enteringHighHands, highHandWinner, highHandAmount, highHandSplitWith, ...rest } = input;
+  if (highHandSplitWith !== undefined || changedFields({ highHandWinner, highHandAmount }, entry).length > 0) throw highHandListed();
+  // The legacy flag on a tournament that runs no high hand, as before round 10.
+  if (ids === undefined && enteringHighHands === true && entry.enteringHighHands !== true && highHandsOf(tournament).length === 0) {
+    throw highHandNotAvailable();
+  }
+  const next = ids ?? chosenHighHandIds(tournament, { enteringHighHands });
+  if (next === undefined) return { input: rest, choice: null };
+  const { joined, left, leftWon } = highHandChoiceChange(tournament, entry, next);
+  if (joined.length === 0 && left.length === 0) return { input: rest, choice: null };
+  const before = highHandIdsOf(tournament, entry);
+  return { input: rest, choice: { before, after: readHighHandChoice(tournament, next).ids, joined, left, leftWon } };
+}
+
 /**
  * PUT /api/registrations/:id (the rules are listed on updateRegistrationSchema). One UPDATE for the
  * registration's own fields, the eliminator's knockout in the same transaction, and the activity
  * rows as today. A high-hand tie changes the tournament's number of prizes, so it is also audited.
  */
 export async function updateRegistration(req: Request, registrationId: string, input: UpdateRegistrationInput) {
-  return db.transaction(async (tx) => {
-    const locked = await lockRegistrationById(tx, registrationId);
-    const { tournament, registration: current } = locked;
-    const changed = changedFields(input, current);
+  return db.transaction(async (tx) => applyRegistrationUpdate(tx, req, await lockRegistrationById(tx, registrationId), input));
+}
 
-    if (isClosed(tournament) && changed.some((field) => !EDITABLE_WHEN_CLOSED.has(field))) throw closedRefusal(tournament);
-    // After the game a payment is taken in (late reconciliation), never taken back: its prize pool is settled (round 9).
-    const takesBackPayment = changed.includes("paymentConfirmed") && input.paymentConfirmed === false;
-    if (takesBackPayment && isClosed(tournament)) {
-      throw conflict("TOURNAMENT_CLOSED", `${closedMessage(tournament)}, so a payment can no longer be taken back`);
-    }
-    if (input.eliminatedBy !== undefined && input.isEliminated !== true) {
-      throw badRequest("Send eliminatedBy only when eliminating a player (isEliminated: true)");
-    }
-    if (current.freeEntry && changed.includes("paymentConfirmed")) {
-      const name = playerName(await getPlayer(tx, current.playerId));
-      throw conflict("FREE_ENTRY", `${name} has a free entry: take it back to make it a normal unpaid entry`);
-    }
-    assertEliminationIntent(input, current, changed);
+/**
+ * The PUT inside the caller's transaction, its tournament and registration locked: also how the legacy
+ * high hand is awarded, corrected and taken back from its award endpoints (./high-hand-awards).
+ */
+export async function applyRegistrationUpdate(tx: Transaction, req: Request, locked: LockedRegistration, sent: UpdateRegistrationInput) {
+  const { tournament, registration: current } = locked;
+  const store = await loadHighHandStore(tx, tournament.id);
+  const money = withHighHands(tournament, store);
+  const entry = withEntryHighHands(store, current);
+  const { input, choice } = readHighHandFields(money, entry, sent);
+  const changed = changedFields(input, current);
 
-    const added = {
-      buyIns: Math.max((input.buyIns ?? 0) - (current.buyIns ?? 0), 0),
-      rebuys: Math.max((input.rebuys ?? 0) - (current.rebuys ?? 0), 0),
-      addons: Math.max((input.addons ?? 0) - (current.addons ?? 0), 0),
-    };
-    const joinsHighHand = changed.includes("enteringHighHands") && input.enteringHighHands === true;
-    if (tournament.prizePoolLocked && (added.buyIns > 0 || added.rebuys > 0 || added.addons > 0 || joinsHighHand)) {
-      throw conflict("PRIZE_POOL_LOCKED", "Prize pool is locked. No rebuys, addons, or high hand entries allowed.");
-    }
-    const counts = { rebuys: current.rebuys ?? 0, addons: current.addons ?? 0 };
-    assertTopUpsAllowed(tournament, counts, { rebuys: input.rebuys ?? counts.rebuys, addons: input.addons ?? counts.addons });
-    if (joinsHighHand && !offersHighHand(tournament)) {
-      throw badRequest("High hands entry is not available for this tournament", "HIGH_HAND_NOT_AVAILABLE");
-    }
-    // Accepting a waiting-list entry (its payment, or its first re-buy, add-on or knockout) needs room in the field; a bust checks in eliminate.
-    await assertRoomToAccept(tx, tournament, current, {
-      ...current,
-      paymentConfirmed: input.paymentConfirmed ?? current.paymentConfirmed,
-      rebuys: input.rebuys ?? current.rebuys,
-      addons: input.addons ?? current.addons,
-      knockouts: input.knockouts ?? current.knockouts,
+  if (isClosed(tournament) && changed.some((field) => !EDITABLE_WHEN_CLOSED.has(field))) throw closedRefusal(tournament);
+  // After the game a payment is taken in (late reconciliation), never taken back: its prize pool is settled (round 9).
+  const takesBackPayment = changed.includes("paymentConfirmed") && input.paymentConfirmed === false;
+  if (takesBackPayment && isClosed(tournament)) {
+    throw conflict("TOURNAMENT_CLOSED", `${closedMessage(tournament)}, so a payment can no longer be taken back`);
+  }
+  if (input.eliminatedBy !== undefined && input.isEliminated !== true) {
+    throw badRequest("Send eliminatedBy only when eliminating a player (isEliminated: true)");
+  }
+  if (current.freeEntry && changed.includes("paymentConfirmed")) {
+    const name = playerName(await getPlayer(tx, current.playerId));
+    throw conflict("FREE_ENTRY", `${name} has a free entry: take it back to make it a normal unpaid entry`);
+  }
+  assertEliminationIntent(input, current, changed);
+
+  const added = {
+    buyIns: Math.max((input.buyIns ?? 0) - (current.buyIns ?? 0), 0),
+    rebuys: Math.max((input.rebuys ?? 0) - (current.rebuys ?? 0), 0),
+    addons: Math.max((input.addons ?? 0) - (current.addons ?? 0), 0),
+  };
+  const joinsHighHand = choice ? choice.joined.length > 0 : changed.includes("enteringHighHands") && input.enteringHighHands === true;
+  if (tournament.prizePoolLocked && (added.buyIns > 0 || added.rebuys > 0 || added.addons > 0 || joinsHighHand)) {
+    throw conflict("PRIZE_POOL_LOCKED", "Prize pool is locked. No rebuys, addons, or high hand entries allowed.");
+  }
+  const counts = { rebuys: current.rebuys ?? 0, addons: current.addons ?? 0 };
+  assertTopUpsAllowed(tournament, counts, { rebuys: input.rebuys ?? counts.rebuys, addons: input.addons ?? counts.addons });
+  if (!choice && joinsHighHand && !offersHighHand(money)) throw highHandNotAvailable();
+  if (choice && choice.leftWon.length > 0) {
+    const [highHandId] = choice.leftWon;
+    const name = playerName(await getPlayer(tx, current.playerId));
+    throw conflict("HIGH_HAND_WINNER", `${name} won ${highHandsNamed(money, [highHandId])}: take that award back before taking them out of it`, {
+      highHandId,
     });
-    // Ticking or unticking an entry moves the high-hand pot, which the awards already made must still
-    // fit. So does a payment taken back (only paid entries are in the pot; only while the game is open).
-    // A payment taken is never refused for it (highHandLeftByPayment), nor is any payment after the game.
-    const movesPot = changed.includes("enteringHighHands") || takesBackPayment;
-    const potBefore = movesPot ? await registrationsRepo.registrationsOf(tx, tournament.id) : undefined;
-
-    const highHand = await highHandChange(tx, locked, input, changed);
-    // Absent fields stay undefined, which drizzle leaves out of the UPDATE.
-    const fields: RegistrationChanges = {
-      buyIns: input.buyIns,
-      rebuys: input.rebuys,
-      addons: input.addons,
-      knockouts: input.knockouts,
-      enteringHighHands: input.enteringHighHands,
-      paymentConfirmed: input.paymentConfirmed,
-      // A payment taken back takes how it was paid with it (round 8).
-      paidBy: takesBackPayment ? null : undefined,
-      highHandWinner: input.highHandWinner,
-      highHandAmount: highHand.amount,
-    };
-
-    let updated: TournamentRegistration;
-    if (changed.includes("isEliminated")) {
-      updated = input.isEliminated
-        ? (await eliminate(tx, locked, input.eliminatedBy ?? null, { otherChanges: fields })).eliminated
-        : await restore(tx, locked, fields);
-    } else if (Object.values(fields).some((value) => value !== undefined)) {
-      const row = await registrationsRepo.updateTournamentRegistration(tx, current.id, fields);
-      if (!row) throw notFound("Registration not found");
-      updated = row;
-    } else {
-      updated = current;
-    }
-    if (potBefore) {
-      const potAfter = await registrationsRepo.registrationsOf(tx, tournament.id);
-      assertHighHandAwardsFit({ tournament, registrations: potBefore }, { tournament, registrations: potAfter });
-    }
-    // Fewer entries, or a payment taken back, lowers the gross a manual AP total must stay within.
-    const lowered = takesBackPayment || (["buyIns", "rebuys", "addons"] as const).some((field) => (input[field] ?? Infinity) < (current[field] ?? 0));
-    if (lowered) await assertApStillWithinGross(tx, tournament, await registrationsRepo.registrationsOf(tx, tournament.id));
-
-    const player = await getPlayer(tx, current.playerId);
-    await logIncreases(tx, tournament, updated, player, added);
-    if (takesBackPayment) await recordCorrection(req, tx, { tournament, before: current, after: updated, player, change: "not_paid" });
-    if (changed.includes("enteringHighHands")) await recordCorrection(req, tx, { tournament, before: current, after: updated, player, change: "high_hand" });
-    if (changed.includes("highHandWinner") && input.highHandWinner === true) {
-      await logHighHand(tx, updated, player, highHand);
-    }
-    if (highHand.split) {
-      const { winner, shareCents, keepCents, prizesBefore } = highHand.split;
-      await recordAudit(
-        req,
-        {
-          action: "high_hand.split",
-          targetType: "tournament",
-          targetId: tournament.id,
-          data: {
-            registrationId: updated.id,
-            splitWithRegistrationId: winner.id,
-            shareCents,
-            keepCents,
-            highHandPayouts: { before: prizesBefore, after: prizesBefore + 1 },
-          },
-        },
-        tx,
-      );
-    }
-    return toManagedRegistration(updated, player, await currentWaitingList(tx, tournament));
+  }
+  // Accepting a waiting-list entry (its payment, or its first re-buy, add-on or knockout) needs room in the field; a bust checks in eliminate.
+  await assertRoomToAccept(tx, tournament, current, {
+    ...current,
+    paymentConfirmed: input.paymentConfirmed ?? current.paymentConfirmed,
+    rebuys: input.rebuys ?? current.rebuys,
+    addons: input.addons ?? current.addons,
+    knockouts: input.knockouts ?? current.knockouts,
   });
+  // Ticking or unticking an entry moves a high-hand pot, which the awards already made must still
+  // fit. So does a payment taken back (only paid entries are in a pot; only while the game is open).
+  // A payment taken is never refused for it (highHandsLeftByPayment), nor is any payment after the game.
+  const movesPot = choice !== null || changed.includes("enteringHighHands") || takesBackPayment;
+  const potBefore = movesPot ? registrationsWithHighHands(store, await registrationsRepo.registrationsOf(tx, tournament.id)) : undefined;
+
+  const highHand = await highHandChange(tx, locked, input, changed);
+  // Absent fields stay undefined, which drizzle leaves out of the UPDATE.
+  const fields: RegistrationChanges = {
+    buyIns: input.buyIns,
+    rebuys: input.rebuys,
+    addons: input.addons,
+    knockouts: input.knockouts,
+    // A tournament that lists its high hands keeps the flag as their summary: in any.
+    enteringHighHands: choice ? choice.after.length > 0 : input.enteringHighHands,
+    paymentConfirmed: input.paymentConfirmed,
+    // A payment taken back takes how it was paid with it (round 8).
+    paidBy: takesBackPayment ? null : undefined,
+    highHandWinner: input.highHandWinner,
+    highHandAmount: highHand.amount,
+  };
+
+  let updated: TournamentRegistration;
+  if (changed.includes("isEliminated")) {
+    updated = input.isEliminated
+      ? (await eliminate(tx, locked, input.eliminatedBy ?? null, { otherChanges: fields })).eliminated
+      : await restore(tx, locked, fields);
+  } else if (Object.values(fields).some((value) => value !== undefined)) {
+    const row = await registrationsRepo.updateTournamentRegistration(tx, current.id, fields);
+    if (!row) throw notFound("Registration not found");
+    updated = row;
+  } else {
+    updated = current;
+  }
+  if (choice) {
+    await deleteEntrants(tx, current.id, choice.left);
+    await insertEntrants(tx, tournament.id, choice.joined.map((highHandId) => ({ registrationId: current.id, highHandId })));
+  }
+  const storeAfter = choice ? await loadHighHandStore(tx, tournament.id) : store;
+  if (potBefore) {
+    const potAfter = registrationsWithHighHands(storeAfter, await registrationsRepo.registrationsOf(tx, tournament.id));
+    assertHighHandAwardsFit({ tournament: money, registrations: potBefore }, { tournament: money, registrations: potAfter });
+  }
+  // Fewer entries, or a payment taken back, lowers the gross a manual AP total must stay within.
+  const lowered = takesBackPayment || (["buyIns", "rebuys", "addons"] as const).some((field) => (input[field] ?? Infinity) < (current[field] ?? 0));
+  if (lowered) await assertApStillWithinGross(tx, tournament, await registrationsRepo.registrationsOf(tx, tournament.id));
+
+  const player = await getPlayer(tx, current.playerId);
+  await logIncreases(tx, tournament, updated, player, added);
+  const listed = listsHighHands(money) ? { tournament: money, before: entry.highHandIds, after: choice?.after ?? entry.highHandIds } : undefined;
+  if (takesBackPayment) await recordCorrection(req, tx, { tournament, before: current, after: updated, player, change: "not_paid", listed });
+  if (choice || changed.includes("enteringHighHands")) {
+    await recordCorrection(req, tx, { tournament, before: current, after: updated, player, change: "high_hand", listed });
+  }
+  if (changed.includes("highHandWinner") && input.highHandWinner === true) {
+    await logHighHand(tx, updated, player, highHand);
+  }
+  if (highHand.split) {
+    const { winner, shareCents, keepCents, prizesBefore } = highHand.split;
+    await recordAudit(
+      req,
+      {
+        action: "high_hand.split",
+        targetType: "tournament",
+        targetId: tournament.id,
+        data: {
+          registrationId: updated.id,
+          splitWithRegistrationId: winner.id,
+          shareCents,
+          keepCents,
+          highHandPayouts: { before: prizesBefore, after: prizesBefore + 1 },
+        },
+      },
+      tx,
+    );
+  }
+  return toManagedRegistration(withEntryHighHands(storeAfter, updated), player, await currentWaitingList(tx, tournament));
 }
 
 async function logHighHand(tx: Transaction, updated: TournamentRegistration, player: Player | undefined, change: HighHandChange) {
@@ -865,7 +1011,9 @@ export async function removeRegistration(req: Request, registrationId: string): 
     const locked = await lockRegistrationById(tx, registrationId);
     const { tournament, registration } = locked;
     if (isClosed(tournament)) throw closedRefusal(tournament);
-    const before = await registrationsRepo.registrationsOf(tx, tournament.id);
+    const store = await loadHighHandStore(tx, tournament.id);
+    const money = withHighHands(tournament, store);
+    const before = registrationsWithHighHands(store, await registrationsRepo.registrationsOf(tx, tournament.id));
     const problem = registrationRemovalProblem(registration, before);
     if (problem) {
       throw conflict(
@@ -876,7 +1024,7 @@ export async function removeRegistration(req: Request, registrationId: string): 
 
     await registrationsRepo.deleteTournamentRegistration(tx, registration.id);
     const after = before.filter((r) => r.id !== registration.id);
-    assertHighHandAwardsFit({ tournament, registrations: before }, { tournament, registrations: after });
+    assertHighHandAwardsFit({ tournament: money, registrations: before }, { tournament: money, registrations: after });
     await assertApStillWithinGross(tx, tournament, after);
     const requestsRemoved = await deletePendingActionsForPlayer(tx, tournament.id, registration.playerId);
     const player = await getPlayer(tx, registration.playerId);
@@ -899,22 +1047,36 @@ export async function adjustCounts(registrationId: string, deltas: AdjustCountsI
   return db.transaction(async (tx) => {
     const locked = await lockRegistrationById(tx, registrationId);
     const updated = await applyCountChange(tx, locked, deltas);
-    return toManagedRegistration(updated, await getPlayer(tx, updated.playerId));
+    return toManagedRegistration(await loadEntryHighHands(tx, updated), await getPlayer(tx, updated.playerId));
   });
 }
 
+/** What a payment left unawarded: in all (highHandUnawardedCents), and pot by pot (round 10, highHandsUnawarded). */
+interface LeftByPayment {
+  highHandUnawardedCents: Cents;
+  highHandsUnawarded: Array<{ highHandId: string; name: string; cents: Cents }>;
+}
+
+const NOTHING_LEFT: LeftByPayment = { highHandUnawardedCents: 0, highHandsUnawarded: [] };
+
 /**
- * What a payment just taken left of the high-hand pot that no award pays (unawardedHighHandCents): a
- * paid entry adds to the pot (round 6), and once every prize is awarded nobody is due the rest until
- * the TD adds it to a winner's prize. A payment is money the desk has taken, so it is never refused
- * for the side pot (R6REV0-MONEY-01); after the game the high hand is paid out, so nothing is left.
+ * What a payment just taken left of the entry's high-hand pots that no award pays (unawardedHighHandCents,
+ * one pot at a time): a paid entry adds to each pot it is in (round 6), and once a pot's every prize is
+ * awarded nobody is due the rest until the TD adds it to a winner's prize. A payment is money the desk
+ * has taken, so it is never refused for a side pot (R6REV0-MONEY-01); after the game the high hands are
+ * paid out, so nothing is left.
  */
-async function highHandLeftByPayment(tx: Transaction, tournament: Tournament): Promise<Cents> {
-  if (isClosed(tournament) || !offersHighHand(tournament)) return 0;
-  const registrations = await registrationsRepo.registrationsOf(tx, tournament.id);
-  const { highHand } = computePrizePool(tournament, registrations);
-  const awarded = registrations.filter((r) => r.highHandWinner === true).map((r) => toCents(r.highHandAmount));
-  return unawardedHighHandCents(highHand, awarded);
+async function highHandsLeftByPayment(tx: Transaction, tournament: Tournament, registrationId: string): Promise<LeftByPayment> {
+  if (isClosed(tournament)) return NOTHING_LEFT;
+  const money = await loadMoneyState(tx, tournament);
+  const entry = money.registrations.find((registration) => registration.id === registrationId);
+  const own = new Set(entry ? highHandIdsOf(money.tournament, entry) : []);
+  if (own.size === 0) return NOTHING_LEFT;
+  const pots = computePrizePool(money.tournament, money.registrations).highHands;
+  const highHandsUnawarded = highHandStandings(pots, highHandAwardsOf(money.tournament, money.registrations))
+    .filter((standing) => own.has(standing.pot.highHandId) && standing.unawardedCents > 0)
+    .map(({ pot, unawardedCents }) => ({ highHandId: pot.highHandId, name: pot.name, cents: unawardedCents }));
+  return { highHandUnawardedCents: highHandsUnawarded.reduce((sum, pot) => sum + pot.cents, 0), highHandsUnawarded };
 }
 
 /**
@@ -940,12 +1102,18 @@ export async function confirmPayment(req: Request, registrationId: string, input
       (input.paidBy && registration.freeEntry !== true && registration.paidBy !== input.paidBy
         ? await registrationsRepo.updateTournamentRegistration(tx, registration.id, { paidBy: input.paidBy })
         : undefined);
-    if (!confirmed && recorded) await recordCorrection(req, tx, { tournament, before: registration, after: recorded, player, change: "paid_by" });
+    const store = await loadHighHandStore(tx, tournament.id);
+    const money = withHighHands(tournament, store);
+    if (!confirmed && recorded) {
+      const { highHandIds } = withEntryHighHands(store, registration);
+      const listed = listsHighHands(money) ? { tournament: money, before: highHandIds, after: highHandIds } : undefined;
+      await recordCorrection(req, tx, { tournament, before: registration, after: recorded, player, change: "paid_by", listed });
+    }
     // Round 5: a player waiting for their payment (or behind a full field) sits down as it is confirmed.
     const seating = confirmed && !isClosed(tournament) ? await autoSeatOnPayment(tx, tournament, registration.id) : null;
-    const highHandUnawardedCents = confirmed && registration.enteringHighHands ? await highHandLeftByPayment(tx, tournament) : 0;
+    const left = confirmed ? await highHandsLeftByPayment(tx, tournament, registration.id) : NOTHING_LEFT;
     // Accepted: in the field, never on the waiting list.
-    return { ...toManagedRegistration(recorded ?? registration, player, new Map()), seating, highHandUnawardedCents };
+    return { ...toManagedRegistration(withEntryHighHands(store, recorded ?? registration), player, new Map()), seating, ...left };
   });
 }
 
@@ -954,19 +1122,30 @@ export async function confirmPayment(req: Request, registrationId: string, input
 
 type Correction = AuditData["registration.correct"]["change"];
 
-/** The fields a correction can change, as the audit row keeps them. */
-const correctedFields = (registration: TournamentRegistration) => ({
+/** The fields a correction can change, as the audit row keeps them; round 10, which listed high hands the entry is in. */
+const correctedFields = (registration: TournamentRegistration, highHandIds?: readonly string[]) => ({
   paymentConfirmed: registration.paymentConfirmed === true,
   paidBy: registration.paidBy ?? null,
   enteringHighHands: registration.enteringHighHands === true,
+  ...(highHandIds ? { highHandIds: [...highHandIds] } : {}),
 });
+
+/** A correction to an entry of a tournament that lists its high hands (round 10): which ones it was and is in. */
+interface ListedCorrection {
+  tournament: TournamentWithHighHands;
+  before: readonly string[];
+  after: readonly string[];
+}
 
 /** How a payment was made, as the feed says it: "bank transfer". */
 const paidByWords = (paidBy: string | null) => (isPaidBy(paidBy) ? PAID_BY_LABELS[paidBy].toLowerCase() : null);
 
 /** The feed's words for a correction: what changed, never a phone number or an amount (the feed is the staff's, the audit row has the rest). */
-function correctionText(change: Correction, name: string, before: TournamentRegistration, after: TournamentRegistration): string {
+function correctionText(change: Correction, name: string, before: TournamentRegistration, after: TournamentRegistration, listed?: ListedCorrection): string {
   if (change === "not_paid") return `${name}'s payment was taken back: not paid yet`;
+  if (change === "high_hand" && listed) {
+    return listed.after.length > 0 ? `${name} is now in ${highHandsNamed(listed.tournament, listed.after)}` : `${name} is no longer in any high hand`;
+  }
   if (change === "high_hand") return after.enteringHighHands ? `${name} is now in the high hand` : `${name} is no longer in the high hand`;
   const was = paidByWords(before.paidBy);
   const now = paidByWords(after.paidBy) ?? "not recorded";
@@ -976,22 +1155,36 @@ function correctionText(change: Correction, name: string, before: TournamentRegi
 /**
  * A staff Fix to an entry (round 9): its payment taken back, how it paid, or its high-hand entry. A
  * staff-only feed entry ("entry_corrected", `eventData.correction` naming the change) and an audit row
- * with the entry as it was and is, in the change's transaction.
+ * with the entry as it was and is, in the change's transaction. For a tournament that lists its high
+ * hands (round 10: `listed`), the audit row has which ones the entry was and is in.
  */
 async function recordCorrection(
   req: Request,
   tx: Transaction,
-  { tournament, before, after, player, change }: { tournament: Tournament; before: TournamentRegistration; after: TournamentRegistration; player: Player | undefined; change: Correction },
+  {
+    tournament,
+    before,
+    after,
+    player,
+    change,
+    listed,
+  }: { tournament: Tournament; before: TournamentRegistration; after: TournamentRegistration; player: Player | undefined; change: Correction; listed?: ListedCorrection },
 ): Promise<void> {
   const name = playerName(player);
-  await logActivity(tx, after, "entry_corrected", correctionText(change, name, before, after), { correction: change });
+  await logActivity(tx, after, "entry_corrected", correctionText(change, name, before, after, listed), { correction: change });
   await recordAudit(
     req,
     {
       action: "registration.correct",
       targetType: "registration",
       targetId: after.id,
-      data: { tournamentId: tournament.id, playerName: name, change, before: correctedFields(before), after: correctedFields(after) },
+      data: {
+        tournamentId: tournament.id,
+        playerName: name,
+        change,
+        before: correctedFields(before, listed?.before),
+        after: correctedFields(after, listed?.after),
+      },
     },
     tx,
   );
@@ -1098,8 +1291,9 @@ export async function changeFreeEntry(req: Request, registrationId: string, inpu
       throw conflict("NOT_FREE_ENTRY", `${playerName(player)} does not have a free entry`);
     }
     const accepting = current.paymentConfirmed !== true && input.action === "give";
+    const store = await loadHighHandStore(tx, tournament.id);
     if (input.action === "give" && sameFreeEntry(current, input)) {
-      return { ...toManagedRegistration(current, player, await currentWaitingList(tx, tournament)), seating: null, highHandUnawardedCents: 0 };
+      return { ...toManagedRegistration(withEntryHighHands(store, current), player, await currentWaitingList(tx, tournament)), seating: null, ...NOTHING_LEFT };
     }
     if (accepting) await assertRoomToAccept(tx, tournament, current, { ...current, paymentConfirmed: true });
 
@@ -1109,19 +1303,22 @@ export async function changeFreeEntry(req: Request, registrationId: string, inpu
       input.action === "give"
         ? freeEntryColumns(req, input)
         : { ...NO_FREE_ENTRY, paymentConfirmed: input.action === "mark_paid", paidBy: input.action === "mark_paid" ? (input.paidBy ?? null) : null };
-    // Taken back, the entry is unpaid: its high-hand entry leaves the pot, which the awards made must still fit (as for a payment taken back).
+    // Taken back, the entry is unpaid: it leaves its high-hand pots, whose awards must still fit them (as for a payment taken back).
+    const money = withHighHands(tournament, store);
     const movesPot = change === "taken_back" && current.enteringHighHands === true && !isClosed(tournament);
-    const potBefore = movesPot ? await registrationsRepo.registrationsOf(tx, tournament.id) : undefined;
+    const potBefore = movesPot ? registrationsWithHighHands(store, await registrationsRepo.registrationsOf(tx, tournament.id)) : undefined;
     const updated = await registrationsRepo.updateTournamentRegistration(tx, current.id, fields);
     if (!updated) throw notFound("Registration not found");
     const everyone = await registrationsRepo.registrationsOf(tx, tournament.id);
-    if (potBefore) assertHighHandAwardsFit({ tournament, registrations: potBefore }, { tournament, registrations: everyone });
+    if (potBefore) {
+      assertHighHandAwardsFit({ tournament: money, registrations: potBefore }, { tournament: money, registrations: registrationsWithHighHands(store, everyone) });
+    }
     // A free entry's buy-in (unless funded) is not in the gross, nor an unpaid entry's money: a manual AP total must stay within it.
     await assertApStillWithinGross(tx, tournament, everyone);
 
     await recordFreeEntry(req, tx, { tournament, before: current, after: updated, player, change });
     const seating = accepting && !isClosed(tournament) ? await autoSeatOnPayment(tx, tournament, updated.id) : null;
-    const highHandUnawardedCents = accepting && updated.enteringHighHands ? await highHandLeftByPayment(tx, tournament) : 0;
-    return { ...toManagedRegistration(updated, player, waitingListOf(tournament, everyone)), seating, highHandUnawardedCents };
+    const left = accepting ? await highHandsLeftByPayment(tx, tournament, updated.id) : NOTHING_LEFT;
+    return { ...toManagedRegistration(withEntryHighHands(store, updated), player, waitingListOf(tournament, everyone)), seating, ...left };
   });
 }

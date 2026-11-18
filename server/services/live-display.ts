@@ -19,7 +19,7 @@ import {
 import { toPublicPrizes, type LiveDisplayDto, type PublicSeasonLeaderboardDto } from "@shared/api/live-display";
 import { isBlindPresetKey } from "@shared/domain/blind-structures";
 import { CLOCK_LIMITS, computeChipStats, normalizeClock, structureHash, undoAvailable } from "@shared/domain/clock";
-import { offersAddons, offersRebuys } from "@shared/domain/player-actions";
+import { offersAddons, offersHighHand, offersRebuys } from "@shared/domain/player-actions";
 import { rakeLabel } from "@shared/domain/prize-pool";
 import { readTheme } from "@shared/domain/theme";
 import { publicPaths } from "@shared/domain/urls";
@@ -31,10 +31,10 @@ import { notFound } from "../http/errors";
 import { clockStateOf, clockStructureOf, clockUndoOf, countActiveTables, getClock, seasonTournamentCounts } from "../repositories/clock";
 import { getClub } from "../repositories/clubs";
 import { seasonLeaderboard } from "../repositories/leaderboard";
-import { registrationsOf } from "../repositories/registrations";
 import { getSeason } from "../repositories/seasons";
 import { getTournament } from "../repositories/tournaments";
 import { carriesClockKey, clockKeyExpiry, clockKeyInForce } from "./clock-key";
+import { loadMoneyState } from "./high-hands";
 import { isClosed, tournamentStatusOf } from "./tournament-views";
 
 /** What Undo would do at `nowMs`, or null when nothing can be undone (none stored, or it lapsed). */
@@ -158,8 +158,8 @@ async function clockKeyView(
 export async function liveDisplay(req: Request, id: string): Promise<LiveDisplayDto> {
   const tournament = await getTournament(db, id);
   if (!tournament) throw notFound("Tournament not found");
-  const [registrations, club, clock, season, activeTables, viewer] = await Promise.all([
-    registrationsOf(db, id),
+  const [money, club, clock, season, activeTables, viewer] = await Promise.all([
+    loadMoneyState(db, tournament),
     getClub(db, tournament.clubId),
     getClock(db, id),
     tournament.seasonId ? getSeason(db, tournament.seasonId) : undefined,
@@ -171,8 +171,8 @@ export async function liveDisplay(req: Request, id: string): Promise<LiveDisplay
   const settings = clock ? resolveDisplaySettings(clock.displaySettings) : DEFAULT_DISPLAY_SETTINGS;
   // The prize money as the public page has it (server/services/public-prizes: paid players only, as
   // finalize pays). The TV shows places and amounts, never who won them.
-  const prizes = toPublicPrizes(tournament, registrations);
-  const field = fieldStats(tournament, registrations);
+  const prizes = toPublicPrizes(money.tournament, money.registrations);
+  const field = fieldStats(tournament, money.registrations);
   // Counted for the TV only when it shows them: the chips in play, the average stack, or both, each on its own switch.
   const chips =
     clock && (settings.showAverageStack || settings.showChipsInPlay)
@@ -216,6 +216,9 @@ export async function liveDisplay(req: Request, id: string): Promise<LiveDisplay
       netCents: show ? prizes.poolCents : null,
       payouts: show && settings.showPayouts ? prizes.payouts.map(({ position, amountCents }) => ({ position, amountCents })) : null,
       carriedIn: show ? prizes.carriedIn : null,
+      // Round 10: each pot by name, what its winners share (never the AP), when the TD shows them; not an estimate of the prizes, so apart from `show`.
+      highHands:
+        settings.showHighHands && offersHighHand(money.tournament) ? prizes.highHands.map(({ id, name, potCents }) => ({ id, name, potCents })) : null,
     },
     qr: qrTargetOf(settings.qrTarget, tournament.id, season ?? null),
     // The TV changes its own settings on the clock key too (PATCH …/clock/display allows the screen's own ones).

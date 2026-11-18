@@ -45,6 +45,9 @@ export type PrizePoolAdjustmentInput = z.infer<typeof prizePoolAdjustmentSchema>
  * fixed rate above the price of its entry is 400 AMOUNT_OVER_PRICE (details: { field }), since the
  * prize pool would go below zero.
  * "none" stores amount "0.00". Unless keepOverride, the AP override is cleared (the manual pool is not).
+ * Round 10: the high-hand pair is the legacy high hand's; for a tournament that lists its high hands a
+ * change to it is 409 HIGH_HAND_LISTED (each listed high hand's AP is set with the list: PUT
+ * /api/tournaments/:id/high-hands), and a value resent unchanged is ignored.
  */
 export const rakeRatesSchema = z
   .object({
@@ -150,7 +153,10 @@ export interface PayoutDisplayDto {
  * GET /api/tournaments/:id/prize-pool (the club's staff, round 6: it carries the AP and what the club
  * keeps; the public page reads GET /api/public/tournaments/:id/prizes), and part of every money response. Computed on the
  * server by shared/domain/prize-pool; a client that computes locally must use the same functions.
- * `breakdown` is always the live calculation; `display` is what to show as the payouts. Only accepted
+ * `breakdown` is always the live calculation; `display` is what to show as the payouts. Round 10:
+ * `breakdown.highHands` has each high hand's pot (with its AP: staff only), and the client works out
+ * each pot's awards from the registrations (shared/domain/high-hands highHandAwardsOf,
+ * highHandStandings). Only accepted
  * players' entries are in either (round 6, poolEntries: `breakdown.counts.registrations` is how many
  * paid or were given a free entry, round 7), except for a tournament completed before snapshots, shown
  * as it was paid.

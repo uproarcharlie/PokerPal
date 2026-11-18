@@ -112,6 +112,7 @@ describe("display settings", () => {
       showChipsInPlay: false,
       showTables: false,
       showRebuyWindow: false,
+      showHighHands: false,
       soundVolume: 0.8,
       soundMinute: true,
       soundCountdown: true,

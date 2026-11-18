@@ -789,7 +789,8 @@ describe("PublicRegisterPage: high hands and the total", () => {
 
     expect(await screen.findByTestId("amount-due")).toHaveTextContent("$70.00");
     expect(screen.getByTestId("amount-due").nextElementSibling).toHaveTextContent("Buy-in: $50.00 + High Hands: $20.00");
-    expect(registered).toEqual({ playerId: "p3", enteringHighHands: true });
+    // Round 10: the high hand by its id ("legacy": the game's one high hand of before), with the flag as before.
+    expect(registered).toEqual({ playerId: "p3", enteringHighHands: true, highHandIds: ["legacy"] });
   });
 
   it.each([

@@ -1,6 +1,6 @@
 import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
-import type { Cents } from "@shared/domain/money";
+import type { HighHandAward } from "@shared/domain/high-hands";
 import { isClosedStatus } from "@shared/domain/tournaments";
 import { lineupOf } from "@/features/public-tournament/waiting-list";
 import { TabHost } from "@/components/shared/tab-host";
@@ -37,7 +37,7 @@ interface DeskTabsProps {
   money: TournamentMoney;
   rakeLabel: string;
   timeZone: string;
-  highHandAwardsCents: readonly Cents[];
+  highHandAwards: readonly HighHandAward[];
   waitingRequests: WaitingCount;
   tab: DeskTab;
   onTabChange: (tab: DeskTab) => void;
@@ -58,7 +58,7 @@ export function DeskTabs({
   money,
   rakeLabel,
   timeZone,
-  highHandAwardsCents,
+  highHandAwards,
   waitingRequests,
   tab,
   onTabChange,
@@ -83,7 +83,7 @@ export function DeskTabs({
               money={money}
               entrants={lineupOf(registrations, tournament.maxPlayers).field.length}
               rakeLabel={rakeLabel}
-              highHandAwardsCents={highHandAwardsCents}
+              highHandAwards={highHandAwards}
               timeZone={timeZone}
             />
           ),

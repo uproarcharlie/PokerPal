@@ -21,6 +21,7 @@ import { liveRegistrationsInterval, liveTournamentInterval } from "@/lib/live-re
 import { cn } from "@/lib/utils";
 import type { PublicRegistration } from "@shared/api/public";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
+import { highHandsOf } from "@shared/domain/high-hands";
 import { toCents } from "@shared/domain/money";
 import { rakeLabel } from "@shared/domain/prize-pool";
 import { isClosedStatus } from "@shared/domain/tournaments";
@@ -224,6 +225,7 @@ function TournamentDesk({ tournament, registrations }: TournamentDeskProps) {
         tournamentId={tournament.id}
         buyInCents={toCents(tournament.buyInAmount)}
         rakeLabel={rakeLabel(club.data)}
+        highHands={highHandsOf(tournament)}
         onOpenSeating={() => setTab("seating")}
         returnFocusTo={phone ? quickActions : undefined}
         {...dialogs.propsFor("register")}

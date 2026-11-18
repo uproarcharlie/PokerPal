@@ -134,18 +134,17 @@ describe("the tournament form's bank transfer switch", () => {
     expect(sent[0]).toMatchObject({ clubId: "c2", showBankTransfer: false });
   });
 
-  it("sits in a Payments part of its own, never between the high hand's box and its settings (R8REV1-PHONE-04)", async () => {
+  it("sits in a Payments part of its own, after the high hands and never among them (R8REV1-PHONE-04)", async () => {
     mockForm(DETAILS);
     const user = await openCreate();
 
-    await user.click(screen.getByTestId("enable-high-hand"));
-    const fee = await screen.findByTestId("high-hand-amount");
+    await user.click(screen.getByTestId("add-high-hand"));
+    const fee = await screen.findByTestId("high-hand-fee-0");
     const setting = screen.getByTestId("bank-transfer-setting");
     const follows = (earlier: Element, later: Element) => Boolean(earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING);
-    // The high hand's box, then its settings and its note, then the bank transfer switch.
-    expect(follows(screen.getByTestId("enable-high-hand"), fee)).toBe(true);
+    // The high hands' part, with each one's settings, then the bank transfer switch.
     expect(follows(fee, setting)).toBe(true);
-    expect(follows(screen.getByText("High Hand Bonus:"), setting)).toBe(true);
+    expect(within(fee.closest("section") as HTMLElement).getByRole("heading", { level: 3 })).toHaveTextContent("High hands");
     expect(within(setting.closest("section") as HTMLElement).getByRole("heading", { level: 3 })).toHaveTextContent("Payments");
     expect(within(fee.closest("section") as HTMLElement).queryByTestId("bank-transfer-setting")).not.toBeInTheDocument();
   });

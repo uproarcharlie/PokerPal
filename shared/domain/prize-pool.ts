@@ -34,8 +34,31 @@ import {
   type PayoutAlgorithm,
   type ResolvedPayoutStructure,
 } from "./payouts";
+import {
+  combinedHighHand,
+  highHandFeesCents,
+  highHandIdsOf,
+  highHandPots,
+  listsHighHands,
+  type HighHandBreakdown,
+  type HighHandEntryInput,
+  type HighHandPot,
+  type HighHandSettings,
+} from "./high-hands";
 import { carriedInCents, readCarriedIn, settleDifference, type CarriedIn, type LegacyDifference, type PrizeDifference } from "./prize-difference";
 import { fieldEntries, type WaitingListEntry } from "./waiting-list";
+
+// The high-hand award rules moved to ./high-hands in round 10 (one copy for every pot); still exported from here.
+export {
+  HIGH_HAND_PRIZES_MAX,
+  highHandAwardsProblem,
+  nextHighHandAward,
+  splitHighHandAward,
+  unawardedHighHandCents,
+  type HighHandAwardsProblem,
+  type HighHandBreakdown,
+  type HighHandPot,
+} from "./high-hands";
 
 export const DEFAULT_RAKE_LABEL = "Rake";
 
@@ -59,11 +82,19 @@ export interface PrizePoolInput {
   manualPrizePool?: MoneyInput;
   /** Manual AP total: replaces the buy-in, re-buy and add-on AP together, and does not grow with entries. */
   rakeOverride?: MoneyInput;
+  /** The legacy high hand is a pot only while it is switched on with a fee (./high-hands offersLegacyHighHand). */
+  enableHighHand?: boolean | null;
   highHandAmount?: MoneyInput;
   /** "percentage" of the pot, or "fixed" (one flat amount). Anything else takes nothing. */
   highHandRakeType?: string | null;
   highHandRakeAmount?: MoneyInput;
   highHandPayouts?: number | null;
+  /**
+   * Round 10: the high hands the tournament lists (tournament_high_hands), or null/absent when its one
+   * high hand, if any, is the legacy columns above (shared/domain/high-hands). Only the high-hand pots
+   * read it; the prize pool never holds high-hand money.
+   */
+  highHands?: readonly HighHandSettings[] | null;
   /** Round 5 (item 15): who is on the waiting list behind a full field (unpaidEntries leaves them out). */
   maxPlayers?: number | null;
   /** Round 5 (item 16): money carried over into this pool from earlier tournaments (tournaments.carried_in). */
@@ -78,10 +109,11 @@ export interface PrizePoolInput {
  * One registration's entries. A null count counts as 0, as it does today. The waiting list (round 5)
  * reads the rest: a registration row, or a registration as the API lists it, fits as it is.
  */
-export interface EntryInput extends WaitingListEntry {
+export interface EntryInput extends WaitingListEntry, HighHandEntryInput {
   buyIns?: number | null;
   rebuys?: number | null;
   addons?: number | null;
+  /** In the legacy high hand; for a tournament that lists its high hands, `highHandIds` say which (./high-hands). */
   enteringHighHands?: boolean | null;
   /** Round 7 (item 6): given a free entry. Its buy-ins bring in nothing; it is accepted as a paid entry is. */
   freeEntry?: boolean | null;
@@ -100,6 +132,7 @@ export interface EntryCounts {
   buyIns: number;
   rebuys: number;
   addons: number;
+  /** The registrations in a high hand: the legacy one, or (round 10) any of those listed. */
   highHandEntrants: number;
   /** Round 7: how many of the registrations have a free entry. */
   freeEntries: number;
@@ -141,15 +174,6 @@ export interface RakeBreakdown {
   applied: Cents;
 }
 
-export interface HighHandBreakdown {
-  entrants: number;
-  gross: Cents;
-  rake: Cents;
-  net: Cents;
-  /** How many prizes the pot is split into; what each winner gets is nextHighHandAward's. */
-  winners: number;
-}
-
 export interface PrizePoolBreakdown {
   algorithm: PayoutAlgorithm;
   counts: EntryCounts;
@@ -189,7 +213,19 @@ export interface PrizePoolBreakdown {
   /** Money carried over into this pool from earlier tournaments, each named. */
   carriedIn: CarriedIn[];
   carriedInCents: Cents;
+  /**
+   * The high-hand money: for a tournament that keeps its one high hand in its legacy columns, that
+   * high hand's pot, exactly as before round 10; for one that lists its high hands, the pots added
+   * together (combinedHighHand: the entries in any of them, their money and prizes summed) for screens
+   * that show one figure. Awards are made from `highHands`, one pot at a time.
+   */
   highHand: HighHandBreakdown;
+  /**
+   * Round 10: each high hand's pot, in order (./high-hands highHandPots): the legacy one (id
+   * LEGACY_HIGH_HAND_ID, the same figures as `highHand`) when the tournament offers it, or those it
+   * lists. Empty without a high hand. Its `rake` is staff-only, like the AP.
+   */
+  highHands: HighHandPot[];
 }
 
 /** Whether the TD has confirmed the entry's payment at the desk: only then is its money in the prize pool. */
@@ -259,8 +295,8 @@ export function unpaidEntries<T extends EntryInput>(tournament: Pick<PrizePoolIn
  * re-price, since the desk asks every player for their entries at today's prices and the pool counts
  * each one once paid. The prize pool itself counts only accepted entries (computePrizePool's `counts`).
  */
-export function recordedEntryCounts(tournament: Pick<PrizePoolInput, "maxPlayers">, entries: readonly EntryInput[]): EntryCounts {
-  return countEntries(fieldEntries(entries, tournament.maxPlayers));
+export function recordedEntryCounts(tournament: Pick<PrizePoolInput, "maxPlayers" | "highHands">, entries: readonly EntryInput[]): EntryCounts {
+  return countEntries(tournament, fieldEntries(entries, tournament.maxPlayers));
 }
 
 /**
@@ -269,7 +305,8 @@ export function recordedEntryCounts(tournament: Pick<PrizePoolInput, "maxPlayers
  * club's payment for a funded one is added to the money available as it is.
  */
 export function computePrizePool(tournament: PrizePoolInput, entries: readonly EntryInput[]): PrizePoolBreakdown {
-  const counts = countEntries(poolEntries(tournament, entries));
+  const pool = poolEntries(tournament, entries);
+  const counts = countEntries(tournament, pool);
 
   const buyInPrice = toCents(tournament.buyInAmount);
   const paidBuyIns = counts.buyIns - counts.freeBuyIns;
@@ -299,6 +336,7 @@ export function computePrizePool(tournament: PrizePoolInput, entries: readonly E
   const { structure, payouts, net } = paidPlaces(resolved, prizesAsSet(setPool, resolved), counts.registrations);
   // A stored prize_difference (round 5) is not read: whatever the prizes leave is the club's (round 7).
   const difference = settleDifference(net, netAfterAp);
+  const highHands = highHandPots(tournament, pool);
 
   return {
     algorithm: PAYOUT_ALGORITHM,
@@ -316,7 +354,8 @@ export function computePrizePool(tournament: PrizePoolInput, entries: readonly E
     freeEntries,
     carriedIn,
     carriedInCents: carriedInTotal,
-    highHand: highHandCents(tournament, counts.highHandEntrants),
+    highHand: listsHighHands(tournament) ? combinedHighHand(highHands, counts.highHandEntrants) : highHandCents(tournament, counts.highHandEntrants),
+    highHands,
   };
 }
 
@@ -360,8 +399,10 @@ function paidPlaces(
 export interface PaymentDrop {
   /** Out of the prize pool, what the places pay: 0 when it is set by hand. */
   poolCents: Cents;
-  /** Out of the high-hand pot. */
+  /** Out of the high-hand money: the pot, or (round 10) every pot of the entry's together. */
   highHandCents: Cents;
+  /** Round 10: out of each high hand's pot that drops, in order ("the First half pot drops by $5"). */
+  highHands: Array<{ highHandId: string; name: string; cents: Cents }>;
   /** The prize pool as set by hand, which a payment taken back leaves as it is; null when it is worked out. */
   manualPoolCents: Cents | null;
 }
@@ -378,9 +419,14 @@ export function paymentDropCents(tournament: PrizePoolInput, entries: readonly (
     tournament,
     entries.map((entry) => (entry.id === registrationId ? { ...entry, paymentConfirmed: false } : entry)),
   );
+  const pots = new Map(after.highHands.map((pot) => [pot.highHandId, pot.net]));
   return {
     poolCents: before.net - after.net,
     highHandCents: before.highHand.net - after.highHand.net,
+    highHands: before.highHands.flatMap((pot) => {
+      const cents = pot.net - (pots.get(pot.highHandId) ?? pot.net);
+      return cents !== 0 ? [{ highHandId: pot.highHandId, name: pot.name, cents }] : [];
+    }),
     manualPoolCents: before.manualPrizePool,
   };
 }
@@ -396,8 +442,9 @@ export function unfilledPlacesCents(pool: Pick<PrizePoolBreakdown, "manualPrizeP
   return amounts.slice(pool.counts.registrations).reduce((sum, amount) => sum + amount, 0);
 }
 
-function countEntries(entries: readonly EntryInput[]): EntryCounts {
+function countEntries(tournament: Pick<PrizePoolInput, "highHands">, entries: readonly EntryInput[]): EntryCounts {
   const counts = { registrations: 0, buyIns: 0, rebuys: 0, addons: 0, highHandEntrants: 0, freeEntries: 0, fundedFreeEntries: 0, freeBuyIns: 0, fundedBuyIns: 0 };
+  const listed = listsHighHands(tournament);
   for (const entry of entries) {
     const registrations = entry.registrationCount ?? 1;
     const buyIns = entry.buyIns ?? 0;
@@ -405,7 +452,8 @@ function countEntries(entries: readonly EntryInput[]): EntryCounts {
     counts.buyIns += buyIns;
     counts.rebuys += entry.rebuys ?? 0;
     counts.addons += entry.addons ?? 0;
-    if (entry.enteringHighHands) counts.highHandEntrants += registrations;
+    // The legacy count is the flag, whether or not the high hand is on (as before round 10).
+    if (listed ? highHandIdsOf(tournament, entry).length > 0 : entry.enteringHighHands) counts.highHandEntrants += registrations;
     if (isFreeEntry(entry)) {
       counts.freeEntries += registrations;
       counts.freeBuyIns += buyIns;
@@ -420,19 +468,26 @@ function countEntries(entries: readonly EntryInput[]): EntryCounts {
 
 /**
  * What one registration owes (or paid): every buy-in, re-buy and add-on at the tournament's prices,
- * plus the high-hand entry when it entered the high hand (money-18). An entry counts in the high hand
- * exactly when the pot counts it (`enteringHighHands`), so the payment desk asks for what the pot holds.
- * A free entry (round 7) owes nothing for its buy-ins, only for the rest.
+ * plus its high-hand entry (money-18): the legacy high hand's fee when it entered it, or (round 10) the
+ * fees of the listed high hands it chose (./high-hands highHandFeesCents). An entry counts in a high
+ * hand exactly when its pot counts it, so the payment desk asks for what the pots hold. A free entry
+ * (round 7) owes nothing for its buy-ins, only for the rest. The high-hand fees are paid at the door
+ * (round 8: highHandsAtDoor names them).
  */
 export function amountDueCents(
-  tournament: Pick<PrizePoolInput, "buyInAmount" | "rebuyAmount" | "addonAmount" | "highHandAmount">,
+  tournament: Pick<PrizePoolInput, "buyInAmount" | "rebuyAmount" | "addonAmount" | "highHandAmount" | "highHands">,
   entry: EntryInput,
 ): Cents {
+  const highHand = listsHighHands(tournament)
+    ? highHandFeesCents(tournament, highHandIdsOf(tournament, entry))
+    : entry.enteringHighHands
+      ? toCents(tournament.highHandAmount)
+      : 0;
   return (
     (isFreeEntry(entry) ? 0 : toCents(tournament.buyInAmount) * (entry.buyIns ?? 0)) +
     toCents(tournament.rebuyAmount) * (entry.rebuys ?? 0) +
     toCents(tournament.addonAmount) * (entry.addons ?? 0) +
-    (entry.enteringHighHands ? toCents(tournament.highHandAmount) : 0)
+    highHand
   );
 }
 
@@ -442,75 +497,7 @@ function rakeCents(type: string | null | undefined, amount: MoneyInput, count: n
   return 0;
 }
 
-/**
- * The most high-hand prizes a tournament can have, ties included: one rule for what may be set and
- * what a tie may add, so a stored count is always one the API accepts back (CQ-P2-04).
- */
-export const HIGH_HAND_PRIZES_MAX = 20;
-
-/**
- * A tie for a high hand (TN2-04): a new winner shares the prize an earlier winner was awarded. The new
- * winner gets half, rounded down to the cent; the earlier winner keeps the rest (any odd cent), so the
- * two still add up to the original award. The one copy of the rule for the award dialog and the server.
- */
-export function splitHighHandAward(awardedCents: Cents): { shareCents: Cents; keepCents: Cents } {
-  const shareCents = Math.floor(Math.max(awardedCents, 0) / 2);
-  return { shareCents, keepCents: awardedCents - shareCents };
-}
-
-/**
- * The next high-hand award (MONEY-36): what is left of the pot after the awards already made, split
- * over the winners still to come and rounded down to the cent, the last winner taking everything left.
- * So however the pot grew between awards, the awards add up to the pot exactly. Null once every
- * prize has been awarded; 0 when nothing is left.
- */
-export function nextHighHandAward(highHand: Pick<HighHandBreakdown, "net" | "winners">, awardedCents: readonly Cents[]): Cents | null {
-  const winnersLeft = highHand.winners - awardedCents.length;
-  if (winnersLeft <= 0) return null;
-  const left = highHand.net - awardedCents.reduce((sum, amount) => sum + amount, 0);
-  if (left <= 0) return 0;
-  return winnersLeft === 1 ? left : Math.floor(left / winnersLeft);
-}
-
-/**
- * What of the high-hand pot no award pays once every prize has been awarded: money paid in after the
- * last award, such as a payment confirmed late (only paid entries are in the pot: round 6), which the TD
- * adds to a winner's prize (R6REV0-MONEY-01). 0 while prizes are still to come (nextHighHandAward gives
- * the rest out) and when the awards add up to the pot.
- */
-export function unawardedHighHandCents(highHand: Pick<HighHandBreakdown, "net" | "winners">, awardedCents: readonly Cents[]): Cents {
-  if (awardedCents.length === 0 || awardedCents.length < highHand.winners) return 0;
-  return Math.max(0, highHand.net - awardedCents.reduce((sum, amount) => sum + amount, 0));
-}
-
-export type HighHandAwardsProblem = {
-  /** HIGH_HAND_OVER_POOL: more awarded than the pot holds; HIGH_HAND_AWARDED: every prize is awarded, so the pot is spoken for. */
-  code: "HIGH_HAND_OVER_POOL" | "HIGH_HAND_AWARDED";
-  awardedCents: Cents;
-  potCents: Cents;
-};
-
-/**
- * Whether the high-hand awards already made still fit the pot after a change to it (an entry ticked
- * or unticked, the fee, its rake or the number of prizes): the awards may never add up to more than
- * the pot, there may never be more winners than prizes, and once every prize is awarded the awards
- * must add up to the pot exactly, so no money is left that nobody can win (MONEY-P2REV-05). Null when
- * they fit, or when nothing has been awarded yet.
- */
-export function highHandAwardsProblem(
-  highHand: Pick<HighHandBreakdown, "net" | "winners">,
-  awardedCents: readonly Cents[],
-): HighHandAwardsProblem | null {
-  if (awardedCents.length === 0) return null;
-  const awarded = awardedCents.reduce((sum, amount) => sum + amount, 0);
-  const pot = Math.max(highHand.net, 0);
-  if (awarded > pot) return { code: "HIGH_HAND_OVER_POOL", awardedCents: awarded, potCents: pot };
-  if (awardedCents.length > highHand.winners || (awardedCents.length === highHand.winners && awarded !== pot)) {
-    return { code: "HIGH_HAND_AWARDED", awardedCents: awarded, potCents: pot };
-  }
-  return null;
-}
-
+/** The legacy high hand's pot, as before round 10 (counted from the flag, whether or not the high hand is on). */
 function highHandCents(tournament: PrizePoolInput, entrants: number): HighHandBreakdown {
   const gross = entrants * toCents(tournament.highHandAmount);
   let rake = 0;

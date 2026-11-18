@@ -19,20 +19,42 @@ import {
   type PendingRegistrationDto,
   type StaffRegistrationDto,
 } from "@shared/api/registrations";
+import { highHandsAtDoor, highHandsOf, type HighHandsInput } from "@shared/domain/high-hands";
 import { isFreeEntry } from "@shared/domain/prize-pool";
 import { toCents, type Cents } from "@shared/domain/money";
 import { waitingListPlaceOf } from "@/features/public-tournament/waiting-list";
 import { playerName } from "../../player-name";
 import type { EntryFixes } from "../entry-fix/use-entry-fixes";
 import { FreeEntryBadge } from "../free-entry/free-entry-badge";
-import { transferSplit, type TransferDesk, type TransferSplit } from "./transfer-split";
+import { doorSentence, transferSplit, type TransferDesk, type TransferSplit } from "./transfer-split";
 
 /** A phone number for the player's own club; another club's player keeps theirs (ClubPlayer.canEdit). */
 const phoneOf = (registration: StaffRegistrationDto) =>
   registration.player?.canEdit === false ? "Other club" : registration.player?.phone || "N/A";
 
-function HighHands({ entering }: { entering: boolean | null }) {
-  return entering ? (
+/**
+ * Whether the entry is in the high hand; in a game with several (round 10), the ones it chose, each a
+ * badge ("First half").
+ */
+function HighHands({ registration, tournament }: { registration: StaffRegistrationDto; tournament?: HighHandsInput }) {
+  if (tournament && highHandsOf(tournament).length > 1) {
+    const chosen = highHandsAtDoor(tournament, registration);
+    return (
+      <span className="flex flex-wrap gap-1" data-testid={`high-hands-${registration.id}`}>
+        {chosen.length === 0 ? (
+          <Badge variant="outline">No</Badge>
+        ) : (
+          chosen.map((highHand) => (
+            <Badge key={highHand.highHandId} variant="secondary">
+              <Trophy className="mr-1 h-3 w-3" aria-hidden="true" />
+              {highHand.name}
+            </Badge>
+          ))
+        )}
+      </span>
+    );
+  }
+  return registration.enteringHighHands ? (
     <Badge variant="secondary">
       <Trophy className="mr-1 h-3 w-3" aria-hidden="true" />
       Yes
@@ -157,6 +179,8 @@ interface PendingPaymentsProps {
    * records. Transfer asks first while something is still to collect at the door.
    */
   transfers?: TransferDesk | null;
+  /** The tournament, for the high hands each player chose (round 10: a game may run several). */
+  tournament?: HighHandsInput;
 }
 
 /** Whether the registration's player is the one a bank statement's name or reference points to. */
@@ -217,8 +241,7 @@ function CollectAtDoorDialog({
       title={shown ? `Collect ${money(shown.split.doorCents)} at the door` : ""}
       description={
         shown
-          ? `${playerName(shown.registration)}'s bank transfer pays the buy-in, ${money(shown.split.transferCents)}. ` +
-            `The ${shown.split.doorFor || "rest"} is paid at the door: confirm once you have it.`
+          ? `${playerName(shown.registration)}'s bank transfer pays the buy-in, ${money(shown.split.transferCents)}. ${doorSentence(shown.split)}`
           : ""
       }
       cancelLabel="Not yet"
@@ -251,6 +274,7 @@ export function PendingPayments({
   earlyBirds,
   full = null,
   transfers = null,
+  tournament,
 }: PendingPaymentsProps) {
   const waitingListHeading = useId();
   const [search, setSearch] = useState("");
@@ -258,7 +282,7 @@ export function PendingPayments({
   const [collecting, setCollecting] = useState<PendingRegistrationDto | null>(null);
   const byTransfer = transfers && !freeTournament ? transfers : null;
   const found = normaliseName(search);
-  const splitOf = (registration: PendingRegistrationDto) => (byTransfer ? transferSplit(registration, registration.amountOwed, byTransfer) : null);
+  const splitOf = (registration: PendingRegistrationDto) => (byTransfer ? transferSplit(registration, registration.amountOwed, byTransfer, tournament) : null);
   const confirmTransfer = (registration: PendingRegistrationDto) => {
     if ((splitOf(registration)?.doorCents ?? 0) > 0) setCollecting(registration);
     else onConfirm(registration.id, "transfer");
@@ -346,7 +370,7 @@ export function PendingPayments({
     player,
     ...(byTransfer ? [reference] : []),
     phone,
-    { id: "high-hands", header: "High Hands", cell: (registration) => <HighHands entering={registration.enteringHighHands} /> },
+    { id: "high-hands", header: "High Hands", cell: (registration) => <HighHands registration={registration} tournament={tournament} /> },
     amount,
     time,
     earlyBirdColumn(earlyBirds),
@@ -533,6 +557,8 @@ interface ConfirmedPaymentsProps {
   transfers?: TransferDesk | null;
   /** The ⋯ Fix menu on every row (round 9): a payment taken back, how it was paid, the high hand, the player's details. */
   fixes?: Pick<EntryFixes, "menu">;
+  /** The tournament, for the high hands each player chose (round 10). */
+  tournament?: HighHandsInput;
 }
 
 /**
@@ -542,9 +568,9 @@ interface ConfirmedPaymentsProps {
  * Fix menu (round 9) corrects a mistake: a payment confirmed that was not made, how it was made, the
  * high hand, the player's details.
  */
-export function ConfirmedPayments({ query, timeZone, earlyBirds, freeEntries, freeTournament = false, transfers = null, fixes }: ConfirmedPaymentsProps) {
+export function ConfirmedPayments({ query, timeZone, earlyBirds, freeEntries, freeTournament = false, transfers = null, fixes, tournament }: ConfirmedPaymentsProps) {
   const splitOf = (registration: ConfirmedRegistrationDto) =>
-    transfers && registration.paidBy === "transfer" ? transferSplit(registration, registration.amountPaid, transfers) : null;
+    transfers && registration.paidBy === "transfer" ? transferSplit(registration, registration.amountPaid, transfers, tournament) : null;
   const columns: ResponsiveColumn<ConfirmedRegistrationDto>[] = [
     {
       id: "player",
@@ -554,7 +580,7 @@ export function ConfirmedPayments({ query, timeZone, earlyBirds, freeEntries, fr
       cell: playerName,
     },
     { id: "phone", header: "Phone", className: "text-muted-foreground", cell: phoneOf },
-    { id: "high-hands", header: "High Hands", cell: (registration) => <HighHands entering={registration.enteringHighHands} /> },
+    { id: "high-hands", header: "High Hands", cell: (registration) => <HighHands registration={registration} tournament={tournament} /> },
     {
       id: "amount",
       header: "Amount Paid",

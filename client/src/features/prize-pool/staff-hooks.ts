@@ -4,11 +4,12 @@
  * dashboard's totals). Apart from hooks.ts so a public page never loads them.
  */
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import type { HighHandsUpdateInput } from "@shared/api/high-hands";
 import type { ApUpdateResponse, PayoutsUpdateInput, PrizePoolAdjustmentInput, RakeRatesInput } from "@shared/api/prize-pool";
 import { hasErrorCode } from "@/lib/api/http";
 import { invalidateTournament } from "@/lib/api/invalidate";
 import { qk } from "@/lib/api/query-keys";
-import { adjustPrizePool, applyCarryOver, carryOverQueries, changePayouts, changeRakeRates, removeCarryOver } from "./staff-api";
+import { adjustPrizePool, applyCarryOver, carryOverQueries, changePayouts, changeRakeRates, removeCarryOver, updateHighHands } from "./staff-api";
 
 function showMoneyResponse(queryClient: QueryClient, tournamentId: string, { tournament, prizePool }: ApUpdateResponse): void {
   queryClient.setQueryData(qk.tournaments.detail(tournamentId), tournament);
@@ -21,7 +22,9 @@ function showMoneyResponse(queryClient: QueryClient, tournamentId: string, { tou
  * is lower): the figures on screen are out of date, so they are fetched again.
  */
 function refreshWhenOutOfDate(queryClient: QueryClient, tournamentId: string, error: unknown): void {
-  if (hasErrorCode(error, "TOURNAMENT_CLOSED", "AP_EXCEEDS_GROSS", "CONFLICT", "NOT_FOUND")) void invalidateTournament(queryClient, tournamentId);
+  if (hasErrorCode(error, "TOURNAMENT_CLOSED", "AP_EXCEEDS_GROSS", "CONFLICT", "NOT_FOUND", "HIGH_HAND_ENTRIES", "HIGH_HAND_AWARDED", "HIGH_HAND_OVER_POOL")) {
+    void invalidateTournament(queryClient, tournamentId);
+  }
 }
 
 /** Sets the manual AP total or the manual prize pool (clearing the other), or goes back to the calculated pool. */
@@ -74,6 +77,16 @@ export function useRemoveCarryOver(tournamentId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (carryOverId: string) => removeCarryOver(tournamentId, carryOverId),
+    onSuccess: (response) => showMoneyResponse(queryClient, tournamentId, response),
+    onError: (error) => refreshWhenOutOfDate(queryClient, tournamentId, error),
+  });
+}
+
+/** Round 10: sets the tournament's high hands (the Money tab's editor), each its own pot. */
+export function useUpdateHighHands(tournamentId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: HighHandsUpdateInput) => updateHighHands(tournamentId, input),
     onSuccess: (response) => showMoneyResponse(queryClient, tournamentId, response),
     onError: (error) => refreshWhenOutOfDate(queryClient, tournamentId, error),
   });

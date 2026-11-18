@@ -192,7 +192,7 @@ describe("the TV's settings from a phone, 390 px wide (round 5, items 20–26)",
     const { keys, tv } = await openTvSheet();
 
     const figures = within(tv).getByRole("group", { name: "More on the TV" });
-    for (const name of ["Level number (LEVEL 3)", "Entries", "Re-buys", "Add-ons", "Early birds", "Chips in play", "Tables", "Time left to re-buy (Re-buys close in …)"]) {
+    for (const name of ["Level number (LEVEL 3)", "Entries", "Re-buys", "Add-ons", "Early birds", "Chips in play", "Tables", "Time left to re-buy (Re-buys close in …)", "High hand pots"]) {
       expect(within(figures).getByRole("switch", { name })).not.toBeChecked();
     }
     expect(within(tv).getByRole("switch", { name: "Show the average stack" })).toBeChecked();
@@ -201,6 +201,17 @@ describe("the TV's settings from a phone, 390 px wide (round 5, items 20–26)",
     await vi.waitFor(() => expect(within(figures).getByRole("switch", { name: "Early birds" })).toBeChecked());
     await keys.click(within(figures).getByRole("switch", { name: "Level number (LEVEL 3)" }));
     await vi.waitFor(() => expect(sent()).toEqual([{ showEarlyBirds: true }, { showLevel: true }]));
+  });
+
+  it("shows each high hand's pot on the TV once the TD switches High hand pots on (round 10, off by default)", async () => {
+    const sent = serveSettings();
+    showPanel();
+    const { keys, tv } = await openTvSheet();
+
+    const pots = within(tv).getByRole("switch", { name: "High hand pots" });
+    expect(pots).not.toBeChecked();
+    await keys.click(pots);
+    await vi.waitFor(() => expect(sent()).toEqual([{ showHighHands: true }]));
   });
 
   it("switches the chips in play on and off by themselves, whether or not the average stack is shown", async () => {

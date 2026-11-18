@@ -12,6 +12,7 @@ import {
   tournamentFormSchema,
   type TournamentFormValues,
 } from "./tournament-form";
+import type { HighHandFormValue } from "./high-hands-form";
 
 const filled: TournamentFormValues = {
   ...NEW_TOURNAMENT_VALUES,
@@ -21,6 +22,9 @@ const filled: TournamentFormValues = {
   buyInAmount: "50",
   maxPlayers: "30",
 };
+
+/** One high hand's boxes as typed (round 10). */
+const firstHalf: HighHandFormValue = { highHandId: "", name: "First half", entryFee: "5", winners: "1", rakeType: "none", rakeAmount: "", note: "Before the break" };
 
 const parse = (values: TournamentFormValues) => tournamentFormSchema.safeParse(values, { errorMap: formErrorMap });
 
@@ -48,7 +52,7 @@ describe("tournamentFormSchema", () => {
       buyInAmount: "50.00",
       maxPlayers: 30,
       minPlayers: 4,
-      highHandPayouts: 1,
+      highHands: [],
       seasonId: null,
       pointsSystemId: null,
       description: null,
@@ -59,6 +63,8 @@ describe("tournamentFormSchema", () => {
     // 7:30 pm in the club's zone (NZDT, UTC+13), whatever zone the test machine is in.
     expect(config.startDateTime).toEqual(new Date("2026-10-24T06:30:00.000Z"));
     expect(config).not.toHaveProperty("enableRebuys");
+    // Round 10: the high hands go as their list, never with the legacy high-hand fields (the server refuses both together).
+    for (const legacy of ["enableHighHand", "highHandAmount", "highHandRakeType", "highHandRakeAmount", "highHandPayouts"]) expect(config).not.toHaveProperty(legacy);
   });
 
   it("names every missing required field", () => {
@@ -74,7 +80,7 @@ describe("tournamentFormSchema", () => {
   it("words a number that is not a whole number, or out of range, for people", () => {
     expect(errorsOf({ ...filled, maxPlayers: "lots" })).toEqual({ maxPlayers: "Must be a whole number" });
     expect(errorsOf({ ...filled, maxPlayers: "1" })).toEqual({ maxPlayers: "Must be 2 or more" });
-    expect(errorsOf({ ...filled, enableHighHand: true, highHandAmount: "5", highHandPayouts: "2.5" })).toEqual({ highHandPayouts: "Must be a whole number" });
+    expect(errorsOf({ ...filled, highHands: [{ ...firstHalf, winners: "2.5" }] })).toEqual({ "highHands.0.winners": "Must be a whole number" });
   });
 
   it("checks each AP rate the way the server does, on the amount field", () => {
@@ -125,7 +131,7 @@ describe("house rules (TDN4-HOUSE-RULES-UNSET)", () => {
 });
 
 describe("tournamentConfig (CA-15)", () => {
-  it("never stores a re-buy, add-on or high-hand price typed before its switch was turned off", () => {
+  it("never stores a re-buy or add-on price typed before its switch was turned off", () => {
     const config = configOf({
       ...filled,
       rebuyAmount: "25",
@@ -133,9 +139,6 @@ describe("tournamentConfig (CA-15)", () => {
       addonAmount: "20",
       addonRakeType: "fixed",
       addonRakeAmount: "2",
-      highHandAmount: "10",
-      highHandRakeType: "percentage",
-      highHandRakeAmount: "10",
     });
 
     expect(config).toMatchObject({
@@ -144,9 +147,6 @@ describe("tournamentConfig (CA-15)", () => {
       addonAmount: null,
       addonRakeType: "none",
       addonRakeAmount: null,
-      highHandAmount: null,
-      highHandRakeType: "none",
-      highHandRakeAmount: null,
     });
   });
 
@@ -158,9 +158,7 @@ describe("tournamentConfig (CA-15)", () => {
       maxRebuys: "2",
       rebuyRakeType: "percentage",
       rebuyRakeAmount: "10",
-      enableHighHand: true,
-      highHandAmount: "10",
-      highHandPayouts: "3",
+      highHands: [{ ...firstHalf, entryFee: "10", winners: "3", rakeType: "percentage", rakeAmount: "10" }],
     });
 
     expect(config).toMatchObject({
@@ -169,8 +167,7 @@ describe("tournamentConfig (CA-15)", () => {
       rebuyPeriodMinutes: 60,
       rebuyRakeType: "percentage",
       rebuyRakeAmount: "10.00",
-      highHandAmount: "10.00",
-      highHandPayouts: 3,
+      highHands: [{ name: "First half", entryFee: "10.00", winners: 3, rakeType: "percentage", rakeAmount: "10.00", note: "Before the break" }],
     });
   });
 });
@@ -253,15 +250,14 @@ describe("a part priced at $0 (P3REV5-CQ-02)", () => {
     expect(errorsOf({ ...filled, enableRebuys: true, rebuyAmount: "20" })).toEqual({});
   });
 
-  it("refuses a high hand switched on with no price or $0, and opens a stored one with its switch off (P3REV3-CQ-03)", () => {
-    const refusal = { highHandAmount: "Enter a high-hand price above $0, or switch high hands off" };
-    expect(errorsOf({ ...filled, enableHighHand: true, highHandAmount: "" })).toEqual(refusal);
-    expect(errorsOf({ ...filled, enableHighHand: true, highHandAmount: "0" })).toEqual(refusal);
-    expect(errorsOf({ ...filled, enableHighHand: true, highHandAmount: "5" })).toEqual({});
-    expect(errorsOf({ ...filled, enableHighHand: false, highHandAmount: "" })).toEqual({});
+  it("refuses a high hand with no fee or $0, and opens a stored $0 one as no high hand (P3REV3-CQ-03)", () => {
+    expect(errorsOf({ ...filled, highHands: [{ ...firstHalf, entryFee: "0" }] })).toEqual({ "highHands.0.entryFee": "Enter a fee above $0" });
+    expect(errorsOf({ ...filled, highHands: [{ ...firstHalf, entryFee: "" }] })).toHaveProperty(["highHands.0.entryFee"]);
+    expect(errorsOf({ ...filled, highHands: [firstHalf] })).toEqual({});
+    expect(errorsOf({ ...filled, highHands: [] })).toEqual({});
 
-    expect(formValuesFromTournament(tournamentDto({ enableHighHand: true, highHandAmount: null }), ZONE).enableHighHand).toBe(false);
-    expect(formValuesFromTournament(tournamentDto({ enableHighHand: true, highHandAmount: "5.00" }), ZONE).enableHighHand).toBe(true);
+    expect(formValuesFromTournament(tournamentDto({ enableHighHand: true, highHandAmount: null }), ZONE).highHands).toEqual([]);
+    expect(formValuesFromTournament(tournamentDto({ enableHighHand: true, highHandAmount: "5.00" }), ZONE).highHands).toHaveLength(1);
   });
 
   it("starts a new tournament with bank transfer details off, opens a stored setting as it is, and resends it only when changed (round 8)", () => {
@@ -275,17 +271,17 @@ describe("a part priced at $0 (P3REV5-CQ-02)", () => {
 });
 
 describe("entries already recorded (P3REV0-PARITY-EDIT-REPRICE)", () => {
-  it("counts the players' re-buys, add-ons and high-hand entries", () => {
-    const recorded = recordedEntries([
+  it("counts the players' re-buys, add-ons and each high hand's entries", () => {
+    const recorded = recordedEntries(tournamentDto({ enableHighHand: true, highHandAmount: "10.00" }), [
       { rebuys: 2, addons: 1, enteringHighHands: true },
       { rebuys: null, addons: 0, enteringHighHands: false },
       { rebuys: 1, addons: null, enteringHighHands: null },
     ]);
-    expect(recorded).toEqual({ rebuys: 3, addons: 1, highHandEntrants: 1 });
+    expect(recorded).toEqual({ rebuys: 3, addons: 1, highHandEntrants: { legacy: 1 } });
   });
 
   it("refuses an edit that clears a price entries are recorded at, and nothing else", () => {
-    const recorded = { rebuys: 3, addons: 1, highHandEntrants: 0 };
+    const recorded = { rebuys: 3, addons: 1, highHandEntrants: {} };
     expect(clearedRecordedPrices({ rebuyAmount: null }, recorded)).toEqual([
       { field: "rebuyAmount", message: "3 re-buys are recorded: enter the re-buy price. To stop taking more, lock the prize pool." },
     ]);
@@ -295,6 +291,32 @@ describe("entries already recorded (P3REV0-PARITY-EDIT-REPRICE)", () => {
     // A new price is a re-price, which the server asks the TD to confirm; a price left alone is never refused.
     expect(clearedRecordedPrices({ rebuyAmount: "20.00" }, recorded)).toEqual([]);
     expect(clearedRecordedPrices({}, recorded)).toEqual([]);
-    expect(clearedRecordedPrices({ rebuyAmount: null, addonAmount: null }, { rebuys: 0, addons: 0, highHandEntrants: 0 })).toEqual([]);
+    expect(clearedRecordedPrices({ rebuyAmount: null, addonAmount: null }, { rebuys: 0, addons: 0, highHandEntrants: {} })).toEqual([]);
+  });
+});
+
+describe("the high hands on an edit (round 10)", () => {
+  it("opens a game's one high hand of before as the legacy one, and resends nothing while it is left alone", () => {
+    const legacy = tournamentDto({ enableHighHand: true, highHandAmount: "10.00", highHandPayouts: 2, highHandRakeType: "percentage", highHandRakeAmount: "10.00" });
+    const values = formValuesFromTournament(legacy, ZONE);
+    expect(values.highHands).toEqual([
+      { highHandId: "legacy", name: "High hand", entryFee: "10.00", winners: "2", rakeType: "percentage", rakeAmount: "10", note: "" },
+    ]);
+    expect(changedConfig(configOf(values), configOf(values))).toEqual({});
+  });
+
+  it("sends the whole list once any high hand changes, the legacy one by its id", () => {
+    const values = formValuesFromTournament(tournamentDto({ enableHighHand: true, highHandAmount: "10.00" }), ZONE);
+    const changed = { ...values, highHands: [{ ...values.highHands[0], name: "First half", entryFee: "5" }, { ...firstHalf, name: "Second half", note: "" }] };
+    expect(changedConfig(configOf(values), configOf(changed))).toEqual({
+      highHands: [
+        { id: "legacy", name: "First half", entryFee: "5.00", winners: 1, rakeType: "none", note: null },
+        { name: "Second half", entryFee: "5.00", winners: 1, rakeType: "none", note: null },
+      ],
+    });
+  });
+
+  it("refuses two high hands with the same name, on the second", () => {
+    expect(errorsOf({ ...filled, highHands: [firstHalf, { ...firstHalf, name: "first HALF" }] })).toEqual({ "highHands.1.name": "Two high hands cannot have the same name" });
   });
 });

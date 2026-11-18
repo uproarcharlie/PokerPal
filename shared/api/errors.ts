@@ -74,7 +74,11 @@ export const ERROR_CODES = [
   "COUNT_BELOW_ZERO",
   "HIGH_HAND_AWARDED",
   "HIGH_HAND_OVER_POOL",
-  "HIGH_HAND_ENTRIES", // 409, turning the high hand off (details.entrants) or removing its price (details.count) while entries are in it
+  "HIGH_HAND_ENTRIES", // 409, turning the high hand off (details.entrants) or removing its price (details.count) while entries are in it; round 10: removing a listed high hand anyone is in (details { highHandId, entrants })
+  "HIGH_HAND_LISTED", // 409 (round 10), a legacy high-hand field (enableHighHand, highHandAmount, its rake or prizes; a registration's highHandWinner, highHandAmount, highHandSplitWith) changed on a tournament that lists its high hands: reload, and use the High hands list or its awards
+  "HIGH_HAND_NOT_ENTERED", // 400 (round 10), awarding a high hand to an entry that is not in it (details { highHandId, registrationId })
+  "HIGH_HAND_ALREADY_WON", // 409 (round 10), awarding a high hand to an entry that has already won it (split instead for a tie)
+  "HIGH_HAND_WINNER", // 409 (round 10), taking an entry out of a high hand it has won (details { highHandId }): take the award back first
   "REBUYS_RECORDED", // 409, removing the re-buy price while re-buys are recorded (details.count)
   "ADDONS_RECORDED", // 409, removing the add-on price while add-ons are recorded (details.count)
   "ENTRIES_REPRICED", // 409, a new price for entries already recorded, sent without repriceEntries (details.changes)

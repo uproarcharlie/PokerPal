@@ -4,6 +4,7 @@
  * (POST /api/tournaments/:id/pending-actions) and the count change that applies it. PURE: no
  * runtime imports outside shared/domain.
  */
+import { offersHighHands } from "./high-hands";
 import { toCents, type MoneyInput } from "./money";
 
 /** What a player can ask for from their phone: the one list the request schema, these rules and finalize's warnings use. */
@@ -33,12 +34,13 @@ export function offersAddons(tournament: { addonAmount?: MoneyInput }): boolean 
 }
 
 /**
- * A tournament runs a high hand when it is switched on with an entry fee. These three are the one test
- * of whether a part exists, on every screen (the TD's desk, the edit form, the public page) as on the
- * server: a stored "0.00" price is not a part the tournament has (P3REV5-CQ-02).
+ * A tournament runs a high hand when it is switched on with an entry fee, or (round 10) when it lists
+ * any high hand (./high-hands offersHighHands). These three are the one test of whether a part exists,
+ * on every screen (the TD's desk, the edit form, the public page) as on the server: a stored "0.00"
+ * price is not a part the tournament has (P3REV5-CQ-02).
  */
-export function offersHighHand(tournament: { enableHighHand?: boolean | null; highHandAmount?: MoneyInput }): boolean {
-  return tournament.enableHighHand === true && toCents(tournament.highHandAmount) > 0;
+export function offersHighHand(tournament: Parameters<typeof offersHighHands>[0]): boolean {
+  return offersHighHands(tournament);
 }
 
 export const PRIZE_POOL_LOCKED_MESSAGE = "Prize pool is locked. No rebuys or addons allowed.";

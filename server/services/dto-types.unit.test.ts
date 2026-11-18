@@ -8,7 +8,7 @@ import type { AuthMeResponse } from "@shared/api/auth";
 import type { Json } from "@shared/api/common";
 import type { ConfirmPendingActionResponse, PendingActionDto } from "@shared/api/pending-actions";
 import type { ClubPlayer, CreatePlayerResponse, StaffPlayer } from "@shared/api/players";
-import type { ActivityDto, PublicPointsAllocation, PublicPointsSystem, PublicRegistration, WaitingListPlace } from "@shared/api/public";
+import type { ActivityDto, PublicPointsAllocation, PublicPointsSystem, PublicRegistration, RegistrationHighHands, WaitingListPlace } from "@shared/api/public";
 import type {
   ConfirmedRegistrationDto,
   FreeEntryChangedDto,
@@ -37,11 +37,14 @@ import type {
 /** What a service function's promise resolves to, as JSON. */
 type Out<F extends (...args: never[]) => unknown> = Json<Awaited<ReturnType<F>>>;
 
+/** A registration as the server always sends it: with its high hands (round 10), optional in the DTO for older fixtures. */
+type Sent<T> = T & Required<RegistrationHighHands>;
+
 /**
  * A staff registration as the server always sends it: with its free entry (round 7) and how it paid
  * (round 8), both optional in the DTO for older fixtures.
  */
-type Staff<T> = T & Required<FreeEntryStatus> & Required<Pick<PaymentStatus, "paidBy">>;
+type Staff<T> = Sent<T> & Required<FreeEntryStatus> & Required<Pick<PaymentStatus, "paidBy">>;
 
 describe("service results serialise to the shared DTOs", () => {
   it("activity", () => {
@@ -51,18 +54,20 @@ describe("service results serialise to the shared DTOs", () => {
 
   it("registrations", () => {
     expectTypeOf<Out<typeof listRegistrations>[number]>().toExtend<PublicRegistration | ManagedRegistration>();
-    expectTypeOf<PublicRegistration>().toExtend<Out<typeof listRegistrations>[number]>();
+    expectTypeOf<Sent<PublicRegistration>>().toExtend<Out<typeof listRegistrations>[number]>();
     expectTypeOf<Staff<ManagedRegistration>>().toExtend<Out<typeof listRegistrations>[number]>();
     expectTypeOf<Out<typeof registerPlayer>>().toExtend<RegistrationCreatedDto>();
-    expectTypeOf<PublicRegistration & Pick<RegistrationCreatedDto, "seating">>().toExtend<Out<typeof registerPlayer>>();
+    expectTypeOf<Sent<PublicRegistration> & Pick<RegistrationCreatedDto, "seating">>().toExtend<Out<typeof registerPlayer>>();
     expectTypeOf<Out<typeof confirmPayment>>().toExtend<PaymentConfirmedDto>();
-    expectTypeOf<Staff<PaymentConfirmedDto>>().toExtend<Out<typeof confirmPayment>>();
+    // Each pot's unawarded money (round 10) is always sent too.
+    type Unawarded = Required<Pick<PaymentConfirmedDto, "highHandsUnawarded">>;
+    expectTypeOf<Staff<PaymentConfirmedDto> & Unawarded>().toExtend<Out<typeof confirmPayment>>();
     expectTypeOf<Out<typeof updateRegistration>>().toExtend<ManagedRegistration>();
     expectTypeOf<Staff<ManagedRegistration>>().toExtend<Out<typeof updateRegistration>>();
     expectTypeOf<Out<typeof adjustCounts>>().toExtend<ManagedRegistration>();
     expectTypeOf<Staff<ManagedRegistration>>().toExtend<Out<typeof adjustCounts>>();
     expectTypeOf<Out<typeof changeFreeEntry>>().toExtend<FreeEntryChangedDto>();
-    expectTypeOf<Staff<FreeEntryChangedDto>>().toExtend<Out<typeof changeFreeEntry>>();
+    expectTypeOf<Staff<FreeEntryChangedDto> & Unawarded>().toExtend<Out<typeof changeFreeEntry>>();
     type PaymentRow = Out<typeof listPaymentRegistrations>[number];
     expectTypeOf<PaymentRow>().toExtend<PendingRegistrationDto | ConfirmedRegistrationDto>();
     // The payment desk's rows always say their place on the waiting list and their free entry (optional in the DTO for older fixtures).

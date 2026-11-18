@@ -33,7 +33,7 @@ import {
 } from "../repositories/carry-overs";
 import { getSeason } from "../repositories/seasons";
 import { getTournament, lockTournamentForUpdate, setTournamentColumns } from "../repositories/tournaments";
-import { loadPrizePoolContext, moneyResponse, type MoneyResponse } from "./prize-pool";
+import { loadPrizePoolContext, moneyResponse, withTournament, type MoneyResponse } from "./prize-pool";
 import { assertOpen } from "./tournament-views";
 
 const NOT_AVAILABLE = "That carried-over money is not available to this tournament";
@@ -113,7 +113,7 @@ export async function applyCarryOver(req: Request, id: string, carryOverId: stri
       description: `${carriedText(entry)} added to the prize pool (now ${formatMoney(after.net)})`,
       eventData: JSON.stringify({ mode: "carry_in", carryOverId: carryOver.id, amountCents: entry.amountCents, netCents: after.net, previousNetCents: before.net }),
     });
-    return await moneyResponse(req, { ...context, tournament: updated });
+    return await moneyResponse(req, withTournament(context, updated));
   });
 }
 
@@ -142,7 +142,7 @@ export async function removeCarryOver(req: Request, id: string, carryOverId: str
       description: `${carriedText(entry)} taken out of the prize pool (now ${formatMoney(after.net)})`,
       eventData: JSON.stringify({ mode: "carry_out", carryOverId, amountCents: entry.amountCents, netCents: after.net, previousNetCents: before.net }),
     });
-    return await moneyResponse(req, { ...context, tournament: updated });
+    return await moneyResponse(req, withTournament(context, updated));
   });
 }
 

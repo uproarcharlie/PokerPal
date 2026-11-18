@@ -15,6 +15,7 @@ import type { AutoSeatResultDto } from "@shared/api/seating";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { clubDto, mockTournamentPages, registrationDto, tournamentDto } from "@test/helpers/f2-public";
 import { screenWidth } from "@test/helpers/f1-tournaments";
+import { publicHalves } from "@test/helpers/r10-high-hands";
 import { mockSignedOut, renderWithApp } from "@test/helpers/web";
 import PublicRegisterPage from "./public-register";
 
@@ -288,5 +289,90 @@ describe("PublicRegisterPage: back from the banking app (R8REV1-PHONE-02)", () =
     sessionStorage.setItem(KEY, "{not json");
     reload();
     expect(await screen.findByTestId("player-type-existing")).toBeInTheDocument();
+  });
+});
+
+describe("PublicRegisterPage: two high hands at $5 each (round 10, on a phone)", () => {
+  /** Tama finds himself and ticks the high hands named (by their tile's words), then signs up. */
+  async function signUpTamaFor(ticks: readonly string[]) {
+    const user = userEvent.setup();
+    openPage();
+    await user.click(await screen.findByTestId("player-type-existing"));
+    await user.click(screen.getByTestId("step1-next"));
+    await user.type(screen.getByTestId("player-search"), "Tama");
+    await user.click(await screen.findByRole("button", { name: "Tama Rangi" }));
+    await user.click(screen.getByTestId("step2-next"));
+    for (const tick of ticks) await user.click(screen.getByRole("checkbox", { name: new RegExp(tick) }));
+    return user;
+  }
+
+  it("lets the player enter only the second half: $5 instead of $10, paid at the door, the transfer the buy-in only", async () => {
+    mockTournament({ enableHighHand: true, highHandAmount: "10.00", highHands: publicHalves() });
+    const sent = mockSignUp({
+      enteringHighHands: true,
+      highHandIds: ["hh2"],
+      paymentInstructions: { ...INSTRUCTIONS, highHandAtDoorCents: 500, highHandsAtDoor: [{ highHandId: "hh2", name: "Second half", feeCents: 500 }] },
+    });
+    const user = await signUpTamaFor([]);
+
+    const choices = screen.getByRole("group", { name: "High Hands Entry" });
+    expect(within(choices).getByRole("checkbox", { name: /First half high hand/ })).toHaveAccessibleName(expect.stringContaining("Before the break"));
+    expect(within(choices).getByRole("checkbox", { name: /All high hands/ })).toHaveAccessibleName(expect.stringContaining("$10.00"));
+    expect(screen.getByText("Total Amount").nextSibling).toHaveTextContent("$50.00");
+    await user.click(within(choices).getByRole("checkbox", { name: /Second half high hand/ }));
+    expect(screen.getByText("Total Amount").nextSibling).toHaveTextContent("$55.00");
+    await user.click(screen.getByTestId("complete-registration"));
+
+    const transfer = await card();
+    expect(within(transfer).getByTestId("bank-transfer-amount")).toHaveTextContent("$50.00");
+    expect(within(transfer).getByTestId("bank-transfer-high-hand")).toHaveTextContent("Second half high hand ($5.00) — pay at the door");
+    expect(sent.body()).toEqual({ playerId: "p1", enteringHighHands: true, highHandIds: ["hh2"] });
+  });
+
+  it("ticks every high hand with All high hands, and lists each at the door", async () => {
+    mockTournament({ enableHighHand: true, highHandAmount: "10.00", highHands: publicHalves() });
+    const sent = mockSignUp({
+      enteringHighHands: true,
+      paymentInstructions: {
+        ...INSTRUCTIONS,
+        highHandAtDoorCents: 1000,
+        highHandsAtDoor: [
+          { highHandId: "hh1", name: "First half", feeCents: 500 },
+          { highHandId: "hh2", name: "Second half", feeCents: 500 },
+        ],
+      },
+    });
+    const user = await signUpTamaFor(["All high hands"]);
+
+    expect(screen.getByRole("checkbox", { name: /First half high hand/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Second half high hand/ })).toBeChecked();
+    expect(screen.getByText("Total Amount").nextSibling).toHaveTextContent("$60.00");
+    await user.click(screen.getByTestId("complete-registration"));
+
+    const lines = within(await card()).getAllByTestId("bank-transfer-high-hand");
+    expect(lines.map((line) => line.textContent)).toEqual(["First half high hand ($5.00) — pay at the door", "Second half high hand ($5.00) — pay at the door"]);
+    expect(sent.body()).toEqual({ playerId: "p1", enteringHighHands: true, highHandIds: ["hh1", "hh2"] });
+  });
+
+  it("says what is owed at the desk for each high hand ticked where the club shows no bank details", async () => {
+    mockTournament({ showBankTransfer: false, enableHighHand: true, highHandAmount: "10.00", highHands: publicHalves() });
+    mockSignUp({});
+    const user = await signUpTamaFor(["First half high hand"]);
+    await user.click(screen.getByTestId("complete-registration"));
+
+    expect(await screen.findByTestId("amount-due")).toHaveTextContent("$55.00");
+    expect(screen.getByTestId("amount-due").nextElementSibling).toHaveTextContent("Buy-in: $50.00 + First half high hand: $5.00");
+  });
+
+  it("shows a sign-up kept from before round 10 again, its high hand from the total", async () => {
+    mockTournament({ enableHighHand: true, highHandAmount: "10.00" });
+    server.use(http.get("/api/tournaments/t1/registrations", () => HttpResponse.json([registrationDto("r1", "Tama Rangi")])));
+    sessionStorage.setItem(
+      "pokerpal.signUp.t1",
+      JSON.stringify({ version: 1, player: tama, registration: { id: "r1", seating: NO_TABLES, paymentInstructions: { ...INSTRUCTIONS, highHandAtDoorCents: 1000 } }, enteringHighHands: true }),
+    );
+    openPage();
+
+    expect(within(await card()).getByTestId("bank-transfer-high-hand")).toHaveTextContent("High hand ($10.00) — pay at the door");
   });
 });

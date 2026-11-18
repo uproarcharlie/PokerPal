@@ -79,6 +79,8 @@ export const ACTIVITY_EVENT_TYPES = [
   "seat_waiting", // a new arrival auto-seat had no seat for: "Test Player 17 is waiting for a seat: every table is full"
   // Round 9
   "entry_corrected", // a staff Fix: "Tama Rangi's payment was taken back: not paid yet", how they paid, the high hand, their details
+  // Round 10
+  "high_hands_changed", // the list of high hands set or changed: "High hands: First half $5, Second half $5 (AP 10% each)"
 ] as const;
 export type ActivityEventType = (typeof ACTIVITY_EVENT_TYPES)[number];
 
@@ -102,4 +104,5 @@ export const STAFF_ONLY_ACTIVITY_TYPES = [
   "early_bird",
   "seat_waiting",
   "entry_corrected",
+  "high_hands_changed",
 ] as const satisfies readonly ActivityEventType[];

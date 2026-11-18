@@ -1,5 +1,5 @@
 import type { TournamentDetailDto } from "@shared/api/tournaments";
-import type { Cents } from "@shared/domain/money";
+import type { HighHandAward } from "@shared/domain/high-hands";
 import type { TournamentMoney } from "@/lib/prize-pool";
 import { ApPanel } from "@/features/prize-pool/components/ap-panel";
 import { PaidPlayersNote } from "@/features/prize-pool/components/paid-players-note";
@@ -7,8 +7,9 @@ import { isClosedStatus } from "@shared/domain/tournaments";
 import { PrizePoolCalculator } from "../prize-pool/prize-pool-calculator";
 import { PrizeStructureCard } from "../prize-pool/prize-structure-card";
 import { TournamentInfoCard } from "./tournament-info-card";
-import { offersHighHand } from "@shared/domain/player-actions";
+import { highHandsOf } from "@shared/domain/high-hands";
 import { isFreeTournament } from "@shared/domain/prize-pool";
+import { EditHighHandsButton } from "../high-hands/high-hands-sheet";
 
 interface OverviewTabProps {
   tournament: TournamentDetailDto;
@@ -16,7 +17,7 @@ interface OverviewTabProps {
   /** The players in the field (the waiting list behind a full one is not). */
   entrants: number;
   rakeLabel: string;
-  highHandAwardsCents: readonly Cents[];
+  highHandAwards: readonly HighHandAward[];
   timeZone: string;
   /** Its details card at the end (the default); the phone's Money tab leaves it to the More tab. */
   withDetails?: boolean;
@@ -29,7 +30,7 @@ interface OverviewTabProps {
  * worked out and the AP taken from it, then its details. How it is worked out and the AP are the club
  * staff's: anyone else is shown what it pays (round 6, the owner's rule: the AP is staff-only).
  */
-export function OverviewTab({ tournament, money, entrants, rakeLabel, highHandAwardsCents, timeZone, withDetails = true, onTakePayments }: OverviewTabProps) {
+export function OverviewTab({ tournament, money, entrants, rakeLabel, highHandAwards, timeZone, withDetails = true, onTakePayments }: OverviewTabProps) {
   const canManage = tournament.viewer.canManage;
   return (
     <div className="space-y-6">
@@ -46,7 +47,7 @@ export function OverviewTab({ tournament, money, entrants, rakeLabel, highHandAw
       <PrizeStructureCard
         display={money.display}
         entrants={entrants}
-        highHandAmount={offersHighHand(tournament) ? tournament.highHandAmount : null}
+        highHands={highHandsOf(tournament)}
         tournament={tournament}
       />
       {/* Side by side on a wide screen: how the pool is worked out, and the AP the club takes (and adjusts) from it. */}
@@ -57,11 +58,12 @@ export function OverviewTab({ tournament, money, entrants, rakeLabel, highHandAw
             breakdown={money.breakdown}
             display={money.display}
             rakeLabel={rakeLabel}
-            highHandAwardsCents={highHandAwardsCents}
+            highHandAwards={highHandAwards}
           />
           <ApPanel tournament={tournament} />
         </div>
       ) : null}
+      {canManage && !isClosedStatus(tournament.status) ? <EditHighHandsButton tournament={tournament} rakeLabel={rakeLabel} className="w-full sm:w-auto" /> : null}
       {withDetails ? <TournamentInfoCard tournament={tournament} timeZone={timeZone} /> : null}
     </div>
   );

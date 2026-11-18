@@ -24,34 +24,46 @@ import {
   type MergedRakeRates,
   type RakeRates,
 } from "@shared/domain/rake-rates";
+import { listsHighHands } from "@shared/domain/high-hands";
 import type { Club, Tournament, TournamentRegistration } from "@shared/schema";
 import { db, type Executor } from "../db";
 import { actingUserId, viewerFor } from "../http/authz";
-import { badRequest, notFound } from "../http/errors";
+import { badRequest, conflict, notFound } from "../http/errors";
 import { insertActivity } from "../repositories/activity";
 import { getClub } from "../repositories/clubs";
 import { playerNames } from "../repositories/players";
-import { registrationsOf } from "../repositories/registrations";
 import { getTournament, lockTournamentForUpdate, setTournamentColumns } from "../repositories/tournaments";
 import { recordAudit } from "./audit";
+import { loadMoneyState, withHighHands, type HighHandStore, type RegistrationWithHighHands, type TournamentWithHighHands } from "./high-hands";
 import { assertHighHandAwardsFit, assertOpen, toTournamentDetail, tournamentStatusOf, type TournamentDetail } from "./tournament-views";
 
 type ClubLabel = Pick<Club, "rakeLabel"> | undefined;
 
 export interface PrizePoolContext {
-  tournament: Tournament;
-  registrations: readonly TournamentRegistration[];
+  /** With its listed high hands (round 10: ./high-hands), so every figure has each pot. */
+  tournament: TournamentWithHighHands;
+  registrations: readonly RegistrationWithHighHands[];
+  /** The tournament's high-hand rows, to put the high hands back on a row a write returns (withTournament). */
+  highHandStore: HighHandStore;
   club: ClubLabel;
   /** Player names by player id. */
   playerNames: ReadonlyMap<string, string>;
 }
 
-/** Everything a prize-pool response needs, read with `ex` (pass the transaction that changed it). */
-export async function loadPrizePoolContext(ex: Executor, tournament: Tournament): Promise<PrizePoolContext> {
-  const registrations = await registrationsOf(ex, tournament.id);
+/**
+ * Everything a prize-pool response needs, read with `ex` (pass the transaction that changed it). With
+ * `lock`, the registrations stay locked FOR UPDATE until the transaction ends (finalize).
+ */
+export async function loadPrizePoolContext(ex: Executor, tournament: Tournament, { lock = false }: { lock?: boolean } = {}): Promise<PrizePoolContext> {
+  const { tournament: withTheirHighHands, registrations, store } = await loadMoneyState(ex, tournament, { lock });
   const club = await getClub(ex, tournament.clubId);
   const names = await playerNames(ex, registrations.map((r) => r.playerId));
-  return { tournament, registrations, club, playerNames: names };
+  return { tournament: withTheirHighHands, registrations, highHandStore: store, club, playerNames: names };
+}
+
+/** The context with the tournament as a write left it (its high hands as they were). */
+export function withTournament<C extends PrizePoolContext>(context: C, row: Tournament): C {
+  return { ...context, tournament: withHighHands(row, context.highHandStore) };
 }
 
 /**
@@ -127,8 +139,8 @@ const withReason = (text: string, reason: string | null) => (reason ? `${text} -
 
 export interface AdjustmentRequest {
   /** Locked by the caller's transaction. */
-  tournament: Tournament;
-  registrations: readonly TournamentRegistration[];
+  tournament: TournamentWithHighHands;
+  registrations: readonly RegistrationWithHighHands[];
   club: ClubLabel;
   adjustment: PrizePoolAdjustmentInput;
 }
@@ -241,7 +253,7 @@ export async function adjustPrizePool(req: Request, id: string, adjustment: Priz
     assertOpen(tournament, "its prize pool");
     const context = await loadPrizePoolContext(tx, tournament);
     const updated = await applyPrizePoolAdjustment(tx, req, { ...context, adjustment });
-    return moneyResponse(req, { ...context, tournament: updated });
+    return moneyResponse(req, withTournament(context, updated));
   });
 }
 
@@ -295,6 +307,8 @@ export async function applyRakeRates(tx: Executor, req: Request, context: PrizeP
   assertRatesWithinPrices({ ...tournament, ...rates }, tournament);
   const changed = RAKE_COMPONENTS.filter(({ type, amount }) => !sameRate(rates[type], rates[amount], tournament[type], tournament[amount]));
   const isAp = ({ type }: (typeof RAKE_COMPONENTS)[number]) => type !== "highHandRakeType";
+  // Round 10: each listed high hand has its own AP, set with the list (PUT …/high-hands); the legacy pair resent unchanged is no change.
+  if (listsHighHands(tournament) && changed.some((component) => !isAp(component))) throw highHandListed();
   const apChanged = changed.some(isAp);
   const apSent = RAKE_COMPONENTS.some((component) => isAp(component) && (request.changes[component.type] !== undefined || request.changes[component.amount] !== undefined));
   const clearOverride =
@@ -316,7 +330,7 @@ export async function applyRakeRates(tx: Executor, req: Request, context: PrizeP
     return `${RAKE_COMPONENT_NAMES[type]} ${from} → ${rateText(rates[type], rates[amount], flat)}`;
   });
   if (clearOverride) parts.push(`the manual ${label} total is cleared`);
-  assertHighHandAwardsFit({ tournament, registrations }, { tournament: updated, registrations });
+  assertHighHandAwardsFit({ tournament, registrations }, { tournament: withHighHands(updated, context.highHandStore), registrations });
   const before = computePrizePool(tournament, registrations);
   const after = computePrizePool(updated, registrations);
   await insertActivity(tx, {
@@ -340,6 +354,16 @@ export async function applyRakeRates(tx: Executor, req: Request, context: PrizeP
   return updated;
 }
 
+/**
+ * 409 HIGH_HAND_LISTED: a legacy high-hand setting changed on a tournament that lists its high hands
+ * (round 10), from a page loaded before them.
+ */
+export const highHandListed = () =>
+  conflict(
+    "HIGH_HAND_LISTED",
+    "This tournament now runs its high hands as a list: reload the page, then change them under High hands",
+  );
+
 /** PUT /api/tournaments/:id/prize-pool/rates: merged over the stored rates; clears the AP override unless keepOverride. */
 export async function changeRakeRates(req: Request, id: string, input: RakeRatesInput): Promise<MoneyResponse> {
   const { keepOverride, reason, ...changes } = input;
@@ -354,7 +378,7 @@ export async function changeRakeRates(req: Request, id: string, input: RakeRates
       clearOverrideWhenUnchanged: true,
       reason: reason ?? null,
     });
-    return moneyResponse(req, { ...context, tournament: updated });
+    return moneyResponse(req, withTournament(context, updated));
   });
 }
 

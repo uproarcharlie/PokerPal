@@ -41,7 +41,7 @@ export function usePaymentConfirmations(
           : seat
             ? `${name} has paid. ${seat}`
             : "Registration payment has been confirmed.";
-      const left = highHandLeftText(paid.highHandUnawardedCents);
+      const left = highHandLeftText(paid);
       toast({ title: freeTournament ? "Player accepted" : "Payment Confirmed", description: left ? `${confirmed} ${left}` : confirmed });
     } catch (error) {
       // Max players are accepted (round 5, item 15): no override, the server's sentence says how to make room.

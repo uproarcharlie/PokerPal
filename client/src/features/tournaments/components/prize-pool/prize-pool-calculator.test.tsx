@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { PrizePoolSnapshot } from "@shared/api/finalize";
+import { LEGACY_HIGH_HAND_ID, type HighHandAward } from "@shared/domain/high-hands";
 import { computePrizePool, payoutsForDisplay, type EntryInput } from "@shared/domain/prize-pool";
 import { PrizePoolCalculator } from "./prize-pool-calculator";
 
@@ -17,14 +18,12 @@ function renderCalculator(
   const registrations = rows.map((row, i) => ({ id: row.id ?? `r${i}`, paymentConfirmed: true, ...row }));
   const breakdown = computePrizePool(t, registrations);
   const display = payoutsForDisplay(t, breakdown, registrations);
+  // The legacy high hand's awards, in award order (its one pot).
+  const highHandAwards = highHandAwardsCents?.map(
+    (amountCents, i): HighHandAward => ({ highHandId: LEGACY_HIGH_HAND_ID, registrationId: `w${i}`, amountCents, splitWithRegistrationId: null, awardedAt: null }),
+  );
   return render(
-    <PrizePoolCalculator
-      tournament={t}
-      breakdown={breakdown}
-      display={display}
-      rakeLabel={rakeLabel}
-      highHandAwardsCents={highHandAwardsCents}
-    />,
+    <PrizePoolCalculator tournament={t} breakdown={breakdown} display={display} rakeLabel={rakeLabel} highHandAwards={highHandAwards} />,
   );
 }
 
@@ -153,6 +152,50 @@ describe("PrizePoolCalculator", () => {
 
     renderCalculator(highHand, players, undefined, [4_500]);
     expect(screen.queryByTestId("high-hand-unawarded")).not.toBeInTheDocument();
+  });
+
+  it("shows each high hand's pot on its own in a game with several, with its own AP and awards (round 10)", () => {
+    const halves: CalculatorTournament = {
+      ...tournament,
+      status: "in_progress",
+      enableHighHand: true,
+      highHandAmount: "10.00",
+      highHands: [
+        { id: "hh1", name: "First half", position: 1, entryFee: "5.00", winners: 1, note: null, rakeType: "percentage", rakeAmount: "10.00" },
+        { id: "hh2", name: "Second half", position: 2, entryFee: "5.00", winners: 2, note: null, rakeType: "none", rakeAmount: "0.00" },
+      ],
+    };
+    // Four in the first half, two in the second; one unpaid entry is in neither pot.
+    const players = [
+      { id: "a", buyIns: 1, highHandIds: ["hh1", "hh2"], enteringHighHands: true },
+      { id: "b", buyIns: 1, highHandIds: ["hh1", "hh2"], enteringHighHands: true },
+      { id: "c", buyIns: 1, highHandIds: ["hh1"], enteringHighHands: true },
+      { id: "d", buyIns: 1, highHandIds: ["hh1"], enteringHighHands: true },
+      { id: "e", buyIns: 1, highHandIds: ["hh2"], enteringHighHands: true, paymentConfirmed: false },
+    ];
+    const registrations = players.map((row) => ({ paymentConfirmed: true, ...row }));
+    const breakdown = computePrizePool(halves, registrations);
+    render(
+      <PrizePoolCalculator
+        tournament={halves}
+        breakdown={breakdown}
+        display={payoutsForDisplay(halves, breakdown, registrations)}
+        rakeLabel="AP"
+        highHandAwards={[{ highHandId: "hh2", registrationId: "a", amountCents: 500, splitWithRegistrationId: null, awardedAt: null }]}
+      />,
+    );
+
+    const first = screen.getByTestId("high-hand-pot-hh1");
+    expect(first).toHaveTextContent("First half high hand entries (4 × $5.00)$20");
+    expect(first).toHaveTextContent("First half high hand AP (10%)-$2");
+    expect(screen.getByTestId("high-hand-net-hh1")).toHaveTextContent("$18");
+    const second = screen.getByTestId("high-hand-pot-hh2");
+    expect(second).toHaveTextContent("Second half high hand entries (2 × $5.00)$10");
+    expect(second).not.toHaveTextContent("AP");
+    expect(screen.getByTestId("high-hand-awarded-hh2")).toHaveTextContent("$5");
+    expect(screen.getByTestId("high-hand-next-award-hh2")).toHaveTextContent("$5");
+    // The prize pool never holds high-hand money.
+    expect(screen.getByTestId("gross-total")).toHaveTextContent("$200");
   });
 
   it("names every rate the AP comes from, not just the buy-in's (MONEY-REV-04)", () => {

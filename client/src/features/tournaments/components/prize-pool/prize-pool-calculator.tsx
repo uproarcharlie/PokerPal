@@ -1,13 +1,14 @@
-import { formatAmount, formatMoney, type Cents } from "@/lib/format";
+import { formatAmount, formatMoney } from "@/lib/format";
 import { EmptyState } from "@/components/shared/query-state";
 import { Calculator } from "lucide-react";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
 import { differenceLines } from "@shared/domain/prize-difference";
 import { DEFAULT_RAKE_LABEL, type PayoutDisplay, type PrizePoolBreakdown, type PrizePoolInput } from "@shared/domain/prize-pool";
+import { highHandLabel, highHandsOf, highHandStandings, type HighHandAward, type HighHandSettings, type HighHandStanding } from "@shared/domain/high-hands";
 import { describeApRates, rateText } from "@shared/domain/rake-rates";
 import { HighHandAwards, PaidPool } from "./paid-pool";
 import { DifferenceRows, LeftoverNote, PoolCard, PoolLine } from "./pool-lines";
-import { offersAddons, offersHighHand, offersRebuys } from "@shared/domain/player-actions";
+import { offersAddons, offersRebuys } from "@shared/domain/player-actions";
 
 /** What the calculator reads of a tournament: its money settings, and what finalize froze. */
 export type CalculatorTournament = PrizePoolInput & Partial<Pick<TournamentDetailDto, "enableHighHand" | "prizePoolSnapshot">>;
@@ -20,9 +21,11 @@ interface PrizePoolCalculatorProps {
   display: PayoutDisplay;
   /** The club's name for rake, e.g. "AP". */
   rakeLabel?: string;
-  /** The high-hand prizes already awarded, in cents: what the next winner gets is worked out from them. */
-  highHandAwardsCents?: readonly Cents[];
+  /** The high-hand prizes already awarded (highHandAwardsOf): what each pot's next winner gets is worked out from them. */
+  highHandAwards?: readonly HighHandAward[];
 }
+
+const NO_AWARDS: readonly HighHandAward[] = [];
 
 const amount = (value: PrizePoolInput["buyInAmount"]) => formatAmount(value, { forceCents: true });
 
@@ -46,7 +49,7 @@ export function PrizePoolCalculator({
   breakdown,
   display,
   rakeLabel = DEFAULT_RAKE_LABEL,
-  highHandAwardsCents = [],
+  highHandAwards = NO_AWARDS,
 }: PrizePoolCalculatorProps) {
   const snapshot = display.source === "snapshot" ? tournament.prizePoolSnapshot : null;
   if (snapshot) return <PaidPool pool={snapshot.pool} display={display} rakeLabel={rakeLabel} deal={snapshot.deal} />;
@@ -60,12 +63,14 @@ export function PrizePoolCalculator({
     );
   }
 
-  const { counts, gross, rake, highHand } = breakdown;
+  const { counts, gross, rake } = breakdown;
   const recalculated = display.source === "stored" || display.source === "unrecorded";
   const rates = describeApRates(tournament);
   const rakeDescription = rake.override !== null ? " (manual total)" : rates ? ` (${rates})` : "";
-  const highHandRakeShown = (tournament.highHandRakeType === "percentage" || tournament.highHandRakeType === "fixed") && highHand.rake > 0;
   const lines = differenceLines(breakdown, rakeLabel);
+  const settings = highHandsOf(tournament);
+  // Each pot with players in it (round 10: one block per high hand).
+  const pots = highHandStandings(breakdown.highHands, highHandAwards).filter(({ pot }) => pot.entrants > 0);
   const paidBuyIns = counts.buyIns - counts.freeBuyIns;
 
   return (
@@ -128,25 +133,15 @@ export function PrizePoolCalculator({
             ) : null}
           </div>
 
-          {offersHighHand(tournament) && highHand.entrants > 0 ? (
-            <div className="border-t border-border pt-3">
-              <PoolLine
-                label={`High Hand Entries (${highHand.entrants} × ${amount(tournament.highHandAmount)})`}
-                value={formatMoney(highHand.gross)}
-              />
-              {highHandRakeShown ? (
-                <PoolLine
-                  label={`High Hand ${rakeLabel} (${rateText(tournament.highHandRakeType, tournament.highHandRakeAmount, true)})`}
-                  value={`-${formatMoney(highHand.rake)}`}
-                  tone="deduction"
-                />
-              ) : null}
-              <PoolLine label="Net High Hand Pool" value={formatMoney(highHand.net)} testId="high-hand-net" tone="accent" />
-              {highHand.winners > 1 || highHandAwardsCents.length > 0 ? (
-                <HighHandAwards highHand={highHand} awardedCents={highHandAwardsCents} />
-              ) : null}
-            </div>
-          ) : null}
+          {pots.map((standing) => (
+            <HighHandPotLines
+              key={standing.pot.highHandId}
+              standing={standing}
+              settings={settings.find((highHand) => highHand.id === standing.pot.highHandId)}
+              named={breakdown.highHands.length > 1}
+              rakeLabel={rakeLabel}
+            />
+          ))}
         </>
       ) : (
         <EmptyState
@@ -157,5 +152,31 @@ export function PrizePoolCalculator({
         />
       )}
     </PoolCard>
+  );
+}
+
+interface HighHandPotLinesProps {
+  standing: HighHandStanding;
+  settings: HighHandSettings | undefined;
+  /** The game runs more than one high hand (round 10): each block says whose pot it is. */
+  named: boolean;
+  rakeLabel: string;
+}
+
+/** One high hand's pot, apart from the prize pool: its entries, its AP, what its winners share and where its awards stand. */
+function HighHandPotLines({ standing, settings, named, rakeLabel }: HighHandPotLinesProps) {
+  const { pot } = standing;
+  const label = named ? highHandLabel(pot.name) : "High Hand";
+  const suffix = named ? `-${pot.highHandId}` : "";
+  const rateShown = (settings?.rakeType === "percentage" || settings?.rakeType === "fixed") && pot.rake > 0;
+  return (
+    <div className="border-t border-border pt-3" data-testid={`high-hand-pot${suffix}`}>
+      <PoolLine label={`${label} ${named ? "entries" : "Entries"} (${pot.entrants} × ${formatMoney(pot.feeCents, { forceCents: true })})`} value={formatMoney(pot.gross)} />
+      {rateShown ? (
+        <PoolLine label={`${label} ${rakeLabel} (${rateText(settings?.rakeType, settings?.rakeAmount, true)})`} value={`-${formatMoney(pot.rake)}`} tone="deduction" />
+      ) : null}
+      <PoolLine label={named ? `Net ${label} pot` : "Net High Hand Pool"} value={formatMoney(pot.net)} testId={`high-hand-net${suffix}`} tone="accent" />
+      {pot.winners > 1 || standing.awards.length > 0 ? <HighHandAwards standing={standing} testIdSuffix={suffix} /> : null}
+    </div>
   );
 }

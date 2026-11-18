@@ -9,6 +9,7 @@
  * No zod here: the public pages that only show things load this module.
  */
 import type { SnapshotDeal } from "../domain/deal";
+import { highHandAwardsOf, highHandsOf, listsHighHands, type HighHandsInput } from "../domain/high-hands";
 import { formatMoney, type Cents } from "../domain/money";
 import { offersHighHand } from "../domain/player-actions";
 import type { CarriedIn } from "../domain/prize-difference";
@@ -16,6 +17,7 @@ import {
   computePrizePool,
   payoutsForDisplay,
   type EntryInput,
+  type PrizePoolBreakdown,
   type PaidSnapshotInput,
   type PayoutDisplaySource,
   type PayoutDisplayTournament,
@@ -56,6 +58,24 @@ export interface PublicPayoutDto {
 }
 
 /**
+ * One high hand's pot as the players see it (round 10): what its winners share, never the AP taken from
+ * it (nor its gross or entrants, from which the AP could be worked out). `id` as in shared/api/high-hands.
+ */
+export interface PublicHighHandPotDto {
+  id: string;
+  name: string;
+  /** What entering it costs, in cents. */
+  entryFeeCents: Cents;
+  note: string | null;
+  /** What its winners share now: its pot less the club's share, never below 0. */
+  potCents: Cents;
+  /** How many prizes it is split into. */
+  winners: number;
+  /** Its prizes awarded so far, in award order: who (a registration of the tournament's) and how much. */
+  awards: Array<{ registrationId: string; amountCents: Cents }>;
+}
+
+/**
  * GET /api/public/tournaments/:id/prizes (anyone, round 6): what the players play for, worked out on
  * the server (toPublicPrizes) with the same shared functions finalize pays with, so no public page needs
  * the club's takings to show it. Every viewer gets the same body, staff included (it is what the public
@@ -84,8 +104,13 @@ export interface PublicPrizesDto {
   undistributedCents: Cents;
   /** Money carried in from earlier tournaments (carriedInNote words it). Empty when none. */
   carriedIn: PublicCarriedIn[];
-  /** The high-hand pot players play for (the entry fees less the club's share), or null without a high hand. */
+  /**
+   * The high-hand money players play for (the entry fees less the club's share), or null without a high
+   * hand: the pot, or (round 10) the sum of `highHands[].potCents`, for a page that shows one figure.
+   */
   highHandPotCents: Cents | null;
+  /** Round 10: each high hand's pot, in order ("High hands" on the public page). Empty without a high hand. */
+  highHands: PublicHighHandPotDto[];
   /** The deal the last players made, once paid with one (source "snapshot"): what each was paid instead of their place. */
   deal: SnapshotDeal | null;
 }
@@ -95,6 +120,7 @@ export interface PublicPrizesDto {
  * snapshot, once finalized, says what was paid, carried in and dealt.
  */
 export type PrizesTournament = PrizePoolInput &
+  HighHandsInput &
   PayoutDisplayTournament & {
     id: string;
     prizePoolLocked?: boolean | null;
@@ -107,7 +133,9 @@ export type PrizesTournament = PrizePoolInput &
  * with: computePrizePool counts the paid players only, so `registrations` must carry their payment
  * status, as only the server's do. The money carried in is as finalize froze it once completed (a
  * snapshot from before round 5 records none), else as the pool holds it now: where it came from and how
- * much, nothing else.
+ * much, nothing else. The high-hand pots are as they stand now, completed or not (high hands are paid
+ * as they are won, and a pot's money is the paid entries': for a tournament that lists its high hands,
+ * `registrations` must carry their highHandIds and highHandWins too).
  */
 export function toPublicPrizes(tournament: PrizesTournament, registrations: ReadonlyArray<EntryInput & StoredResultInput>): PublicPrizesDto {
   const breakdown = computePrizePool(tournament, registrations);
@@ -117,6 +145,7 @@ export function toPublicPrizes(tournament: PrizesTournament, registrations: Read
   // What was paid (the frozen or stored prizes), or nothing for a cancelled tournament; else the current pool.
   const settled = display.source === "snapshot" || display.source === "stored" || display.source === "cancelled";
   const locked = tournament.prizePoolLocked === true;
+  const highHands = publicHighHandPots(tournament, breakdown.highHands, registrations);
   return {
     tournamentId: tournament.id,
     locked,
@@ -126,9 +155,49 @@ export function toPublicPrizes(tournament: PrizesTournament, registrations: Read
     payouts: display.rows.map(({ position, amountCents, registrationId }) => (registrationId ? { position, amountCents, registrationId } : { position, amountCents })),
     undistributedCents: display.undistributedCents,
     carriedIn: carriedIn.map(({ fromName, amountCents }) => ({ fromName, amountCents })),
-    highHandPotCents: offersHighHand(tournament) ? Math.max(0, breakdown.highHand.net) : null,
+    highHandPotCents: publicHighHandPotCents(tournament, breakdown, highHands),
+    highHands,
     deal: display.source === "snapshot" ? (snapshot?.deal ?? null) : null,
   };
+}
+
+/**
+ * The one high-hand figure of an old page: the pots the answer lists, added up as they are shown (each
+ * at least 0), so a pot whose flat AP is more than is in it neither lowers the figure nor tells anyone
+ * that AP; null without a high hand. A tournament that lists none keeps its legacy figure.
+ */
+function publicHighHandPotCents(tournament: PrizesTournament, breakdown: PrizePoolBreakdown, pots: readonly PublicHighHandPotDto[]): Cents | null {
+  if (!offersHighHand(tournament)) return null;
+  if (!listsHighHands(tournament)) return Math.max(0, breakdown.highHand.net);
+  return pots.reduce((sum, pot) => sum + pot.potCents, 0);
+}
+
+/** Each pot as the players see it: its money less the AP, and its awards. */
+function publicHighHandPots(
+  tournament: PrizesTournament,
+  pots: PrizePoolBreakdown["highHands"],
+  registrations: ReadonlyArray<EntryInput & StoredResultInput>,
+): PublicHighHandPotDto[] {
+  const awards = highHandAwardsOf(tournament, registrations);
+  const notes = new Map(highHandsOf(tournament).map((highHand) => [highHand.id, highHand.note ?? null]));
+  return pots.map((pot) => ({
+    id: pot.highHandId,
+    name: pot.name,
+    entryFeeCents: pot.feeCents,
+    note: notes.get(pot.highHandId) ?? null,
+    potCents: Math.max(0, pot.net),
+    winners: pot.winners,
+    awards: awards
+      .filter((award) => award.highHandId === pot.highHandId)
+      .map(({ registrationId, amountCents }) => ({ registrationId, amountCents })),
+  }));
+}
+
+/** One high hand's pot on the TV (round 10): its name and what its winners share, never the AP. */
+export interface DisplayHighHandPot {
+  id: string;
+  name: string;
+  potCents: Cents;
 }
 
 /**
@@ -200,6 +269,13 @@ export interface LiveDisplayDto {
      * carried over from Week 3": carriedInNote). Completed: as finalize froze it. Empty when none.
      */
     carriedIn: PublicCarriedIn[] | null;
+    /**
+     * Round 10: each high hand's pot by name (PublicPrizesDto.highHands: amounts only, never the AP),
+     * when displaySettings.showHighHands is on and the tournament runs a high hand; null otherwise.
+     * Shown whether or not the prize pool is (a pot is not an estimate of the prizes); optional only
+     * because an answer made before round 10 has none.
+     */
+    highHands?: DisplayHighHandPot[] | null;
   };
   /** Where the QR code leads (a path on this site), or null for no QR. Season falls back to the tournament page. */
   qr: { target: Exclude<QrTarget, "none">; path: string } | null;

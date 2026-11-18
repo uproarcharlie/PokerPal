@@ -71,6 +71,8 @@ const FIGURE_SWITCHES: ReadonlyArray<{ field: Toggle; label: string }> = [
   { field: "showChipsInPlay", label: "Chips in play" },
   { field: "showTables", label: "Tables" },
   { field: "showRebuyWindow", label: "Time left to re-buy (Re-buys close in …)" },
+  // Round 10: each high hand's pot by name, amounts only.
+  { field: "showHighHands", label: "High hand pots" },
 ];
 
 interface SettingsCardProps extends Pick<LiveDisplayDto, "qr" | "season"> {

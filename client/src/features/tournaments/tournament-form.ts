@@ -4,15 +4,18 @@
  * request bodies built from them. Pure, so every rule is unit-tested.
  */
 import { z } from "zod";
-import { RAKE_TYPES, type RakeType } from "@shared/api/common";
+import type { RakeType } from "@shared/api/common";
 import type { ClubDto, PublicRegistration, PublicTournament } from "@shared/api/public";
 import { createTournamentSchema, type CreateTournamentInput, type UpdateTournamentInput } from "@shared/api/tournaments";
-import { centsToDecimalString, isAmountSet, toBasisPoints, toCents, type MoneyInput } from "@shared/domain/money";
-import { offersAddons, offersHighHand, offersRebuys } from "@shared/domain/player-actions";
+import type { HighHandsInput } from "@shared/domain/high-hands";
+import { toCents } from "@shared/domain/money";
+import { offersAddons, offersRebuys } from "@shared/domain/player-actions";
 import { PAYOUT_STRUCTURE_KEYS, type PayoutStructureKey } from "@shared/domain/payouts";
 import { mergeRakeRates, RAKE_COMPONENTS, rateOverPrice, rateOverPriceMessage, type RakeRatesProblem } from "@shared/domain/rake-rates";
 import { fromZonedDateTimeLocal, plural, toZonedDateTimeLocal } from "@/lib/format";
 import { typedNumber } from "@/lib/forms";
+import { highHandEntrantsOf, highHandFormValues, highHandsFormSchema, type HighHandFormValue } from "./high-hands-form";
+import { rakeTypeOf, rateAmountText } from "./rate-text";
 
 /** What the form holds: text boxes as text, switches as booleans. */
 export interface TournamentFormValues {
@@ -44,11 +47,8 @@ export interface TournamentFormValues {
   addonRakeType: RakeType;
   addonRakeAmount: string;
   payoutStructure: PayoutStructureKey;
-  enableHighHand: boolean;
-  highHandAmount: string;
-  highHandPayouts: string;
-  highHandRakeType: RakeType;
-  highHandRakeAmount: string;
+  /** Round 10: the high hands, in order (none: no high hand). */
+  highHands: HighHandFormValue[];
   enableLateRegistration: boolean;
   trackPoints: boolean;
   minPlayers: string;
@@ -72,21 +72,33 @@ export const RATE_MESSAGES: Readonly<Record<RakeRatesProblem["code"], string>> =
   PERCENT_OVER_100: "A percentage cannot be over 100",
 };
 
+/** The legacy high-hand settings (before round 10): the form sends the list (`highHands`) instead, never these. */
+const LEGACY_HIGH_HAND_FIELDS = {
+  enableHighHand: true,
+  highHandAmount: true,
+  highHandRakeType: true,
+  highHandRakeAmount: true,
+  highHandPayouts: true,
+} as const;
+
+/** The AP rates the form's own boxes hold: each high hand's is on its card. */
+const FORM_RATES = RAKE_COMPONENTS.filter(({ type }) => type !== "highHandRakeType");
+
 /**
  * The form's values, checked by the shared request schema. A rate is checked as the server checks it
  * (mergeRakeRates, then rateOverPrice: a fixed rate above the price it is taken from), but only for
  * the parts the tournament has: a re-buy rate typed before re-buys were switched off is not sent, so
- * it is not checked either.
+ * it is not checked either. The high hands are a list (round 10), each checked on its card.
  */
 export const tournamentFormSchema = createTournamentSchema
-  .omit({ status: true })
+  .omit({ status: true, highHands: true, ...LEGACY_HIGH_HAND_FIELDS })
   .extend({
     clubId: z.string().trim().min(1, "Choose a club").pipe(shape.clubId),
     startDateTime: z.string().trim().min(1, "Choose the start date and time").pipe(shape.startDateTime),
     maxRebuys: typedNumber(shape.maxRebuys),
     maxAddons: typedNumber(shape.maxAddons),
     rebuyPeriodMinutes: typedNumber(shape.rebuyPeriodMinutes),
-    highHandPayouts: typedNumber(shape.highHandPayouts),
+    highHands: highHandsFormSchema,
     minPlayers: typedNumber(shape.minPlayers),
     maxPlayers: typedNumber(shape.maxPlayers),
     seatsPerTable: typedNumber(shape.seatsPerTable),
@@ -106,11 +118,6 @@ export const tournamentFormSchema = createTournamentSchema
     if (values.enableAddons && values.addonAmount !== null && !offersAddons(values)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["addonAmount"], message: "Enter an add-on price above $0, or switch add-ons off" });
     }
-    // A high hand switched on with no price, or $0, is no high hand either (offersHighHand): every screen
-    // would leave it out, while the TD thought players were offered one (P3REV3-CQ-03).
-    if (values.enableHighHand && !offersHighHand(values)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["highHandAmount"], message: "Enter a high-hand price above $0, or switch high hands off" });
-    }
   });
 
 export type TournamentFormOutput = z.output<typeof tournamentFormSchema>;
@@ -128,7 +135,8 @@ export function inClubZone(values: TournamentFormValues, timeZone: string): Tour
 /**
  * The settings to send. A part the tournament does not have is sent empty, so a price typed before a
  * switch was turned off is never stored (CA-15); a rate of "none" sends no amount (the server stores 0).
- * "Re-buys OR add-ons" means something only while the tournament sells both.
+ * "Re-buys OR add-ons" means something only while the tournament sells both. The high hands go as
+ * their list (round 10), with none of the legacy high-hand fields (the server refuses the two together).
  */
 export function tournamentConfig(values: TournamentFormOutput): TournamentConfig {
   const { enableRebuys, enableAddons, ...config } = values;
@@ -138,15 +146,18 @@ export function tournamentConfig(values: TournamentFormOutput): TournamentConfig
   }
   if (!enableAddons) Object.assign(result, { addonAmount: null, maxAddons: null, addonRakeType: "none" });
   if (!enableRebuys || !enableAddons) result.rebuyOrAddon = null;
-  if (!config.enableHighHand) Object.assign(result, { highHandAmount: null, highHandRakeType: "none" });
-  for (const { type, amount } of RAKE_COMPONENTS) {
+  for (const { type, amount } of FORM_RATES) {
     if ((result[type] ?? "none") === "none") result[amount] = null;
   }
   return result;
 }
 
-const sameValue = (a: unknown, b: unknown) =>
-  a instanceof Date && b instanceof Date ? a.getTime() === b.getTime() : a === b;
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a instanceof Date && b instanceof Date) return a.getTime() === b.getTime();
+  // The high hands' list (round 10): the same when it would send the same.
+  if (Array.isArray(a) && Array.isArray(b)) return JSON.stringify(a) === JSON.stringify(b);
+  return a === b;
+}
 
 /**
  * An edit's request body: only what changed, so a field nobody touched is never resent (a finished
@@ -158,7 +169,7 @@ export function changedConfig(initial: TournamentConfig, current: TournamentConf
   for (const [key, value] of Object.entries(current)) {
     if (key !== "clubId" && !sameValue(value, (initial as Record<string, unknown>)[key])) changes[key] = value;
   }
-  for (const { type, amount } of RAKE_COMPONENTS) {
+  for (const { type, amount } of FORM_RATES) {
     if (type in changes || amount in changes) {
       changes[type] = current[type];
       changes[amount] = current[amount];
@@ -170,25 +181,23 @@ export function changedConfig(initial: TournamentConfig, current: TournamentConf
 /**
  * What the players already have at each price (editing). The pool counts every recorded entry at the
  * tournament's current prices, so a part with entries recorded stays on, and its price is never left
- * empty: those entries would silently count as $0 (P3REV0-PARITY-EDIT-REPRICE).
+ * empty: those entries would silently count as $0 (P3REV0-PARITY-EDIT-REPRICE). A high hand anyone is
+ * in stays on the list (round 10: by its id).
  */
 export interface RecordedEntries {
   rebuys: number;
   addons: number;
-  highHandEntrants: number;
+  highHandEntrants: Readonly<Record<string, number>>;
 }
 
-type RecordedFields = Pick<PublicRegistration, "rebuys" | "addons" | "enteringHighHands">;
+type RecordedFields = Pick<PublicRegistration, "rebuys" | "addons" | "enteringHighHands" | "highHandIds">;
 
-export function recordedEntries(registrations: readonly RecordedFields[]): RecordedEntries {
-  return registrations.reduce<RecordedEntries>(
-    (total, registration) => ({
-      rebuys: total.rebuys + (registration.rebuys ?? 0),
-      addons: total.addons + (registration.addons ?? 0),
-      highHandEntrants: total.highHandEntrants + (registration.enteringHighHands === true ? 1 : 0),
-    }),
-    { rebuys: 0, addons: 0, highHandEntrants: 0 },
-  );
+export function recordedEntries(tournament: HighHandsInput, registrations: readonly RecordedFields[]): RecordedEntries {
+  return {
+    rebuys: registrations.reduce((total, registration) => total + (registration.rebuys ?? 0), 0),
+    addons: registrations.reduce((total, registration) => total + (registration.addons ?? 0), 0),
+    highHandEntrants: highHandEntrantsOf(tournament, registrations),
+  };
 }
 
 const RECORDED_PRICES = [
@@ -236,11 +245,7 @@ export const NEW_TOURNAMENT_VALUES: TournamentFormValues = {
   addonRakeType: "none",
   addonRakeAmount: "",
   payoutStructure: "standard",
-  enableHighHand: false,
-  highHandAmount: "",
-  highHandPayouts: "1",
-  highHandRakeType: "none",
-  highHandRakeAmount: "",
+  highHands: [],
   enableLateRegistration: false,
   trackPoints: true,
   minPlayers: "8",
@@ -262,20 +267,6 @@ export function startingClubId(choices: readonly Pick<ClubDto, "id">[], clubId: 
   return choices.length === 1 ? choices[0].id : "";
 }
 
-/** A stored rate type the forms offer (the tournament form, the AP rates sheet); anything older reads as none. */
-export function rakeTypeOf(value: string | null | undefined): RakeType {
-  return (RAKE_TYPES as readonly string[]).includes(value ?? "") ? (value as RakeType) : "none";
-}
-
-/**
- * A stored rate's amount as every form's box shows it: "10" for 10%, "5.00" for $5, blank for no rate
- * (P4REV4-CQ-03: one rule for the tournament form and the AP rates sheet).
- */
-export function rateAmountText(type: RakeType, amount: MoneyInput): string {
-  if (type === "none" || !isAmountSet(amount)) return "";
-  return type === "percentage" ? String(toBasisPoints(amount) / 100) : centsToDecimalString(toCents(amount));
-}
-
 /** A stored payout structure the form offers; anything older reads as Standard, which is what it pays. */
 function payoutStructure(value: string): PayoutStructureKey {
   return (PAYOUT_STRUCTURE_KEYS as readonly string[]).includes(value) ? (value as PayoutStructureKey) : "standard";
@@ -292,7 +283,6 @@ export function formValuesFromTournament(tournament: PublicTournament, timeZone:
   const buyIn = rate(tournament.rakeType, tournament.rakeAmount);
   const rebuy = rate(tournament.rebuyRakeType, tournament.rebuyRakeAmount);
   const addon = rate(tournament.addonRakeType, tournament.addonRakeAmount);
-  const highHand = rate(tournament.highHandRakeType, tournament.highHandRakeAmount);
   return {
     name: tournament.name,
     description: text(tournament.description),
@@ -317,11 +307,7 @@ export function formValuesFromTournament(tournament: PublicTournament, timeZone:
     addonRakeType: addon.type,
     addonRakeAmount: addon.amount,
     payoutStructure: payoutStructure(tournament.payoutStructure),
-    enableHighHand: offersHighHand(tournament),
-    highHandAmount: text(tournament.highHandAmount),
-    highHandPayouts: text(tournament.highHandPayouts ?? 1),
-    highHandRakeType: highHand.type,
-    highHandRakeAmount: highHand.amount,
+    highHands: highHandFormValues(tournament),
     enableLateRegistration: tournament.enableLateRegistration === true,
     trackPoints: tournament.trackPoints !== false,
     minPlayers: text(tournament.minPlayers),

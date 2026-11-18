@@ -204,6 +204,7 @@ test("(p) bank transfers: the club's details, the tournament's switch, the QR ca
       particulars: "Wed 18 Nov",
       reference: "Alexandra Fi",
       highHandAtDoorCents: 500,
+      highHandsAtDoor: [{ highHandId: "legacy", name: "High hand", feeCents: 500 }],
       waitingList: false,
     } satisfies PaymentInstructionsDto);
     await expect(phone.getByText("Registration Complete!")).toBeVisible();

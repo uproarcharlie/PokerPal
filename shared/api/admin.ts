@@ -101,6 +101,7 @@ export const AUDIT_ACTIONS = [
   "prize_pool.adjust",
   "prize_pool.rates",
   "tournament.payouts", // round 5: the payout editor (target = tournament)
+  "tournament.high_hands", // round 10: the list of high hands set or changed (target = tournament)
   "tournament.finalize",
   "tournament.refinalize",
   "player.update",
@@ -109,6 +110,7 @@ export const AUDIT_ACTIONS = [
   "registration.correct", // round 9: a paid entry's payment taken back, how it paid, or its high-hand entry (target = registration)
   "pending_action.dismiss",
   "high_hand.split", // target = tournament
+  "high_hand.award", // round 10: a high hand awarded, its prize corrected, or the award taken back (target = tournament)
   "clock.key_issued", // the venue TV's clock key (target = tournament)
   "clock.key_revoked",
   "seed_club_owner", // boot seed (server/db/seeds.ts), actor NULL
@@ -119,8 +121,24 @@ export const AUDIT_ACTIONS = [
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
-/** What a correction to an entry (round 9) can change: whether it has paid, how, and whether it is in the high hand. */
-type CorrectedEntry = { paymentConfirmed: boolean; paidBy: string | null; enteringHighHands: boolean };
+/**
+ * What a correction to an entry (round 9) can change: whether it has paid, how, and whether it is in the
+ * high hand; round 10, for a tournament that lists its high hands, which ones (`highHandIds`, absent from
+ * earlier entries and for the legacy high hand).
+ */
+type CorrectedEntry = { paymentConfirmed: boolean; paidBy: string | null; enteringHighHands: boolean; highHandIds?: string[] };
+
+/** One high hand as an audit row records it (round 10): its settings as stored. */
+type AuditedHighHand = {
+  id: string;
+  name: string;
+  position: number;
+  entryFee: string;
+  rakeType: string;
+  rakeAmount: string;
+  winners: number;
+  note: string | null;
+};
 
 /** The before/after of the fields a change touched, keyed by field. */
 type FieldChanges = { before: Record<string, unknown>; after: Record<string, unknown> };
@@ -247,12 +265,42 @@ export type AuditData = {
   };
   /** target = tournament: the request staff dismissed without applying it. */
   "pending_action.dismiss": { actionId: string; actionType: string; playerId: string; targetPlayerId: string | null; requestedAt: string | null };
+  /** `highHandId` (round 10) when the high hand split is a listed one; absent for the legacy high hand. */
   "high_hand.split": {
     registrationId: string;
     splitWithRegistrationId: string;
     shareCents: Cents;
     keepCents: Cents;
     highHandPayouts: { before: number; after: number };
+    highHandId?: string;
+  };
+  /**
+   * Round 10: the high hands before and after (`before` null while the tournament kept its one high hand
+   * in its legacy columns, whose settings `legacy` then records), whether the legacy high hand was taken
+   * into the list (with how many entrants and awards), the reason, and the pots' nets before and after.
+   */
+  "tournament.high_hands": {
+    before: AuditedHighHand[] | null;
+    after: AuditedHighHand[];
+    legacy?: { enableHighHand: boolean | null; highHandAmount: string | null; highHandRakeType: string | null; highHandRakeAmount: string | null; highHandPayouts: number | null };
+    /** `alsoIn`: the new high hands its entrants were entered in too (R10REV1-MONEY-02: HighHandInput.legacyEntrants). */
+    adoptedLegacy?: { entrants: number; awards: number; alsoIn?: string[] };
+    removed: string[];
+    reason: string | null;
+    potsBefore: Array<{ highHandId: string; netCents: Cents }>;
+    potsAfter: Array<{ highHandId: string; netCents: Cents }>;
+  };
+  /** Round 10: one award of one listed high hand made, its prize corrected, or taken back. */
+  "high_hand.award": {
+    highHandId: string;
+    highHandName: string;
+    registrationId: string;
+    playerName: string;
+    change: "awarded" | "corrected" | "taken_back";
+    amountCents: { before: Cents | null; after: Cents | null };
+    splitWithRegistrationId: string | null;
+    reason: string | null;
+    potNetCents: Cents;
   };
   "seed_club_owner": { previousOwnerId: null; ownerId: string; email: string };
   "seed_club_rake_label": { previousRakeLabel: null; rakeLabel: string };

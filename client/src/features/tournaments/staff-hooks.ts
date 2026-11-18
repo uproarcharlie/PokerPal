@@ -10,6 +10,7 @@
  */
 import { useMutation, useQuery, useQueryClient, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import type { FinalizeInput, FinalizePreviewInput } from "@shared/api/finalize";
+import type { HighHandAwardCorrectionInput, HighHandAwardInput } from "@shared/api/high-hands";
 import type { ConfirmPendingActionInput, PendingActionDto } from "@shared/api/pending-actions";
 import type {
   AdjustCountsInput,
@@ -27,7 +28,9 @@ import { qk } from "@/lib/api/query-keys";
 import { unlessRefused } from "@/lib/live-refresh";
 import {
   adjustCounts,
+  awardHighHand,
   changeFreeEntry,
+  correctHighHandAward,
   confirmPayment,
   confirmPendingAction,
   createTournament,
@@ -37,6 +40,7 @@ import {
   planChangedPreview,
   registerPlayer,
   removeRegistration,
+  takeBackHighHandAward,
   tournamentDeskQueries,
   updateRegistration,
   updateTournament,
@@ -180,6 +184,34 @@ export function useUpdateRegistration(tournamentId: string) {
       void invalidateTournament(queryClient, tournamentId);
     },
   });
+}
+
+/**
+ * Round 10: one high hand's awards (award, correct, take back), one pot at a time. An award's answer
+ * carries the winner's registration as it now stands, which replaces their row at once; then the
+ * tournament refreshes (the pots, the next award).
+ */
+export function useHighHandAwards(tournamentId: string) {
+  const queryClient = useQueryClient();
+  const refresh = (result: { registration?: PublicRegistration }) => {
+    if (result.registration) replaceRow(queryClient, tournamentId, result.registration);
+    void invalidateTournament(queryClient, tournamentId);
+  };
+  return {
+    award: useMutation({
+      mutationFn: ({ highHandId, input }: { highHandId: string; input: HighHandAwardInput }) => awardHighHand(tournamentId, highHandId, input),
+      onSuccess: refresh,
+    }),
+    correct: useMutation({
+      mutationFn: ({ highHandId, registrationId, input }: { highHandId: string; registrationId: string; input: HighHandAwardCorrectionInput }) =>
+        correctHighHandAward(tournamentId, highHandId, registrationId, input),
+      onSuccess: refresh,
+    }),
+    takeBack: useMutation({
+      mutationFn: ({ highHandId, registrationId }: { highHandId: string; registrationId: string }) => takeBackHighHandAward(tournamentId, highHandId, registrationId),
+      onSuccess: () => void invalidateTournament(queryClient, tournamentId),
+    }),
+  };
 }
 
 /**

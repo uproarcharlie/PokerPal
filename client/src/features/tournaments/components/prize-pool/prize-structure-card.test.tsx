@@ -53,28 +53,28 @@ describe("PrizeStructureCard", () => {
   it("lets the club's staff edit the payouts while the tournament is open", async () => {
     server.use(http.get("/api/tournaments/t1/prize-pool", () => HttpResponse.json(prizePoolDto(apTournament(), entrants(8)))));
     const user = userEvent.setup();
-    renderWithApp(<PrizeStructureCard display={live} entrants={8} highHandAmount={null} tournament={apTournament()} />);
+    renderWithApp(<PrizeStructureCard display={live} entrants={8} highHands={[]} tournament={apTournament()} />);
 
     await user.click(screen.getByRole("button", { name: "Edit payouts" }));
     expect(await screen.findByRole("dialog", { name: "Edit payouts" })).toBeInTheDocument();
   });
 
   it("offers no payout editor to a visitor, once the tournament is completed, or without the tournament", () => {
-    const { unmount } = renderWithApp(<PrizeStructureCard display={live} entrants={8} highHandAmount={null} tournament={apTournament({ viewer: VISITOR_VIEW })} />);
+    const { unmount } = renderWithApp(<PrizeStructureCard display={live} entrants={8} highHands={[]} tournament={apTournament({ viewer: VISITOR_VIEW })} />);
     expect(screen.queryByRole("button", { name: "Edit payouts" })).not.toBeInTheDocument();
     unmount();
 
-    const second = renderWithApp(<PrizeStructureCard display={live} entrants={8} highHandAmount={null} tournament={apTournament({ status: "completed" })} />);
+    const second = renderWithApp(<PrizeStructureCard display={live} entrants={8} highHands={[]} tournament={apTournament({ status: "completed" })} />);
     expect(screen.queryByRole("button", { name: "Edit payouts" })).not.toBeInTheDocument();
     second.unmount();
 
-    renderWithApp(<PrizeStructureCard display={live} entrants={8} highHandAmount={null} />);
+    renderWithApp(<PrizeStructureCard display={live} entrants={8} highHands={[]} />);
     expect(screen.queryByRole("button", { name: "Edit payouts" })).not.toBeInTheDocument();
   });
 
   it("says a deal paid the players still in, instead of their places' shares", () => {
     const tournament = apTournament({ status: "completed", prizePoolSnapshot: prizePoolSnapshotDto({ deal }) });
-    renderWithApp(<PrizeStructureCard display={dealt} entrants={6} highHandAmount={null} tournament={tournament} />);
+    renderWithApp(<PrizeStructureCard display={dealt} entrants={6} highHands={[]} tournament={tournament} />);
 
     expect(screen.getByTestId("payout-deal")).toHaveTextContent("DealFay $200, Eve $150, Dee $150, Cat $100 (Chip chop at 4 handed)");
     const top = screen.getByRole("list", { name: "Top places" });
@@ -87,7 +87,7 @@ describe("PrizeStructureCard", () => {
   it("tells the staff the money the prizes leave goes to the club's fee, live (round 7), whatever was chosen before", async () => {
     const tournament = apTournament({ manualPrizePool: "600.00", prizeDifference: "carry" });
     server.use(http.get("/api/tournaments/t1/prize-pool", () => HttpResponse.json(prizePoolDto(tournament, entrants(8)))));
-    renderWithApp(<PrizeStructureCard display={live} entrants={8} highHandAmount={null} tournament={tournament} />);
+    renderWithApp(<PrizeStructureCard display={live} entrants={8} highHands={[]} tournament={tournament} />);
 
     // $800 in, $80 AP: $720 available, a $600 pool.
     expect(await screen.findByTestId("pool-summary")).toHaveTextContent("Prize pool $600· AP $80· Leftover $120 → AP");
@@ -105,7 +105,7 @@ describe("PrizeStructureCard", () => {
       totalCents: 14_400,
       undistributedCents: 0,
     };
-    const { unmount } = renderWithApp(<PrizeStructureCard display={two} entrants={5} highHandAmount={null} tournament={apTournament()} />);
+    const { unmount } = renderWithApp(<PrizeStructureCard display={two} entrants={5} highHands={[]} tournament={apTournament()} />);
 
     expect(await screen.findByTestId("undistributed")).toHaveTextContent(
       "Only 2 paid players: places below 2nd are not paid, so the $36 they would pay goes to AP until more payments are confirmed.",
@@ -113,7 +113,7 @@ describe("PrizeStructureCard", () => {
     expect(screen.getByTestId("pool-summary")).toHaveTextContent("Prize pool $144· AP $20· Leftover $36 → AP");
     unmount();
 
-    renderWithApp(<PrizeStructureCard display={two} entrants={5} highHandAmount={null} tournament={apTournament({ viewer: VISITOR_VIEW })} />);
+    renderWithApp(<PrizeStructureCard display={two} entrants={5} highHands={[]} tournament={apTournament({ viewer: VISITOR_VIEW })} />);
     expect(screen.getByRole("list", { name: "Top places" })).toBeInTheDocument();
     expect(screen.queryByTestId("undistributed")).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/\$36|Leftover|not paid/);
@@ -122,12 +122,12 @@ describe("PrizeStructureCard", () => {
   it("says what the club added to prizes above the money available, and nothing when the prizes are what is available", async () => {
     const fixed = apTournament({ payoutStructure: "custom", customPayouts: '{"v":2,"places":[{"amountCents":60000},{"amountCents":20000}]}' });
     server.use(http.get("/api/tournaments/t1/prize-pool", () => HttpResponse.json(prizePoolDto(fixed, entrants(8)))));
-    const { unmount } = renderWithApp(<PrizeStructureCard display={live} entrants={8} highHandAmount={null} tournament={fixed} />);
+    const { unmount } = renderWithApp(<PrizeStructureCard display={live} entrants={8} highHands={[]} tournament={fixed} />);
     expect(await screen.findByTestId("pool-summary")).toHaveTextContent("Prize pool $800· AP $80· Added by the club $80");
     unmount();
 
     server.use(http.get("/api/tournaments/t1/prize-pool", () => HttpResponse.json(prizePoolDto(apTournament(), entrants(8)))));
-    renderWithApp(<PrizeStructureCard display={live} entrants={8} highHandAmount={null} tournament={apTournament()} />);
+    renderWithApp(<PrizeStructureCard display={live} entrants={8} highHands={[]} tournament={apTournament()} />);
     await screen.findByRole("button", { name: "Edit payouts" });
     expect(screen.queryByTestId("pool-summary")).not.toBeInTheDocument();
   });
@@ -136,13 +136,13 @@ describe("PrizeStructureCard", () => {
     const difference = { availableCents: 47_500, setCents: 42_500, cents: 5_000, keptByClubCents: 5_000, addedByClubCents: 0 };
     const snapshot = prizePoolSnapshotDto();
     const frozen = { ...snapshot, pool: { ...snapshot.pool, netCents: 42_500, impliedRakeCents: 7_500, difference } };
-    renderWithApp(<PrizeStructureCard display={{ ...dealt, rows: [] }} entrants={3} highHandAmount={null} tournament={apTournament({ status: "completed", prizePoolSnapshot: frozen })} />);
+    renderWithApp(<PrizeStructureCard display={{ ...dealt, rows: [] }} entrants={3} highHands={[]} tournament={apTournament({ status: "completed", prizePoolSnapshot: frozen })} />);
 
     expect(screen.getByTestId("pool-summary")).toHaveTextContent("Prize pool $425· Rake $25· Leftover $50 → Rake");
   });
 
   it("never shows a 0% share for a place paid outside the structure", () => {
-    renderWithApp(<PrizeStructureCard display={dealt} entrants={6} highHandAmount={null} />);
+    renderWithApp(<PrizeStructureCard display={dealt} entrants={6} highHands={[]} />);
 
     expect(screen.queryByText("0% of prize pool")).not.toBeInTheDocument();
     expect(screen.getAllByText("50% of prize pool")).toHaveLength(1);

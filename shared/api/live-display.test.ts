@@ -44,6 +44,7 @@ describe("toPublicPrizes", () => {
       undistributedCents: 0,
       carriedIn: [],
       highHandPotCents: null,
+      highHands: [],
       deal: null,
     });
     expect(toPublicPrizes(tournament(), [{ id: "r1", buyIns: 1 }]).poolCents).toBe(0);

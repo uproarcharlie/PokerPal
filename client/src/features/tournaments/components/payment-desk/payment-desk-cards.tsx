@@ -105,6 +105,7 @@ export function PaymentDeskCards({ tournament, timeZone, rakeLabel }: PaymentDes
             earlyBirds={earlyBirdToggle}
             full={full}
             transfers={transfers}
+            tournament={tournament}
           />
         </CardContent>
       </Card>
@@ -124,6 +125,7 @@ export function PaymentDeskCards({ tournament, timeZone, rakeLabel }: PaymentDes
             freeEntries={freeEntryChanges}
             freeTournament={freeTournament}
             transfers={transfers}
+            tournament={tournament}
             fixes={fixes}
           />
         </CardContent>

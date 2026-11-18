@@ -1,6 +1,8 @@
 import type { ClockDisplaySettings } from "@shared/api/clock";
 import type { LiveDisplayDto } from "@shared/api/live-display";
 import { bigBlindsOf, formatChips, formatClock, msUntilClockMinute, type DerivedClock } from "@shared/domain/clock";
+import { highHandLabel } from "@shared/domain/high-hands";
+import { formatMoney } from "@shared/domain/money";
 import { entriesOf } from "@/lib/entries";
 import { formatNumber, plural } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -21,8 +23,9 @@ export type TileSettings = Pick<ClockDisplaySettings, "showRebuyWindow" | "showE
  * The room's figures, as tiles, in the order the screen gives them room (round 5, item 17): the
  * players left of those who entered and the average stack (the server leaves it out when the TD does),
  * then each figure the TD switched on: the re-buy countdown, the entries, re-buys, add-ons, early
- * birds, the chips in play and the tables. Every chip and dollar still counts in the average stack and
- * the pool whether its tile is shown or not.
+ * birds, the chips in play and the tables, and (round 10) each high hand's pot by name, which the
+ * server sends only while the TD shows them (displaySettings.showHighHands), never its AP. Every chip
+ * and dollar still counts in the average stack and the pool whether its tile is shown or not.
  */
 export function displayTiles(display: LiveDisplayDto, derived: DerivedClock | null, settings: TileSettings): TileText[] {
   const { stats, tournament } = display;
@@ -47,6 +50,7 @@ export function displayTiles(display: LiveDisplayDto, derived: DerivedClock | nu
   if (settings.showEarlyBirds && stats.earlyBirds > 0) tiles.push({ label: "Early birds", value: formatNumber(stats.earlyBirds) });
   if (settings.showChipsInPlay && stats.totalChips !== null) tiles.push({ label: "Chips in play", value: formatChips(stats.totalChips) });
   if (settings.showTables && stats.activeTables > 0) tiles.push({ label: "Tables", value: formatNumber(stats.activeTables) });
+  for (const pot of display.money.highHands ?? []) tiles.push({ label: highHandLabel(pot.name), value: formatMoney(pot.potCents) });
   return tiles;
 }
 

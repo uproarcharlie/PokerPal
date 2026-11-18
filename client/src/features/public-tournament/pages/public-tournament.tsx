@@ -66,8 +66,10 @@ function TournamentView({ tournament, registrationsQuery }: TournamentViewProps)
   const prizes = usePublicPrizes(tournament.id, { follow: tournament });
   const locked = tournament.prizePoolLocked === true;
   const pointsRules = pointsRulesOf(tournament, pointsSystem, allocations);
-  // The high-hand pot is money too: shown when the pool is, while the game is on.
-  const highHandPotCents = prizes.data && locked && !closed ? prizes.data.highHandPotCents : null;
+  // The high-hand pots are money too: shown when the pool is, while the game is on.
+  const potsShown = prizes.data !== undefined && locked && !closed;
+  const highHandPotCents = potsShown ? prizes.data.highHandPotCents : null;
+  const highHandPots = potsShown ? prizes.data.highHands : null;
 
   return (
     <div className="min-h-dvh bg-background">
@@ -103,7 +105,7 @@ function TournamentView({ tournament, registrationsQuery }: TournamentViewProps)
                       </CardContent>
                     </Card>
                   ) : null}
-                  <EntryDetails tournament={tournament} highHandPotCents={highHandPotCents} />
+                  <EntryDetails tournament={tournament} highHandPotCents={highHandPotCents} highHandPots={highHandPots} registrations={registrationsQuery.data} />
                   <QueryState query={prizes} loading={<LoadingRows rows={4} />} errorTitle={PRIZES_FAILED}>
                     {(paid) => (
                       <QueryState query={registrationsQuery} loading={<LoadingRows rows={4} />} errorTitle={PLAYERS_FAILED}>
