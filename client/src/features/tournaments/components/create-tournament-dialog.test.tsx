@@ -124,16 +124,17 @@ describe("CreateTournamentDialog", () => {
     });
   });
 
-  it("creates a bounty game: the bounty beside the buy-in, what players pay said under it (round 11)", async () => {
+  it("creates a bounty game: the bounty beside the buy-in, the prize pool, bounty and what players pay as separate lines (round 11)", async () => {
     const created = mockForm();
     const { user } = await renderDialog();
 
     await fillRequired(user);
     expect(screen.queryByTestId("bounty-hint")).not.toBeInTheDocument();
     await user.type(screen.getByRole("textbox", { name: "Bounty per player" }), "100");
-    expect(screen.getByTestId("bounty-hint")).toHaveTextContent(
-      "Players pay $150: $50 buy-in + $100 bounty. The bounty isn't in the prize pool — whoever knocks a player out collects it.",
-    );
+    const lines = within(screen.getByTestId("bounty-hint"));
+    expect(lines.getByText("Prize pool (paid to the places)").nextElementSibling).toHaveTextContent("$50");
+    expect(lines.getByText("Bounty (collected on knockouts, not in the prize pool)").nextElementSibling).toHaveTextContent("$100");
+    expect(lines.getByText("Each player pays").nextElementSibling).toHaveTextContent("$150");
     await user.click(screen.getByTestId("create-tournament-final"));
 
     await waitFor(() => expect(created).toHaveLength(1));

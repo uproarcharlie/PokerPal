@@ -4,10 +4,9 @@ import { MoneyText } from "@/components/shared/money-text";
 import { SmartImage } from "@/components/image/smart-image";
 import { formatDateTime } from "@/lib/format";
 import type { TournamentDetailDto } from "@shared/api/tournaments";
-import { entryPriceCents, hasBounty } from "@shared/domain/bounty";
+import { bountyCents, entryPriceCents, hasBounty } from "@shared/domain/bounty";
 import { highHandLabel, highHandsOf } from "@shared/domain/high-hands";
 import { offersAddons, offersRebuys } from "@shared/domain/player-actions";
-import { buyInPriceText } from "../../buy-in-price";
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -36,16 +35,23 @@ export function TournamentInfoCard({ tournament, timeZone }: { tournament: Tourn
         />
         <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
           <Fact label="Start Time">{formatDateTime(tournament.startDateTime, timeZone)}</Fact>
-          <Fact label="Buy-in">
+          {/* Round 11: a bounty game's buy-in (the prize pool), its bounty (not in it) and what a player pays, each on its own line. */}
+          <Fact label={hasBounty(tournament) ? "Buy-in (prize pool)" : "Buy-in"}>
             <span className="tabular-nums" data-testid="info-buy-in">
-              {buyInPriceText(tournament)}
+              <MoneyText amount={tournament.buyInAmount} forceCents />
             </span>
           </Fact>
-          {/* Round 11: what a player hands over at the door, the bounty on top of the buy-in. */}
           {hasBounty(tournament) ? (
-            <Fact label="Players pay">
-              <MoneyText cents={entryPriceCents(tournament)} />
-            </Fact>
+            <>
+              <Fact label="Bounty (not in the prize pool)">
+                <span className="tabular-nums" data-testid="info-bounty">
+                  <MoneyText cents={bountyCents(tournament)} forceCents />
+                </span>
+              </Fact>
+              <Fact label="Players pay">
+                <MoneyText cents={entryPriceCents(tournament)} forceCents />
+              </Fact>
+            </>
           ) : null}
           {offersRebuys(tournament) ? (
             <Fact label="Re-buy">

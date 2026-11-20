@@ -7,7 +7,7 @@ import { highHandAwardsOf, highHandLabel, highHandsOf, type HighHandSettings } f
 import type { Cents } from "@shared/domain/money";
 import { MoneyText } from "@/components/shared/money-text";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { BuyInPrice } from "./buy-in-price";
+import { bountyCents, hasBounty } from "@shared/domain/bounty";
 import { offersAddons, offersRebuys } from "@shared/domain/player-actions";
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -45,9 +45,15 @@ export function EntryDetails({ tournament, highHandPotCents, highHandPots = null
         </CardHeader>
         <CardContent className="p-4 text-sm sm:p-6">
           <dl className="space-y-3">
-            <Row label="Buy-in">
-              <BuyInPrice tournament={tournament} />
+            {/* Round 11: a bounty game's buy-in (its prize pool) and its bounty, each on its own line. */}
+            <Row label={hasBounty(tournament) ? "Buy-in (prize pool)" : "Buy-in"}>
+              <MoneyText amount={tournament.buyInAmount} />
             </Row>
+            {hasBounty(tournament) ? (
+              <Row label="Bounty (per knockout)">
+                <MoneyText cents={bountyCents(tournament)} />
+              </Row>
+            ) : null}
             {offersRebuys(tournament) ? (
               <Row label="Re-buy">
                 <MoneyText amount={tournament.rebuyAmount} />

@@ -233,7 +233,8 @@ describe("EditTournamentDialog (CA-14)", () => {
       await user.clear(screen.getByTestId("buyin-amount"));
       await user.type(screen.getByTestId("buyin-amount"), "50");
       await user.type(screen.getByTestId("bounty-amount"), "100");
-      expect(screen.getByTestId("bounty-hint")).toHaveTextContent("Players pay $150: $50 buy-in + $100 bounty.");
+      expect(within(screen.getByTestId("bounty-hint")).getByText("Each player pays").nextElementSibling).toHaveTextContent("$150");
+      expect(within(screen.getByTestId("bounty-hint")).getByText("Prize pool (paid to the places)").nextElementSibling).toHaveTextContent("$50");
       await user.click(screen.getByTestId("save-tournament"));
 
       const ask = await screen.findByTestId("confirm-reprice");

@@ -502,16 +502,18 @@ describe("PublicTournamentView header", () => {
 });
 
 describe("PublicTournamentView: a bounty game (round 11, on a phone)", () => {
-  /** The Entry Details card's Buy-in row (the stats box above it is labelled Buy-in too). */
-  const buyInRow = () => screen.getAllByText("Buy-in").find((label) => label.tagName === "DT")?.nextElementSibling;
+  /** An Entry Details row's value, by its label (the stats box above it is labelled Buy-in too). */
+  const row = (label: string) => screen.getAllByText(label).find((element) => element.tagName === "DT")?.nextElementSibling;
+  const buyInRow = () => row("Buy-in");
 
-  it("shows the buy-in with its bounty, in the entry details and the stats", async () => {
+  it("shows the buy-in (the prize pool) and the bounty as separate lines in the entry details, and the bounty in the stats", async () => {
     screenWidth(390);
     mockTournamentPages(tournamentDto({ status: "registration", buyInAmount: "50.00", bountyAmount: "100.00" }));
     renderView();
 
     expect(await screen.findByText("Entry Details")).toBeInTheDocument();
-    expect(buyInRow()).toHaveTextContent("$50 + $100 bounty");
+    expect(row("Buy-in (prize pool)")).toHaveTextContent(/^\$50$/);
+    expect(row("Bounty (per knockout)")).toHaveTextContent(/^\$100$/);
     expect(screen.getByTestId("buy-in-bounty")).toHaveTextContent("+ $100 bounty");
   });
 

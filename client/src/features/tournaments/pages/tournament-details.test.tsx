@@ -432,8 +432,10 @@ describe("TournamentDetails", () => {
     const user = userEvent.setup();
     renderDetails();
 
-    expect(await screen.findByTestId("info-buy-in")).toHaveTextContent("$50 + $100 bounty");
-    expect(screen.getByText("Players pay").nextElementSibling).toHaveTextContent("$150");
+    expect(await screen.findByTestId("info-buy-in")).toHaveTextContent("$50.00");
+    expect(screen.getByText("Buy-in (prize pool)")).toBeInTheDocument();
+    expect(screen.getByTestId("info-bounty")).toHaveTextContent("$100.00");
+    expect(screen.getByText("Players pay").nextElementSibling).toHaveTextContent("$150.00");
     expect(await screen.findByTestId("bounties-line")).toHaveTextContent("Bounties: 2 × $100 = $200 — not in the prize pool, collected on knockouts");
 
     await user.click(screen.getByRole("tab", { name: "Standings" }));

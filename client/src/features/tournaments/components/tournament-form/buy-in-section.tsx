@@ -5,7 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toCents } from "@shared/domain/money";
 import { PAYOUT_STRUCTURE_KEYS, PAYOUT_STRUCTURE_LABELS, type PayoutStructureKey } from "@shared/domain/payouts";
 import type { RecordedEntries, TournamentFormValues } from "../../tournament-form";
-import { bountyHelpText } from "../../buy-in-price";
+import { bountyPriceLines } from "../../buy-in-price";
 import { AmountInput } from "@/components/shared/amount-input";
 import { plural } from "@/lib/format";
 import { FormSection } from "./form-section";
@@ -41,7 +41,7 @@ export function BuyInSection({ control, rakeLabel, recorded }: MoneySectionProps
   const rebuys = useWatch({ control, name: "enableRebuys" });
   const addons = useWatch({ control, name: "enableAddons" });
   const [buyInAmount, bountyAmount] = useWatch({ control, name: ["buyInAmount", "bountyAmount"] });
-  const bountyHelp = AMOUNT.test(bountyAmount) ? bountyHelpText({ buyInAmount, bountyAmount }) : null;
+  const bountyLines = AMOUNT.test(bountyAmount) ? bountyPriceLines({ buyInAmount, bountyAmount }) : null;
 
   return (
     <FormSection title="Buy-in Configuration">
@@ -60,7 +60,9 @@ export function BuyInSection({ control, rakeLabel, recorded }: MoneySectionProps
                   <FormDescription data-testid="free-tournament-hint">
                     Free tournament — set the prize pool the club puts up (Prize Pool → Edit on the tournament&apos;s page).
                   </FormDescription>
-                ) : null}
+                ) : (
+                  <FormDescription>Goes into the prize pool the places are paid from.</FormDescription>
+                )}
                 <FormMessage />
               </FormItem>
             )}
@@ -75,15 +77,21 @@ export function BuyInSection({ control, rakeLabel, recorded }: MoneySectionProps
                 <FormControl>
                   <AmountInput unit="$" placeholder="None" {...field} data-testid="bounty-amount" />
                 </FormControl>
+                <FormDescription>Optional. Paid on top of the buy-in and kept out of the prize pool.</FormDescription>
                 <FormMessage />
               </FormItem>
             )}
           />
         </div>
-        {bountyHelp ? (
-          <p className="text-sm text-muted-foreground" data-testid="bounty-hint">
-            {bountyHelp}
-          </p>
+        {bountyLines ? (
+          <dl className="divide-y divide-border rounded-md border border-border text-sm sm:max-w-xl" data-testid="bounty-hint">
+            {bountyLines.map((line, index) => (
+              <div key={line.label} className={index === bountyLines.length - 1 ? "flex justify-between gap-3 p-2 font-semibold" : "flex justify-between gap-3 p-2"}>
+                <dt className={index === bountyLines.length - 1 ? undefined : "text-muted-foreground"}>{line.label}</dt>
+                <dd className="tabular-nums">{line.amount}</dd>
+              </div>
+            ))}
+          </dl>
         ) : null}
       </div>
 

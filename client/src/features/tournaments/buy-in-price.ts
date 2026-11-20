@@ -11,13 +11,22 @@ export function buyInPriceText(tournament: BountySettings): string {
   return `${formatAmount(tournament.buyInAmount)} + ${formatMoney(bountyCents(tournament))} bounty`;
 }
 
+/** One line of a bounty game's price: what it is for and how much. */
+export interface PriceLine {
+  label: string;
+  amount: string;
+}
+
 /**
- * What the form's helper says under a bounty typed in: "Players pay $150: $50 buy-in + $100 bounty. …";
- * null with no bounty.
+ * A bounty game's price as separate line items, as the form and the desk show it: the buy-in (the prize
+ * pool the places are paid from), the bounty (collected on knockouts, not in the prize pool) and what
+ * each player pays. Null with no bounty.
  */
-export function bountyHelpText(tournament: BountySettings): string | null {
+export function bountyPriceLines(tournament: BountySettings): PriceLine[] | null {
   if (!hasBounty(tournament)) return null;
-  const buyIn = formatAmount(tournament.buyInAmount);
-  const bounty = formatMoney(bountyCents(tournament));
-  return `Players pay ${formatMoney(entryPriceCents(tournament))}: ${buyIn} buy-in + ${bounty} bounty. The bounty isn't in the prize pool — whoever knocks a player out collects it.`;
+  return [
+    { label: "Prize pool (paid to the places)", amount: formatAmount(tournament.buyInAmount) },
+    { label: "Bounty (collected on knockouts, not in the prize pool)", amount: formatMoney(bountyCents(tournament)) },
+    { label: "Each player pays", amount: formatMoney(entryPriceCents(tournament)) },
+  ];
 }
