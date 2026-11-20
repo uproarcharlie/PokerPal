@@ -7,6 +7,7 @@ import { highHandAwardsOf, highHandLabel, highHandsOf, type HighHandSettings } f
 import type { Cents } from "@shared/domain/money";
 import { MoneyText } from "@/components/shared/money-text";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { BuyInPrice } from "./buy-in-price";
 import { offersAddons, offersRebuys } from "@shared/domain/player-actions";
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -45,7 +46,7 @@ export function EntryDetails({ tournament, highHandPotCents, highHandPots = null
         <CardContent className="p-4 text-sm sm:p-6">
           <dl className="space-y-3">
             <Row label="Buy-in">
-              <MoneyText amount={tournament.buyInAmount} />
+              <BuyInPrice tournament={tournament} />
             </Row>
             {offersRebuys(tournament) ? (
               <Row label="Re-buy">

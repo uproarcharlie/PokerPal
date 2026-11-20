@@ -138,7 +138,9 @@ export interface SignUpForPayment {
  * undefined unless the tournament shows bank details after sign-up and its club has them, and for an
  * entry the desk registered as paid already (it owes nothing). The amount is the entry's buy-ins only
  * (the owner, 2026-11-16: the high-hand entry is paid at the door, and is only mentioned: round 10,
- * each high hand the player chose with its fee, highHandsAtDoor), 0 for a free entry. The club's account goes only with a buy-in to transfer now (PaymentInstructionsDto): never to
+ * each high hand the player chose with its fee, highHandsAtDoor), 0 for a free entry, plus each
+ * buy-in's bounty (round 11: $50 + $100 bounty transfers $150, a free entry its $100 bounty: the
+ * bounty is part of the entry). The club's account goes only with a buy-in to transfer now (PaymentInstructionsDto): never to
  * the waiting list, told not to pay yet, nor with nothing to pay (R8REV0-PRIV-01). The reference is
  * the player's name and the particulars the tournament's short name, each cut to the 12 characters a
  * transfer takes.

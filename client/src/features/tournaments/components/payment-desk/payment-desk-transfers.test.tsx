@@ -143,6 +143,29 @@ describe("the payment desk with bank transfers (round 8)", () => {
     await waitFor(() => expect(confirms).toEqual([{ id: "r2", body: "" }]));
   });
 
+  describe("in a bounty game (round 11)", () => {
+    // $50 buy-in + $100 bounty: $150 owed, all of it by transfer; Alexandra's $5 high hand stays at the door.
+    const BOUNTY = { buyInAmount: "50.00", bountyAmount: "100.00", enableHighHand: true, highHandAmount: "5.00" } as const;
+
+    it("asks for the buy-in and the bounty, $150, and the transfer covers both", async () => {
+      const rows = [pending("r1", "Alexandra Fitzgerald", { enteringHighHands: true, amountOwed: 155 }), pending("r2", "Tama Rangi", { amountOwed: 150 })];
+      mockDesk({ pendingRows: rows });
+      const user = renderDesk(BOUNTY);
+      const list = await pendingList();
+
+      expect(within(list).getByTestId("registration-r2")).toHaveTextContent("$150.00");
+      expect(within(list).queryByTestId("door-part-r2")).not.toBeInTheDocument();
+      const alexandraRow = within(list).getByTestId("registration-r1");
+      expect(within(alexandraRow).getByTestId("transfer-part-r1")).toHaveTextContent("Transfer $150.00 (buy-in + bounty)");
+      expect(within(alexandraRow).getByTestId("door-part-r1")).toHaveTextContent("At the door $5.00 (high hand)");
+
+      await user.click(within(list).getByRole("button", { name: "Confirm bank transfer for Alexandra Fitzgerald" }));
+      expect(await screen.findByRole("alertdialog", { name: "Collect $5.00 at the door" })).toHaveTextContent(
+        "Alexandra Fitzgerald's bank transfer pays the buy-in + bounty, $150.00.",
+      );
+    });
+  });
+
   describe("with the high hand paid at the door (R8REV1-PHONE-01)", () => {
     // $50 buy-in, $5 high hand: Alexandra ticked it (owes $55), Tama did not (owes $50).
     const HIGH_HAND = { buyInAmount: "50.00", enableHighHand: true, highHandAmount: "5.00" } as const;

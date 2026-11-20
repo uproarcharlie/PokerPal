@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { RakeType } from "@shared/api/common";
 import type { ClubDto, PublicRegistration, PublicTournament } from "@shared/api/public";
 import { createTournamentSchema, type CreateTournamentInput, type UpdateTournamentInput } from "@shared/api/tournaments";
+import { hasBounty } from "@shared/domain/bounty";
 import type { HighHandsInput } from "@shared/domain/high-hands";
 import { toCents } from "@shared/domain/money";
 import { offersAddons, offersRebuys } from "@shared/domain/player-actions";
@@ -31,6 +32,8 @@ export interface TournamentFormValues {
    */
   startDateTime: string;
   buyInAmount: string;
+  /** Round 11: the bounty each buy-in pays on top of the buy-in (blank: not a bounty game). */
+  bountyAmount: string;
   rakeType: RakeType;
   rakeAmount: string;
   enableRebuys: boolean;
@@ -230,6 +233,7 @@ export const NEW_TOURNAMENT_VALUES: TournamentFormValues = {
   pointsSystemId: "",
   startDateTime: "",
   buyInAmount: "",
+  bountyAmount: "",
   rakeType: "none",
   rakeAmount: "",
   enableRebuys: false,
@@ -292,6 +296,7 @@ export function formValuesFromTournament(tournament: PublicTournament, timeZone:
     pointsSystemId: text(tournament.pointsSystemId),
     startDateTime: toZonedDateTimeLocal(tournament.startDateTime, timeZone),
     buyInAmount: tournament.buyInAmount,
+    bountyAmount: hasBounty(tournament) ? text(tournament.bountyAmount) : "",
     rakeType: buyIn.type,
     rakeAmount: buyIn.amount,
     enableRebuys: offersRebuys(tournament),

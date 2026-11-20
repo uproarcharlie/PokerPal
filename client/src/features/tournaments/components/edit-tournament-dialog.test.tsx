@@ -218,6 +218,33 @@ describe("EditTournamentDialog (CA-14)", () => {
       expect(await screen.findByText("Tournament updated")).toBeInTheDocument();
     });
 
+    it("turns a $150 game into $50 + $100 bounty, saying what that re-prices (round 11)", async () => {
+      const changes = [
+        { field: "buyInAmount", count: 40, fromCents: 15000, toCents: 5000 },
+        { field: "bountyAmount", count: 40, fromCents: 0, toCents: 10000 },
+      ];
+      const saved = mockSave((body) =>
+        (body as { repriceEntries?: boolean }).repriceEntries === true
+          ? HttpResponse.json(tournamentDto())
+          : apiError(409, "ENTRIES_REPRICED", "This re-prices what is already recorded.", { changes }),
+      );
+      const { user } = renderEdit(tournamentDto({ status: "registration", buyInAmount: "150.00", bountyAmount: null }));
+
+      await user.clear(screen.getByTestId("buyin-amount"));
+      await user.type(screen.getByTestId("buyin-amount"), "50");
+      await user.type(screen.getByTestId("bounty-amount"), "100");
+      expect(screen.getByTestId("bounty-hint")).toHaveTextContent("Players pay $150: $50 buy-in + $100 bounty.");
+      await user.click(screen.getByTestId("save-tournament"));
+
+      const ask = await screen.findByTestId("confirm-reprice");
+      expect(within(ask).getByTestId("repricing-lines")).toHaveTextContent("40 buy-ins from $150.00 to $50.00");
+      expect(within(ask).getByTestId("repricing-lines")).toHaveTextContent("40 bounties from $0.00 to $100.00");
+      await user.click(within(ask).getByRole("button", { name: "Re-price and save" }));
+
+      await waitFor(() => expect(saved).toHaveLength(2));
+      expect(saved[1]).toEqual({ buyInAmount: "50.00", bountyAmount: "100.00", repriceEntries: true });
+    });
+
     it("saves nothing when the TD keeps the old prices", async () => {
       const saved = mockSave(() => apiError(409, "ENTRIES_REPRICED", "This re-prices what is already recorded."));
       const { user, onOpenChange } = renderEdit(withRebuys());

@@ -13,9 +13,10 @@ import { useBusyRows } from "@/hooks/use-busy-rows";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/api/http";
 import { entriesOf } from "@/lib/entries";
-import { formatNumber, plural } from "@/lib/format";
+import { formatMoney, formatNumber, plural } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { PublicRegistration } from "@shared/api/public";
+import { bountiesWonCents } from "@shared/domain/bounty";
 import { registrationRemovalProblem, standingsFor } from "@shared/domain/standings";
 import { useSeating } from "@/features/seating/staff-hooks";
 import type { SeatingDto } from "@shared/api/seating";
@@ -45,10 +46,12 @@ interface StandingsTableProps {
   registrations: readonly PublicRegistration[];
 }
 
-function PlayerCell({ registration }: { registration: PublicRegistration }) {
+function PlayerCell({ registration, tournament }: { registration: PublicRegistration; tournament: TournamentDetailDto }) {
   const name = playerName(registration);
   const rebuys = registration.rebuys ?? 0;
   const addons = registration.addons ?? 0;
+  // Round 11: in a bounty game each knockout collects the bounty of the player knocked out.
+  const bountiesWon = bountiesWonCents(tournament, registration.knockouts);
   // Only the club's staff are sent who came in free (round 7): nobody else sees a mark.
   const free = freeEntryOf(registration);
   return (
@@ -64,6 +67,11 @@ function PlayerCell({ registration }: { registration: PublicRegistration }) {
           {rebuys > 0 ? ` + ${plural(rebuys, "Re-buy")}` : ""}
           {addons > 0 ? ` + ${plural(addons, "Add-on")}` : ""}
         </p>
+        {bountiesWon > 0 ? (
+          <p className="text-xs font-medium text-accent-text" data-testid={`bounties-won-${registration.id}`}>
+            Bounties won: {formatMoney(bountiesWon)}
+          </p>
+        ) : null}
       </div>
     </div>
   );
@@ -197,7 +205,7 @@ export function StandingsTable({ tournament, registrations: everyone }: Standing
       phone: "title",
       cell: (registration) => <PlaceBadge place={placeOf.get(registration.id) ?? null} finished={completed} />,
     },
-    { id: "player", header: "Player", phone: "title", cell: (registration) => <PlayerCell registration={registration} /> },
+    { id: "player", header: "Player", phone: "title", cell: (registration) => <PlayerCell registration={registration} tournament={tournament} /> },
     ...(seatOf && Object.keys(seatOf).length > 0
       ? [{ id: "seat", header: "Seat", className: "text-sm", cell: (registration: PublicRegistration) => <SeatCell seat={seatCell(registration)} /> }]
       : []),

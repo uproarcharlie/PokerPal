@@ -77,6 +77,7 @@ describe("CreateTournamentDialog", () => {
       rakeType: "none",
       rakeAmount: null,
       rebuyAmount: null,
+      bountyAmount: null,
       payoutStructure: "standard",
       // No season chosen: a one-off game, which scores no points (round 7).
       seasonId: null,
@@ -121,6 +122,22 @@ describe("CreateTournamentDialog", () => {
       maxAddons: 1,
       rebuyOrAddon: true,
     });
+  });
+
+  it("creates a bounty game: the bounty beside the buy-in, what players pay said under it (round 11)", async () => {
+    const created = mockForm();
+    const { user } = await renderDialog();
+
+    await fillRequired(user);
+    expect(screen.queryByTestId("bounty-hint")).not.toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "Bounty per player" }), "100");
+    expect(screen.getByTestId("bounty-hint")).toHaveTextContent(
+      "Players pay $150: $50 buy-in + $100 bounty. The bounty isn't in the prize pool — whoever knocks a player out collects it.",
+    );
+    await user.click(screen.getByTestId("create-tournament-final"));
+
+    await waitFor(() => expect(created).toHaveLength(1));
+    expect(created[0]).toMatchObject({ buyInAmount: "50.00", bountyAmount: "100.00" });
   });
 
   it("saves a draft as scheduled", async () => {

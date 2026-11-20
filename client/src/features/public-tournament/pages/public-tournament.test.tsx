@@ -501,6 +501,31 @@ describe("PublicTournamentView header", () => {
   });
 });
 
+describe("PublicTournamentView: a bounty game (round 11, on a phone)", () => {
+  /** The Entry Details card's Buy-in row (the stats box above it is labelled Buy-in too). */
+  const buyInRow = () => screen.getAllByText("Buy-in").find((label) => label.tagName === "DT")?.nextElementSibling;
+
+  it("shows the buy-in with its bounty, in the entry details and the stats", async () => {
+    screenWidth(390);
+    mockTournamentPages(tournamentDto({ status: "registration", buyInAmount: "50.00", bountyAmount: "100.00" }));
+    renderView();
+
+    expect(await screen.findByText("Entry Details")).toBeInTheDocument();
+    expect(buyInRow()).toHaveTextContent("$50 + $100 bounty");
+    expect(screen.getByTestId("buy-in-bounty")).toHaveTextContent("+ $100 bounty");
+  });
+
+  it("shows the buy-in alone in a game with no bounty", async () => {
+    mockTournamentPages(tournamentDto({ status: "registration", buyInAmount: "50.00", bountyAmount: null }));
+    renderView();
+
+    expect(await screen.findByText("Entry Details")).toBeInTheDocument();
+    expect(buyInRow()).toHaveTextContent(/^\$50$/);
+    expect(screen.queryByTestId("buy-in-bounty")).not.toBeInTheDocument();
+    expect(screen.queryByText(/bounty/)).not.toBeInTheDocument();
+  });
+});
+
 describe("PublicTournamentView high hand (PUB-13)", () => {
   it("shows the high-hand amount as each player's entry fee, and the pot it makes once the pool is shown", async () => {
     mockTournamentPages(tournamentDto({ status: "in_progress", enableHighHand: true, highHandAmount: "20.00", prizePoolLocked: true }), [

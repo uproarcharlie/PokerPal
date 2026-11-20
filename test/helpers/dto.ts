@@ -77,6 +77,7 @@ export function tournamentDto(overrides: Partial<TournamentDetailDto> = {}): Tou
     highHandRakeType: "none",
     highHandRakeAmount: "0.00",
     highHandPayouts: 1,
+    bountyAmount: null,
     enableLateRegistration: false,
     trackPoints: false,
     minPlayers: 2,

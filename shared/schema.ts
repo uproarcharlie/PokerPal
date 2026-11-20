@@ -167,6 +167,9 @@ export const tournaments = pgTable("tournaments", {
   // Round 8 (migrations/0017_bank_transfer_tournaments): sign-ups are told how to pay by bank transfer
   // into the club's account (only while the club has bank details).
   showBankTransfer: boolean("show_bank_transfer").notNull().default(false),
+  // Round 11 (migrations/0020_tournament_bounty; shared/domain/bounty): the bounty each buy-in pays on top
+  // of the buy-in, collected by whoever knocks the player out (null: not a bounty game). Never in the pool.
+  bountyAmount: decimal("bounty_amount", { precision: 10, scale: 2 }),
 }, (table) => ({
   clubIdx: index("idx_tournaments_club_id").on(table.clubId),
   seasonIdx: index("idx_tournaments_season_id").on(table.seasonId),
@@ -585,6 +588,7 @@ export const insertTournamentSchema = createInsertSchema(tournaments, {
   addonRakeAmount: z.union([z.string(), z.number(), z.null()]).transform(val => val === null ? null : String(val)).optional().nullable(),
   highHandAmount: z.union([z.string(), z.number(), z.null()]).transform(val => val === null ? null : String(val)).optional().nullable(),
   highHandRakeAmount: z.union([z.string(), z.number(), z.null()]).transform(val => val === null ? null : String(val)).optional().nullable(),
+  bountyAmount: z.union([z.string(), z.number(), z.null()]).transform(val => val === null ? null : String(val)).optional().nullable(),
   autoSeat: z.enum(AUTO_SEAT_MODES).nullable().optional(),
   tableShape: z.enum(TABLE_SHAPES).nullable().optional(),
   rakeType: z.enum(["none", "percentage", "fixed"]).optional(),

@@ -166,6 +166,8 @@ export const PUBLIC_TOURNAMENT_FIELDS = [
   "enableHighHand",
   "highHandAmount",
   "highHandPayouts",
+  // Round 11: the bounty on each buy-in (shared/domain/bounty): public, it is part of the entry price.
+  "bountyAmount",
   "enableLateRegistration",
   "trackPoints",
   "minPlayers",

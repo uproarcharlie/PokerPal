@@ -424,6 +424,23 @@ describe("TournamentDetails", () => {
     expect((await row("Bob")).getByRole("cell", { name: "2 entries · 1 add-on" })).toBeInTheDocument();
   });
 
+  it("shows a bounty game's price with its bounty, what players pay, and the bounties each player has won (round 11)", async () => {
+    mockPage(true, {
+      overrides: { buyInAmount: "50.00", bountyAmount: "100.00" },
+      registrations: [{ ...registrationDto("r1", "Ann", 1), knockouts: 2 }, registrationDto("r2", "Bob", 1)].map(paid),
+    });
+    const user = userEvent.setup();
+    renderDetails();
+
+    expect(await screen.findByTestId("info-buy-in")).toHaveTextContent("$50 + $100 bounty");
+    expect(screen.getByText("Players pay").nextElementSibling).toHaveTextContent("$150");
+    expect(await screen.findByTestId("bounties-line")).toHaveTextContent("Bounties: 2 × $100 = $200 — not in the prize pool, collected on knockouts");
+
+    await user.click(screen.getByRole("tab", { name: "Standings" }));
+    expect(await screen.findByTestId("bounties-won-r1")).toHaveTextContent("Bounties won: $200");
+    expect(screen.queryByTestId("bounties-won-r2")).not.toBeInTheDocument();
+  });
+
   it("removes a mistaken sign-up after the TD confirms (P2REV0-02)", async () => {
     mockPage(true);
     let removed: string | undefined;

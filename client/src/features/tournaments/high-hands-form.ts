@@ -166,6 +166,8 @@ export function highHandProblem(error: unknown, values: readonly Pick<HighHandFo
 /** One change a 409 ENTRIES_REPRICED names: a price of the tournament's, or (round 10) a high hand's fee. */
 const ENTRY_WORDS: Readonly<Record<string, [string, string]>> = {
   buyInAmount: ["buy-in", "buy-ins"],
+  // Round 11: each buy-in's bounty ("3 bounties from $0.00 to $100.00").
+  bountyAmount: ["bounty", "bounties"],
   rebuyAmount: ["re-buy", "re-buys"],
   addonAmount: ["add-on", "add-ons"],
   highHandAmount: ["high-hand entry", "high-hand entries"],

@@ -90,6 +90,11 @@ const configFields = {
    * a value resent unchanged is accepted, as a page loaded before round 10 resends them).
    */
   highHands: highHandsListSchema.optional(),
+  /**
+   * Round 11: the bounty each buy-in pays on top of the buy-in (shared/domain/bounty), null or $0 for
+   * none. It is never in the prize pool or the AP; what an entry owes includes it.
+   */
+  bountyAmount: optionalMoneySchema,
   enableLateRegistration: z.boolean().optional(),
   trackPoints: z.boolean().optional(),
   minPlayers: nullableIntegerSchema(0, 1000),

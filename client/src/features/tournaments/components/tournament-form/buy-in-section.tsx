@@ -5,6 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toCents } from "@shared/domain/money";
 import { PAYOUT_STRUCTURE_KEYS, PAYOUT_STRUCTURE_LABELS, type PayoutStructureKey } from "@shared/domain/payouts";
 import type { RecordedEntries, TournamentFormValues } from "../../tournament-form";
+import { bountyHelpText } from "../../buy-in-price";
 import { AmountInput } from "@/components/shared/amount-input";
 import { plural } from "@/lib/format";
 import { FormSection } from "./form-section";
@@ -32,33 +33,59 @@ const AMOUNT = /^\s*\d+(\.\d*)?\s*$/;
 const isFreeBuyIn = (text: string) => AMOUNT.test(text) && toCents(text) === 0;
 
 /**
- * What a seat costs: the buy-in, and re-buys and add-ons when the tournament sells them, each with its
- * AP and its limit per player, and, when it sells both, whether a player may take only one kind.
+ * What a seat costs: the buy-in and its bounty (round 11: paid on top, never in the prize pool), and
+ * re-buys and add-ons when the tournament sells them, each with its AP and its limit per player, and,
+ * when it sells both, whether a player may take only one kind.
  */
 export function BuyInSection({ control, rakeLabel, recorded }: MoneySectionProps & { recorded?: RecordedEntries }) {
   const rebuys = useWatch({ control, name: "enableRebuys" });
   const addons = useWatch({ control, name: "enableAddons" });
+  const [buyInAmount, bountyAmount] = useWatch({ control, name: ["buyInAmount", "bountyAmount"] });
+  const bountyHelp = AMOUNT.test(bountyAmount) ? bountyHelpText({ buyInAmount, bountyAmount }) : null;
 
   return (
     <FormSection title="Buy-in Configuration">
-      <FormField
-        control={control}
-        name="buyInAmount"
-        render={({ field }) => (
-          <FormItem className="sm:max-w-xs" required>
-            <FormLabel>Buy-in Amount</FormLabel>
-            <FormControl>
-              <AmountInput unit="$" placeholder="100" {...field} data-testid="buyin-amount" />
-            </FormControl>
-            {isFreeBuyIn(field.value) ? (
-              <FormDescription data-testid="free-tournament-hint">
-                Free tournament — set the prize pool the club puts up (Prize Pool → Edit on the tournament&apos;s page).
-              </FormDescription>
-            ) : null}
-            <FormMessage />
-          </FormItem>
-        )}
-      />
+      <div className="space-y-2">
+        <div className="grid grid-cols-1 gap-4 sm:max-w-xl sm:grid-cols-2">
+          <FormField
+            control={control}
+            name="buyInAmount"
+            render={({ field }) => (
+              <FormItem required>
+                <FormLabel>Buy-in Amount</FormLabel>
+                <FormControl>
+                  <AmountInput unit="$" placeholder="100" {...field} data-testid="buyin-amount" />
+                </FormControl>
+                {isFreeBuyIn(field.value) ? (
+                  <FormDescription data-testid="free-tournament-hint">
+                    Free tournament — set the prize pool the club puts up (Prize Pool → Edit on the tournament&apos;s page).
+                  </FormDescription>
+                ) : null}
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          {/* Round 11: paid on top of the buy-in, never in the prize pool. */}
+          <FormField
+            control={control}
+            name="bountyAmount"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Bounty per player</FormLabel>
+                <FormControl>
+                  <AmountInput unit="$" placeholder="None" {...field} data-testid="bounty-amount" />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+        {bountyHelp ? (
+          <p className="text-sm text-muted-foreground" data-testid="bounty-hint">
+            {bountyHelp}
+          </p>
+        ) : null}
+      </div>
 
       <SwitchField
         control={control}

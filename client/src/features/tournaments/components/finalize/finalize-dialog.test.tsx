@@ -113,7 +113,7 @@ describe("FinalizeDialog: players who have not paid (round 6)", () => {
     await waitFor(() => expect(screen.queryByTestId("finalize-unpaid")).not.toBeInTheDocument());
     expect(confirmed).toEqual(["r4"]);
     expect(previews.length).toBeGreaterThanOrEqual(2);
-    expect(await screen.findByText("Dee has paid: $125 is in the prize pool.")).toBeInTheDocument();
+    expect(await screen.findByText("Dee has paid $125: they are in the prize pool.")).toBeInTheDocument();
     expect(screen.getByTestId("confirm-finalize")).toBeEnabled();
   });
 

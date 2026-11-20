@@ -10,11 +10,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useCopyLink } from "@/components/shared/copy-link-button";
-import { MoneyText } from "@/components/shared/money-text";
 import { ResponsiveTable, type ResponsiveColumn } from "@/components/shared/responsive-table";
 import { absoluteUrl, routes } from "@/app/routes";
 import type { ClubDto } from "@shared/api/public";
 import type { TournamentListItemDto } from "@shared/api/tournaments";
+import { buyInPriceText } from "../../buy-in-price";
 import { clubColumn, ManageLink, playersColumn, startColumn, statusColumn } from "./tournament-columns";
 
 interface TournamentRowsProps {
@@ -87,7 +87,8 @@ export function TournamentRows({ tournaments, clubsById, onEdit }: TournamentRow
       id: "buy-in",
       header: "Buy-in",
       className: "text-sm font-semibold text-foreground",
-      cell: (tournament) => <MoneyText amount={tournament.buyInAmount} forceCents />,
+      // Round 11: "$50 + $100 bounty" in a bounty game.
+      cell: (tournament) => <span className="tabular-nums">{buyInPriceText(tournament)}</span>,
     },
     playersColumn,
     startColumn(clubOf),

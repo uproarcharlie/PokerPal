@@ -2,7 +2,7 @@ import { useId, type ReactNode } from "react";
 import { Landmark } from "lucide-react";
 import type { PaymentInstructionsDto } from "@shared/api/registrations";
 import { DEFAULT_HIGH_HAND_NAME, highHandLabel, LEGACY_HIGH_HAND_ID } from "@shared/domain/high-hands";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, type Cents } from "@/lib/format";
 import { CopyValueButton } from "./copy-value-button";
 
 function Detail({ label, children, copy }: { label: string; children: ReactNode; copy?: ReactNode }) {
@@ -22,10 +22,11 @@ function Detail({ label, children, copy }: { label: string; children: ReactNode;
  * "Pay by bank transfer" (round 8, item 3): what the player puts into their banking app to pay the
  * buy-in ahead, each part they type with a Copy button, and that paying at the door still works. The
  * high hands are paid at the door (the owner, 2026-11-16), so each one ticked is only mentioned, with
- * its fee (round 10). Shown only to the person who has just signed up (the sign-up's own answer carries
- * the details), with a buy-in to pay.
+ * its fee (round 10). The amount includes a bounty game's bounty, which the card names (round 11: the
+ * tournament's bountyCents; the answer does not carry it). Shown only to the person who has just signed
+ * up (the sign-up's own answer carries the details), with a buy-in to pay.
  */
-export function BankTransferCard({ transfer }: { transfer: PaymentInstructionsDto }) {
+export function BankTransferCard({ transfer, bountyCents = 0 }: { transfer: PaymentInstructionsDto; bountyCents?: Cents }) {
   const heading = useId();
   const amount = formatMoney(transfer.amountDueCents, { forceCents: true });
   // Each high hand ticked; an answer from before round 10 (a sign-up kept in the tab) says the total.
@@ -40,9 +41,14 @@ export function BankTransferCard({ transfer }: { transfer: PaymentInstructionsDt
       </h2>
       <dl className="divide-y divide-border">
         <Detail label="Amount">
-          <span className="text-2xl font-bold tabular-nums text-primary" data-testid="bank-transfer-amount">
+          <span className="block text-2xl font-bold tabular-nums text-primary" data-testid="bank-transfer-amount">
             {amount}
           </span>
+          {bountyCents > 0 ? (
+            <span className="block text-sm font-medium text-muted-foreground" data-testid="bank-transfer-bounty">
+              Includes the {formatMoney(bountyCents, { forceCents: true })} bounty
+            </span>
+          ) : null}
         </Detail>
         <Detail label="Account name">
           <span data-testid="bank-transfer-account-name">{transfer.accountName}</span>

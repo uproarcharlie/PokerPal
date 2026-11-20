@@ -2,10 +2,10 @@ import { Link } from "wouter";
 import { Calendar, Users } from "lucide-react";
 import type { TournamentListItemDto } from "@shared/api/tournaments";
 import { routes } from "@/app/routes";
-import { MoneyText } from "@/components/shared/money-text";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatDay, formatTime } from "@/lib/format";
+import { BuyInPrice } from "@/features/public-tournament/components/buy-in-price";
 import { fieldCountText } from "../tournament-lists";
 
 /** How a club's public page names a status where it differs from the staff wording. */
@@ -38,7 +38,7 @@ export function PublicTournamentCard({ tournament, timeZone, showTime = true }: 
           </p>
           <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
             <span>
-              Buy-in: <MoneyText amount={tournament.buyInAmount} forceCents />
+              Buy-in: <BuyInPrice tournament={tournament} forceCents />
             </span>
             <span className="flex items-center gap-1">
               <Users className="h-4 w-4" aria-hidden="true" />

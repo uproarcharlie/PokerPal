@@ -356,7 +356,7 @@ export interface PaymentInstructionsDto {
   bankName: string | null;
   /** The club's own note for players paying by transfer. */
   instructions: string | null;
-  /** What to transfer: the buy-in only (the high hand is paid at the door); never 0. */
+  /** What to transfer: the buy-in and (round 11) its bounty, $50 + $100 = $150 (the high hand is paid at the door); never 0. */
   amountDueCents: Cents;
   /** For the transfer's Particulars (paymentParticulars). */
   particulars: string;
@@ -381,7 +381,7 @@ export interface PaymentInstructionsDto {
  * about to send it money is given it.
  */
 export interface NothingToTransferDto {
-  /** The entry's buy-in once it is accepted (0 for a free entry or a $0 game): from the waiting list, not to pay yet. */
+  /** The entry's buy-in and bounty once it is accepted (a free entry owes its bounty only; 0 for a $0 game): from the waiting list, not to pay yet. */
   amountDueCents: Cents;
   /** The high-hand entry the player ticked, paid at the door; 0 when none. */
   highHandAtDoorCents: Cents;
@@ -436,12 +436,14 @@ export type StaffRegistrationDto = PublicRegistrationRow &
  * GET /api/tournaments/:id/pending-registrations (staff). amountOwed is dollars, as today, but now
  * buyIns × buy-in + re-buys × re-buy + add-ons × add-on + the high-hand entry (money-18): round 10, the
  * fees of the high hands the entry chose (shared/domain/prize-pool amountDueCents; the high hands are
- * paid at the door, highHandsAtDoor names them). A free entry is never pending: it is accepted.
+ * paid at the door, highHandsAtDoor names them); round 11, buyIns × the bounty (never in the pool). A
+ * free entry is never pending: it is accepted.
  */
 export type PendingRegistrationDto = StaffRegistrationDto & { amountOwed: number };
 
 /**
  * GET /api/tournaments/:id/confirmed-registrations (staff): the accepted entries, free entries among
- * them (`freeEntry`). amountPaid uses the same formula, by which nobody pays a free entry's buy-ins.
+ * them (`freeEntry`). amountPaid uses the same formula, by which nobody pays a free entry's buy-ins
+ * (its bounties are still paid: round 11).
  */
 export type ConfirmedRegistrationDto = StaffRegistrationDto & { amountPaid: number };

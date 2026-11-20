@@ -1,25 +1,34 @@
 import type { TournamentDetailDto } from "@shared/api/tournaments";
+import { bountyCents } from "@shared/domain/bounty";
 import { highHandLabel, highHandsAtDoor, highHandsOf, type HighHandsInput } from "@shared/domain/high-hands";
 import { isFreeEntry, type EntryInput } from "@shared/domain/prize-pool";
 import { toCents, type Cents } from "@shared/domain/money";
 
 /**
  * A tournament that shows bank transfer details after sign-up (round 8), as the payment desk needs it:
- * the buy-in, which is all a sign-up is told to transfer (the high hand is paid at the door).
+ * the buy-in and its bounty (round 11), which is all a sign-up is told to transfer (the high hand is
+ * paid at the door).
  */
 export interface TransferDesk {
   buyInCents: Cents;
+  /** Each buy-in's bounty (0 with none): part of the entry, so it is in the transfer. */
+  bountyCents: Cents;
 }
 
 /** The desk's bank-transfer view of the tournament, or null where its players are not told to transfer. */
-export function transferDeskOf(tournament: Pick<TournamentDetailDto, "showBankTransfer" | "buyInAmount">): TransferDesk | null {
-  return tournament.showBankTransfer === true ? { buyInCents: toCents(tournament.buyInAmount) } : null;
+export function transferDeskOf(tournament: Pick<TournamentDetailDto, "showBankTransfer" | "buyInAmount" | "bountyAmount">): TransferDesk | null {
+  return tournament.showBankTransfer === true ? { buyInCents: toCents(tournament.buyInAmount), bountyCents: bountyCents(tournament) } : null;
 }
 
 /** How an entry's amount is paid where players may transfer ahead: what the transfer covers, and what is left for the door. */
 export interface TransferSplit {
-  /** The buy-ins, as the sign-up's card asked for them (server paymentInstructionsFor); 0 for a free entry. */
+  /**
+   * The buy-ins with their bounties, as the sign-up's card asked for them (server paymentInstructionsFor);
+   * for a free entry only its bounties (it covers the buy-in only: round 11).
+   */
   transferCents: Cents;
+  /** What the transfer pays, in words: "buy-in", "buy-in + bounty" (round 11), a free entry's "bounty". */
+  transferFor: string;
   /** The rest: the high-hand entry, and any re-buys or add-ons already recorded. */
   doorCents: Cents;
   /** What the door part is for, in words: "high hand", "high hand, re-buys". */
@@ -44,13 +53,15 @@ function highHandWords(entry: Pick<EntryInput, "enteringHighHands" | "highHandId
 export function transferSplit(
   entry: Pick<EntryInput, "buyIns" | "rebuys" | "addons" | "enteringHighHands" | "highHandIds" | "freeEntry">,
   amount: number,
-  { buyInCents }: TransferDesk,
+  { buyInCents, bountyCents: bounty }: TransferDesk,
   tournament?: HighHandsInput,
 ): TransferSplit {
   const totalCents = toCents(amount);
-  const transferCents = Math.min(isFreeEntry(entry) ? 0 : buyInCents * (entry.buyIns ?? 0), totalCents);
+  const perBuyIn = (isFreeEntry(entry) ? 0 : buyInCents) + bounty;
+  const transferCents = Math.min(perBuyIn * (entry.buyIns ?? 0), totalCents);
   const parts = [...highHandWords(entry, tournament), ...((entry.rebuys ?? 0) > 0 ? ["re-buys"] : []), ...((entry.addons ?? 0) > 0 ? ["add-ons"] : [])];
-  return { transferCents, doorCents: totalCents - transferCents, doorFor: parts.join(", "), doorParts: parts };
+  const transferFor = bounty <= 0 ? "buy-in" : isFreeEntry(entry) ? "bounty" : "buy-in + bounty";
+  return { transferCents, transferFor, doorCents: totalCents - transferCents, doorFor: parts.join(", "), doorParts: parts };
 }
 
 /**

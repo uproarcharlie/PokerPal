@@ -10,6 +10,7 @@ import { MoneyText } from "@/components/shared/money-text";
 import { SeatAssignment } from "@/features/seating/components/public/seat-assignment";
 import { Button } from "@/components/ui/button";
 import { CardContent, CardDescription, CardHeader } from "@/components/ui/card";
+import { bountyCents, hasBounty } from "@shared/domain/bounty";
 import { highHandLabel, highHandsOf } from "@shared/domain/high-hands";
 import { amountDue, chosenAtDoor } from "../registration";
 import { transferToMake } from "../saved-sign-up";
@@ -76,7 +77,7 @@ function RegisteredPlayer({ player }: { player: PublicPlayer }) {
   );
 }
 
-/** What to pay at the desk: one buy-in, and each high hand ticked ("+ First half high hand: $5.00"; one high hand: "+ High Hands"). */
+/** What to pay at the desk: one buy-in, its bounty (round 11), and each high hand ticked ("+ First half high hand: $5.00"; one high hand: "+ High Hands"). */
 function PayAtDesk({ tournament, highHandIds, waiting }: { tournament: TournamentDetailDto; highHandIds: readonly string[]; waiting: boolean }) {
   const several = highHandsOf(tournament).length > 1;
   return (
@@ -87,6 +88,12 @@ function PayAtDesk({ tournament, highHandIds, waiting }: { tournament: Tournamen
       </p>
       <p className="text-xs text-muted-foreground">
         Buy-in: <MoneyText amount={tournament.buyInAmount} forceCents />
+        {hasBounty(tournament) ? (
+          <span>
+            {" "}
+            + Bounty: <MoneyText cents={bountyCents(tournament)} forceCents />
+          </span>
+        ) : null}
         {chosenAtDoor(tournament, highHandIds).map((highHand) => (
           <span key={highHand.highHandId}>
             {" "}
@@ -122,7 +129,7 @@ function HowToPay({ tournament, registration, highHandIds, waitingListPlace }: H
     );
   }
   const transfer = transferToMake(registration);
-  if (transfer) return <BankTransferCard transfer={transfer} />;
+  if (transfer) return <BankTransferCard transfer={transfer} bountyCents={bountyCents(tournament)} />;
   return <PayAtDesk tournament={tournament} highHandIds={highHandIds} waiting={waiting} />;
 }
 

@@ -265,6 +265,8 @@ const POOL_FIELDS = [
   "highHandRakeType",
   "highHandRakeAmount",
   "highHandPayouts",
+  // Round 11: not in the pool, but what each buy-in owed and the knockouts it paid out were worked out with it.
+  "bountyAmount",
   "manualPrizePool",
   "prizePoolLocked",
 ] as const satisfies readonly (keyof UpdateTournamentInput & keyof Tournament)[];
@@ -327,6 +329,8 @@ const PRICED_PARTS = [
   { price: "rebuyAmount", count: "rebuys", one: "re-buy", many: "re-buys", removed: "REBUYS_RECORDED" },
   { price: "addonAmount", count: "addons", one: "add-on", many: "add-ons", removed: "ADDONS_RECORDED" },
   { price: "highHandAmount", count: "highHandEntrants", one: "high-hand entry", many: "high-hand entries", removed: "HIGH_HAND_ENTRIES" },
+  // Round 11: each buy-in owes the bounty (shared/domain/bounty); never in the pool, and removable (no entry becomes $0).
+  { price: "bountyAmount", count: "buyIns", one: "bounty", many: "bounties", removed: null },
 ] as const;
 
 type PricedPart = (typeof PRICED_PARTS)[number];
@@ -381,7 +385,9 @@ function assertRepricingConfirmed(changes: readonly Repricing[], highHands: read
     const part = PRICED_PARTS.find((candidate) => candidate.price === change.field) as PricedPart;
     return `${entriesOf(part, change.count)} from ${formatMoney(change.fromCents)} to ${formatMoney(change.toCents)}`;
   });
-  throw entriesRepricedConflict([...list, ...highHands.map(describeHighHandRepricing)], [...changes, ...highHands]);
+  // Round 11: a bounty is owed by each buy-in but never in the pool, so re-pricing only bounties leaves the pool as it is.
+  const poolChanges = highHands.length > 0 || changes.some((change) => change.field !== "bountyAmount");
+  throw entriesRepricedConflict([...list, ...highHands.map(describeHighHandRepricing)], [...changes, ...highHands], { poolChanges });
 }
 
 /**
@@ -479,7 +485,7 @@ export async function updateTournament(env: AppEnv, req: Request, id: string, in
     }
 
     const ratesSent = Object.keys(rates).length > 0;
-    const pricesSent = ENTRY_AMOUNTS.some((key) => config[key] !== undefined);
+    const pricesSent = ENTRY_AMOUNTS.some((key) => config[key] !== undefined) || config.bountyAmount !== undefined;
     const highHandSent = HIGH_HAND_FIELDS.some((key) => input[key] !== undefined);
     if (ratesSent || highHandSent || manualPrizePool !== undefined || pricesSent) {
       const context = await loadPrizePoolContext(tx, updated);

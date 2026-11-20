@@ -4,6 +4,7 @@ import { MoneyText } from "@/components/shared/money-text";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { RadioGroup } from "@/components/ui/radio-group";
+import { bountyCents, hasBounty } from "@shared/domain/bounty";
 import { highHandsOf, type HighHandSettings } from "@shared/domain/high-hands";
 import { amountDue } from "../registration";
 import type { PlayerType, RegistrationFlow } from "../use-registration-flow";
@@ -133,6 +134,11 @@ export function ConfirmStep({ flow, tournament }: { flow: RegistrationFlow; tour
       <div className="rounded-lg bg-muted p-4">
         <p className="mb-2 text-sm font-medium text-foreground">Total Amount</p>
         <p className="text-3xl font-bold text-foreground">{amountDue(tournament, flow.highHandIds)}</p>
+        {hasBounty(tournament) ? (
+          <p className="mt-1 text-sm text-muted-foreground" data-testid="total-bounty">
+            Includes the <MoneyText cents={bountyCents(tournament)} forceCents /> bounty
+          </p>
+        ) : null}
       </div>
 
       {flow.registrationError ? (

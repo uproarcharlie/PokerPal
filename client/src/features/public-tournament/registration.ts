@@ -43,7 +43,7 @@ export function sameDetails(a: PlayerDetails, b: PlayerDetails): boolean {
   return normaliseName(a.name) === normaliseName(b.name) && normalisePhone(a.phone) === normalisePhone(b.phone) && (a.imageUrl ?? null) === (b.imageUrl ?? null);
 }
 
-type DueTournament = Pick<TournamentDetailDto, "buyInAmount" | "rebuyAmount" | "addonAmount"> & HighHandsInput;
+type DueTournament = Pick<TournamentDetailDto, "buyInAmount" | "rebuyAmount" | "addonAmount" | "bountyAmount"> & HighHandsInput;
 
 /**
  * A sign-up's entry with the high hands chosen (round 10: each by its id, "legacy" for a tournament's
@@ -54,7 +54,7 @@ function signUpEntry(tournament: HighHandsInput, highHandIds: readonly string[])
   return { buyIns: 1, rebuys: 0, addons: 0, enteringHighHands: ids.length > 0, highHandIds: ids };
 }
 
-/** One buy-in plus the high hands chosen, to the cent, as the payment desk will ask for it (amountDueCents). */
+/** One buy-in (and its bounty, round 11) plus the high hands chosen, to the cent, as the payment desk will ask for it (amountDueCents). */
 export function amountDue(tournament: DueTournament, highHandIds: readonly string[]): string {
   return formatMoney(amountDueCents(tournament, signUpEntry(tournament, highHandIds)), { forceCents: true });
 }

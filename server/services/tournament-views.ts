@@ -84,11 +84,16 @@ export function closedMessage(tournament: Pick<Tournament, "status">, what?: str
  * First half high-hand entries from $5 to $6"); one 409 may carry the tournament form's prices and the
  * high hands' fees (round 10) together.
  */
-export function entriesRepricedConflict(sentences: readonly string[], changes: readonly object[]): HttpError {
+export function entriesRepricedConflict(
+  sentences: readonly string[],
+  changes: readonly object[],
+  { poolChanges = true }: { poolChanges?: boolean } = {},
+): HttpError {
   const sentence = sentences.length === 1 ? sentences[0] : `${sentences.slice(0, -1).join(", ")} and ${sentences[sentences.length - 1]}`;
+  const moves = poolChanges ? "The prize pool and what players owe change with it." : "What players owe changes with it; the prize pool does not.";
   return conflict(
     "ENTRIES_REPRICED",
-    `This re-prices what is already recorded: ${sentence}. The prize pool and what players owe change with it.`,
+    `This re-prices what is already recorded: ${sentence}. ${moves}`,
     { changes },
   );
 }

@@ -120,7 +120,7 @@ function SplitAmount({ id, amount, split }: { id: string; amount: number; split:
     <span className="inline-block">
       <span className="block">{money(toCents(amount))}</span>
       <span className="block text-xs font-normal text-muted-foreground" data-testid={`transfer-part-${id}`}>
-        Transfer {money(split.transferCents)} (buy-in)
+        Transfer {money(split.transferCents)} ({split.transferFor})
       </span>
       <span className="block text-xs font-medium text-foreground" data-testid={`door-part-${id}`}>
         At the door {money(split.doorCents)}
@@ -241,7 +241,7 @@ function CollectAtDoorDialog({
       title={shown ? `Collect ${money(shown.split.doorCents)} at the door` : ""}
       description={
         shown
-          ? `${playerName(shown.registration)}'s bank transfer pays the buy-in, ${money(shown.split.transferCents)}. ${doorSentence(shown.split)}`
+          ? `${playerName(shown.registration)}'s bank transfer pays the ${shown.split.transferFor}, ${money(shown.split.transferCents)}. ${doorSentence(shown.split)}`
           : ""
       }
       cancelLabel="Not yet"

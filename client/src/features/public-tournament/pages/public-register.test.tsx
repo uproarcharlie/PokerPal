@@ -791,6 +791,25 @@ describe("PublicRegisterPage: high hands and the total", () => {
     expect(screen.getByTestId("amount-due").nextElementSibling).toHaveTextContent("Buy-in: $50.00 + High Hands: $20.00");
     // Round 10: the high hand by its id ("legacy": the game's one high hand of before), with the flag as before.
     expect(registered).toEqual({ playerId: "p3", enteringHighHands: true, highHandIds: ["legacy"] });
+    expect(screen.queryByTestId("total-bounty")).not.toBeInTheDocument();
+  });
+
+  it("asks a bounty game's player for the buy-in and the bounty: $50 + $100 = $150 (round 11)", async () => {
+    mockTournament({ bountyAmount: "100.00", enableHighHand: true, highHandAmount: "20.00" });
+    mockSearch();
+    server.use(http.post("/api/tournaments/t1/registrations", () => HttpResponse.json({ id: "r1", playerId: "p3", seating: NO_TABLES }, { status: 201 })));
+    const user = userEvent.setup();
+    renderPage();
+
+    await chooseExistingPlayer(user, "Bob", "Bob Brown");
+    expect(screen.getByText("Total Amount").nextSibling).toHaveTextContent("$150.00");
+    expect(screen.getByTestId("total-bounty")).toHaveTextContent("Includes the $100.00 bounty");
+    await user.click(screen.getByText("Yes, I'm in!"));
+    expect(screen.getByText("Total Amount").nextSibling).toHaveTextContent("$170.00");
+    await user.click(screen.getByTestId("complete-registration"));
+
+    expect(await screen.findByTestId("amount-due")).toHaveTextContent("$170.00");
+    expect(screen.getByTestId("amount-due").nextElementSibling).toHaveTextContent("Buy-in: $50.00 + Bounty: $100.00 + High Hands: $20.00");
   });
 
   it.each([

@@ -106,6 +106,27 @@ describe("tournamentFormSchema", () => {
   });
 });
 
+describe("the bounty (round 11)", () => {
+  it("sends the bounty as decimal text, and a blank one as none", () => {
+    expect(configOf({ ...filled, bountyAmount: "100" })).toMatchObject({ buyInAmount: "50.00", bountyAmount: "100.00" });
+    expect(configOf({ ...filled, bountyAmount: "" })).toMatchObject({ bountyAmount: null });
+    expect(configOf({ ...filled, bountyAmount: "  " })).toMatchObject({ bountyAmount: null });
+    expect(errorsOf({ ...filled, bountyAmount: "lots" })).toEqual({ bountyAmount: "Enter an amount of 0 or more, with at most 2 decimal places" });
+  });
+
+  it("opens an edit on the bounty stored, and sends only a bounty changed", () => {
+    const values = formValuesFromTournament(tournamentDto({ buyInAmount: "50.00", bountyAmount: "100.00" }), ZONE);
+    expect(values).toMatchObject({ buyInAmount: "50.00", bountyAmount: "100.00" });
+    expect(changedConfig(configOf(values), configOf(values))).toEqual({});
+    expect(changedConfig(configOf(values), configOf({ ...values, bountyAmount: "" }))).toEqual({ bountyAmount: null });
+
+    const none = formValuesFromTournament(tournamentDto({ bountyAmount: null }), ZONE);
+    expect(none.bountyAmount).toBe("");
+    expect(formValuesFromTournament(tournamentDto({ bountyAmount: "0.00" }), ZONE).bountyAmount).toBe("");
+    expect(changedConfig(configOf(none), configOf({ ...none, bountyAmount: "100" }))).toEqual({ bountyAmount: "100.00" });
+  });
+});
+
 describe("house rules (TDN4-HOUSE-RULES-UNSET)", () => {
   const both = { ...filled, enableRebuys: true, rebuyAmount: "25", maxRebuys: "1", enableAddons: true, addonAmount: "25" };
 

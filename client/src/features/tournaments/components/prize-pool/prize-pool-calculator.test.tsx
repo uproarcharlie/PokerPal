@@ -75,6 +75,24 @@ describe("PrizePoolCalculator", () => {
     expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$1,354");
   });
 
+  it("shows a bounty game's bounties beside the pool, never in it (round 11)", () => {
+    const bounty = { ...tournament, rakeType: "none", bountyAmount: "100.00" };
+    // 40 paid, 2 not paid yet: only the paid ones' bounties are counted, as their buy-ins are.
+    const field: EntryInput[] = Array.from({ length: 42 }, (_, i) => ({ buyIns: 1, paymentConfirmed: i < 40 }));
+
+    renderCalculator(bounty, field);
+
+    expect(screen.getByTestId("buyins-total")).toHaveTextContent("$2,000");
+    expect(screen.getByTestId("net-prize-pool")).toHaveTextContent("$2,000");
+    expect(screen.getByTestId("bounties-line")).toHaveTextContent("Bounties: 40 × $100 = $4,000 — not in the prize pool, collected on knockouts");
+  });
+
+  it("has no bounties line in a game without one", () => {
+    renderCalculator({ ...tournament, bountyAmount: null }, entries);
+
+    expect(screen.queryByTestId("bounties-line")).not.toBeInTheDocument();
+  });
+
   it("uses the club's label and shows a manual AP total as such", () => {
     const withOverride = { ...tournament, rakeOverride: "100.00" };
 

@@ -6,6 +6,7 @@ import { differenceLines } from "@shared/domain/prize-difference";
 import { DEFAULT_RAKE_LABEL, type PayoutDisplay, type PrizePoolBreakdown, type PrizePoolInput } from "@shared/domain/prize-pool";
 import { highHandLabel, highHandsOf, highHandStandings, type HighHandAward, type HighHandSettings, type HighHandStanding } from "@shared/domain/high-hands";
 import { describeApRates, rateText } from "@shared/domain/rake-rates";
+import { bountyCents, hasBounty } from "@shared/domain/bounty";
 import { HighHandAwards, PaidPool } from "./paid-pool";
 import { DifferenceRows, LeftoverNote, PoolCard, PoolLine } from "./pool-lines";
 import { offersAddons, offersRebuys } from "@shared/domain/player-actions";
@@ -39,8 +40,9 @@ function freeEntriesNote(entries: number, funded: number): string {
 /**
  * The prize pool worked out line by line, the lines always adding up to the net pool: the paid buy-ins,
  * re-buys and add-ons, the free entries (round 7: nothing, unless the club pays their buy-ins in), the
- * AP, and what came in or went beside them (differenceLines: the leftover to the club's fee). While the
- * tournament runs it is the live calculation; once it is completed it shows what finalize froze (D20),
+ * AP, and what came in or went beside them (differenceLines: the leftover to the club's fee); in a
+ * bounty game (round 11) the bounties beside it, never in it. While the tournament runs it is the
+ * live calculation; once it is completed it shows what finalize froze (D20),
  * or for a tournament finalized before snapshots the stored prizes, with the recalculation clearly
  * marked as one; a cancelled one pays nothing. The club's staff only.
  */
@@ -132,6 +134,14 @@ export function PrizePoolCalculator({
               </div>
             ) : null}
           </div>
+
+          {/* Round 11: every counted buy-in (a free entry's too) pays a bounty, never into the pool. */}
+          {hasBounty(tournament) ? (
+            <p className="text-sm text-muted-foreground" data-testid="bounties-line">
+              Bounties: {counts.buyIns} × {formatMoney(bountyCents(tournament))} = {formatMoney(counts.buyIns * bountyCents(tournament))} — not in the prize pool,
+              collected on knockouts
+            </p>
+          ) : null}
 
           {pots.map((standing) => (
             <HighHandPotLines

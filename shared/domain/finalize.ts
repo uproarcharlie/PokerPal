@@ -204,7 +204,7 @@ export interface ActivePlayer {
 
 /** A player in the field whose payment is not confirmed (round 6): what they owe, for the TD to take it or leave them out. */
 export interface UnpaidPlayer extends ActivePlayer {
-  /** amountDueCents: every buy-in, re-buy and add-on at the tournament's prices, and the high-hand entry. */
+  /** amountDueCents: every buy-in, re-buy and add-on at the tournament's prices, the high-hand entry and (round 11) each buy-in's bounty. */
   amountDueCents: Cents;
 }
 

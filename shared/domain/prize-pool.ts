@@ -45,6 +45,7 @@ import {
   type HighHandPot,
   type HighHandSettings,
 } from "./high-hands";
+import { bountyCents } from "./bounty";
 import { carriedInCents, readCarriedIn, settleDifference, type CarriedIn, type LegacyDifference, type PrizeDifference } from "./prize-difference";
 import { fieldEntries, type WaitingListEntry } from "./waiting-list";
 
@@ -95,6 +96,11 @@ export interface PrizePoolInput {
    * read it; the prize pool never holds high-hand money.
    */
   highHands?: readonly HighHandSettings[] | null;
+  /**
+   * Round 11: the bounty each buy-in pays on top of its buy-in (./bounty). Only what an entry owes reads
+   * it; the prize pool and the AP never hold bounty money.
+   */
+  bountyAmount?: MoneyInput;
   /** Round 5 (item 15): who is on the waiting list behind a full field (unpaidEntries leaves them out). */
   maxPlayers?: number | null;
   /** Round 5 (item 16): money carried over into this pool from earlier tournaments (tournaments.carried_in). */
@@ -472,10 +478,11 @@ function countEntries(tournament: Pick<PrizePoolInput, "highHands">, entries: re
  * fees of the listed high hands it chose (./high-hands highHandFeesCents). An entry counts in a high
  * hand exactly when its pot counts it, so the payment desk asks for what the pots hold. A free entry
  * (round 7) owes nothing for its buy-ins, only for the rest. The high-hand fees are paid at the door
- * (round 8: highHandsAtDoor names them).
+ * (round 8: highHandsAtDoor names them). Each buy-in also owes the bounty (round 11: ./bounty), a
+ * free entry's too: it covers the buy-in only.
  */
 export function amountDueCents(
-  tournament: Pick<PrizePoolInput, "buyInAmount" | "rebuyAmount" | "addonAmount" | "highHandAmount" | "highHands">,
+  tournament: Pick<PrizePoolInput, "buyInAmount" | "rebuyAmount" | "addonAmount" | "highHandAmount" | "highHands" | "bountyAmount">,
   entry: EntryInput,
 ): Cents {
   const highHand = listsHighHands(tournament)
@@ -485,6 +492,7 @@ export function amountDueCents(
       : 0;
   return (
     (isFreeEntry(entry) ? 0 : toCents(tournament.buyInAmount) * (entry.buyIns ?? 0)) +
+    bountyCents(tournament) * (entry.buyIns ?? 0) +
     toCents(tournament.rebuyAmount) * (entry.rebuys ?? 0) +
     toCents(tournament.addonAmount) * (entry.addons ?? 0) +
     highHand

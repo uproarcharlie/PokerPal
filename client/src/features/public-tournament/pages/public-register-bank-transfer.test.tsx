@@ -99,6 +99,7 @@ describe("PublicRegisterPage: pay by bank transfer (round 8)", () => {
     expect(transfer).toHaveTextContent("Or pay at the door.");
     expect(transfer).toHaveTextContent("The TD will confirm your payment.");
     expect(within(transfer).queryByTestId("bank-transfer-high-hand")).not.toBeInTheDocument();
+    expect(within(transfer).queryByTestId("bank-transfer-bounty")).not.toBeInTheDocument();
     // One way to pay is said once: no second "proceed to the payment desk" total beside it.
     expect(screen.queryByTestId("amount-due")).not.toBeInTheDocument();
     expect(await screen.findByText("Pay by bank transfer, or at the door.")).toBeInTheDocument();
@@ -147,6 +148,18 @@ describe("PublicRegisterPage: pay by bank transfer (round 8)", () => {
 
     const transfer = await card();
     expect(within(transfer).getByTestId("bank-transfer-amount")).toHaveTextContent("$50.00");
+    expect(within(transfer).getByTestId("bank-transfer-high-hand")).toHaveTextContent("High hand ($10.00) — pay at the door");
+  });
+
+  it("asks a bounty game's player to transfer the buy-in and the bounty, $150, saying it includes the bounty (round 11)", async () => {
+    mockTournament({ bountyAmount: "100.00", enableHighHand: true, highHandAmount: "10.00" });
+    mockSignUp({ enteringHighHands: true, paymentInstructions: { ...INSTRUCTIONS, amountDueCents: 15000, highHandAtDoorCents: 1000 } });
+    await signUpTama({ highHand: true });
+
+    const transfer = await card();
+    expect(within(transfer).getByTestId("bank-transfer-amount")).toHaveTextContent("$150.00");
+    expect(within(transfer).getByTestId("bank-transfer-bounty")).toHaveTextContent("Includes the $100.00 bounty");
+    // The high hand is still paid at the door, never in the transfer.
     expect(within(transfer).getByTestId("bank-transfer-high-hand")).toHaveTextContent("High hand ($10.00) — pay at the door");
   });
 

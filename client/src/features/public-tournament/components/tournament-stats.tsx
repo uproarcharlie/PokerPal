@@ -7,6 +7,7 @@ import { figureOf, FigureValue } from "@/components/shared/query-figure";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { bountyCents, hasBounty } from "@shared/domain/bounty";
 import { isClosedStatus } from "@shared/domain/tournaments";
 import { lineupOf } from "../waiting-list";
 
@@ -72,6 +73,14 @@ export function TournamentStats({ tournament, registrations, timeZone }: Tournam
         tint="bg-accent/15 text-accent"
         label="Buy-in"
         value={<MoneyText amount={tournament.buyInAmount} />}
+        note={
+          // A half-width box: the bounty goes under the buy-in ("$50", "+ $100 bounty"), never cut off.
+          hasBounty(tournament) ? (
+            <p className="text-xs font-medium text-muted-foreground" data-testid="buy-in-bounty">
+              + <MoneyText cents={bountyCents(tournament)} /> bounty
+            </p>
+          ) : null
+        }
       />
       <Stat
         icon={<Calendar className="h-5 w-5" />}

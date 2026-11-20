@@ -51,6 +51,22 @@ describe("TournamentQrPage", () => {
     expect(screen.getByText("$10.00")).toBeInTheDocument();
   });
 
+  it("shows a bounty game's buy-in with its bounty (round 11)", async () => {
+    mockTournamentPages(tournamentDto({ buyInAmount: "50.00", bountyAmount: "100.00" }));
+    renderPage();
+
+    expect(await screen.findByText("$50.00")).toBeInTheDocument();
+    expect(screen.getByTestId("qr-bounty")).toHaveTextContent("+ $100.00 bounty");
+  });
+
+  it("says nothing about a bounty in a game with none", async () => {
+    mockTournamentPages(tournamentDto({ buyInAmount: "50.00", bountyAmount: "0.00" }));
+    renderPage();
+
+    expect(await screen.findByText("$50.00")).toBeInTheDocument();
+    expect(screen.queryByTestId("qr-bounty")).not.toBeInTheDocument();
+  });
+
   it("advertises no high hand switched on without a price (P3REV3-CQ-03)", async () => {
     mockTournamentPages(tournamentDto({ buyInAmount: "40.00", enableHighHand: true, highHandAmount: "0.00" }));
     renderPage();

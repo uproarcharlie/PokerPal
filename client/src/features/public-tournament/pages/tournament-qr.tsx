@@ -13,6 +13,7 @@ import { ClubThemeScope } from "@/features/branding/components/public/club-theme
 import { useClub } from "@/features/clubs/hooks";
 import { useTournament } from "@/features/tournaments/hooks";
 import { CenteredCard, TOURNAMENT_PAGE_STATES } from "../components/page-shell";
+import { bountyCents, hasBounty } from "@shared/domain/bounty";
 import { highHandLabel, highHandsOf } from "@shared/domain/high-hands";
 
 /** The QR code at full size: drawn at this many pixels and scaled down to fit a phone (PUB-31). */
@@ -55,6 +56,11 @@ function QrPoster({ tournament }: { tournament: TournamentDetailDto }) {
             <dt className="mb-1 text-sm text-muted-foreground">Buy-in</dt>
             <dd className="text-2xl font-bold text-primary sm:text-3xl">
               <MoneyText amount={tournament.buyInAmount} forceCents />
+              {hasBounty(tournament) ? (
+                <span className="mt-1 block text-sm font-semibold text-foreground" data-testid="qr-bounty">
+                  + <MoneyText cents={bountyCents(tournament)} forceCents /> bounty
+                </span>
+              ) : null}
             </dd>
           </div>
           {/* One box per high hand (round 10: players enter the ones they want). */}
